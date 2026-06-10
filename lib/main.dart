@@ -175,28 +175,119 @@ class MultiStoreInventoryApp extends StatelessWidget {
 // 店舗一覧ページ
 // ─────────────────────────────────────────────
 
-class StoreListPage extends StatelessWidget {
+class StoreListPage extends StatefulWidget {
   const StoreListPage({super.key});
 
-  Future<List<LegacyStore>> _loadStores() async {
-    final doc = await FirebaseFirestore.instance
-        .collection('inventory_shared_v1')
-        .doc('org_legacy__stores')
-        .get();
+  @override
+  State<StoreListPage> createState() => _StoreListPageState();
+}
 
-    final data = doc.data();
-    if (data == null) return [];
+class _StoreListPageState extends State<StoreListPage> {
+  List<LegacyStore> _stores = [];
+  // Firestoreの元のMap（全フィールドを保持したまま順序保存に使う）
+  List<Map<String, dynamic>> _rawMaps = [];
+  bool _loading = true;
+  String? _error;
+  bool _reordering = false;
+  bool _savingOrder = false;
+  // 並び替えキャンセル用のスナップショット
+  List<LegacyStore> _snapshotStores = [];
+  List<Map<String, dynamic>> _snapshotRawMaps = [];
 
-    final raw = data['items'];
-    if (raw is! List) return [];
+  @override
+  void initState() {
+    super.initState();
+    _loadStores();
+  }
 
-    final stores = raw.whereType<Map>().map((item) {
-      final map = item.map((key, value) => MapEntry(key.toString(), value));
-      return LegacyStore.fromMap(map);
-    }).toList();
+  Future<void> _loadStores() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('inventory_shared_v1')
+          .doc('org_legacy__stores')
+          .get();
 
-    stores.sort((a, b) => a.code.compareTo(b.code));
-    return stores;
+      final data = doc.data();
+      final raw = data?['items'];
+
+      final stores = <LegacyStore>[];
+      final rawMaps = <Map<String, dynamic>>[];
+
+      if (raw is List) {
+        for (final item in raw.whereType<Map>()) {
+          final map =
+              Map<String, dynamic>.from(item.map((k, v) => MapEntry(k.toString(), v)));
+          final store = LegacyStore.fromMap(map);
+          if (store.id.isNotEmpty) {
+            stores.add(store);
+            rawMaps.add(map);
+          }
+        }
+      }
+
+      setState(() {
+        _stores = stores;
+        _rawMaps = rawMaps;
+        _loading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  void _enterReorder() {
+    _snapshotStores = List.from(_stores);
+    _snapshotRawMaps = List.from(_rawMaps);
+    setState(() => _reordering = true);
+  }
+
+  void _cancelReorder() {
+    setState(() {
+      _stores = List.from(_snapshotStores);
+      _rawMaps = List.from(_snapshotRawMaps);
+      _reordering = false;
+    });
+  }
+
+  Future<void> _saveOrder() async {
+    setState(() => _savingOrder = true);
+    try {
+      await FirebaseFirestore.instance
+          .collection('inventory_shared_v1')
+          .doc('org_legacy__stores')
+          .update({'items': _rawMaps});
+
+      setState(() {
+        _reordering = false;
+        _savingOrder = false;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('並び順を保存しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() => _savingOrder = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('保存失敗: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -204,132 +295,200 @@ class StoreListPage extends StatelessWidget {
     return Scaffold(
       backgroundColor: const Color(0xFFFFF7FF),
       appBar: AppBar(
-        title: const Text('店舗一覧'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.history),
-            tooltip: '修正・追加履歴',
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const HistoryPage()),
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.table_chart),
-            tooltip: '全店舗在庫確認',
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const AllStoresInventoryPage()),
-            ),
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: FutureBuilder<List<LegacyStore>>(
-          future: _loadStores(),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState != ConnectionState.done) {
-              return const Center(child: CircularProgressIndicator());
-            }
-
-            if (snapshot.hasError) {
-              return Padding(
-                padding: const EdgeInsets.all(24),
-                child: SelectableText('読み取りエラー\n\n${snapshot.error}'),
-              );
-            }
-
-            final stores = snapshot.data ?? [];
-
-            return ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                const Text(
-                  '多店舗在庫管理システム',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  '復旧開発版：本番未反映',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.redAccent,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 24),
-                Card(
-                  color: Colors.deepPurple.shade50,
-                  child: ListTile(
-                    leading:
-                        const Icon(Icons.table_chart, color: Colors.deepPurple),
-                    title: const Text(
-                      '全店舗在庫確認',
-                      style: TextStyle(fontWeight: FontWeight.bold),
+        title: Text(_reordering ? '店舗の並び替え' : '店舗一覧'),
+        actions: _reordering
+            ? [
+                if (_savingOrder)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16),
+                    child: Center(
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
                     ),
-                    subtitle: const Text('商品ごとに全店舗の在庫を一覧表示'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                          builder: (_) => const AllStoresInventoryPage()),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Card(
-                  color: Colors.teal.shade50,
-                  child: ListTile(
-                    leading: const Icon(Icons.history, color: Colors.teal),
-                    title: const Text(
-                      '修正・追加履歴',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    subtitle: const Text('在庫変更の記録を確認'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const HistoryPage()),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Card(
-                  child: ListTile(
-                    title: const Text('店舗数'),
-                    trailing: Text(
-                      '${stores.length} 件',
-                      style: const TextStyle(
-                        fontSize: 22,
+                  )
+                else ...[
+                  TextButton(
+                    onPressed: _saveOrder,
+                    child: const Text(
+                      '保存',
+                      style: TextStyle(
+                        color: Colors.white,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 8),
-                for (final store in stores)
-                  Card(
-                    child: ListTile(
-                      leading: CircleAvatar(
-                        child: Text(store.code.isEmpty ? '-' : store.code),
-                      ),
-                      title: Text(
-                        store.name,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      subtitle: Text(store.id),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                            builder: (_) => StoreInventoryPage(store: store)),
-                      ),
+                  TextButton(
+                    onPressed: _cancelReorder,
+                    child: const Text(
+                      'キャンセル',
+                      style: TextStyle(color: Colors.white70),
                     ),
                   ),
+                ],
+              ]
+            : [
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_vert),
+                  onSelected: (value) {
+                    if (value == 'all_stores') {
+                      Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => const AllStoresInventoryPage()));
+                    } else if (value == 'history') {
+                      Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => const HistoryPage()));
+                    } else if (value == 'reorder') {
+                      _enterReorder();
+                    }
+                  },
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(
+                      value: 'all_stores',
+                      child: Row(
+                        children: [
+                          Icon(Icons.table_chart),
+                          SizedBox(width: 12),
+                          Text('全店舗在庫確認'),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'history',
+                      child: Row(
+                        children: [
+                          Icon(Icons.history),
+                          SizedBox(width: 12),
+                          Text('修正・追加履歴'),
+                        ],
+                      ),
+                    ),
+                    PopupMenuDivider(),
+                    PopupMenuItem(
+                      value: 'reorder',
+                      child: Row(
+                        children: [
+                          Icon(Icons.reorder),
+                          SizedBox(width: 12),
+                          Text('店舗の並び替え'),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ],
-            );
-          },
-        ),
       ),
+      body: SafeArea(
+        child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _error != null
+                ? Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: SelectableText('読み取りエラー\n\n$_error'),
+                  )
+                : _reordering
+                    ? _buildReorderableList()
+                    : _buildNormalList(),
+      ),
+    );
+  }
+
+  Widget _buildNormalList() {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const Text(
+          '多店舗在庫管理システム',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          '復旧開発版：本番未反映',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: Colors.redAccent,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 24),
+        Card(
+          child: ListTile(
+            title: const Text('店舗数'),
+            trailing: Text(
+              '${_stores.length} 件',
+              style: const TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        for (final store in _stores)
+          Card(
+            child: ListTile(
+              leading: CircleAvatar(
+                child: Text(store.code.isEmpty ? '-' : store.code),
+              ),
+              title: Text(
+                store.name,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              subtitle: Text(store.id),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                    builder: (_) => StoreInventoryPage(store: store)),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildReorderableList() {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Text(
+            '≡ をドラッグして並び替えてください',
+            style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+          ),
+        ),
+        Expanded(
+          child: ReorderableListView(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+            onReorderItem: (oldIndex, newIndex) {
+              setState(() {
+                final store = _stores.removeAt(oldIndex);
+                _stores.insert(newIndex, store);
+                final raw = _rawMaps.removeAt(oldIndex);
+                _rawMaps.insert(newIndex, raw);
+              });
+            },
+            children: [
+              for (final store in _stores)
+                Card(
+                  key: ValueKey(store.id),
+                  child: ListTile(
+                    leading: const Icon(Icons.drag_handle, color: Colors.grey),
+                    title: Text(
+                      store.name,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    subtitle: Text(store.id),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -363,9 +522,7 @@ class _HistoryPageState extends State<HistoryPage> {
         .limit(100)
         .get();
 
-    return snap.docs
-        .map((doc) => HistoryEntry.fromDoc(doc))
-        .toList();
+    return snap.docs.map((doc) => HistoryEntry.fromDoc(doc)).toList();
   }
 
   @override
@@ -445,9 +602,9 @@ class _HistoryPageState extends State<HistoryPage> {
   Widget _buildEntryCard(HistoryEntry entry) {
     final delta = entry.newCount - entry.oldCount;
     final deltaStr = delta > 0 ? '+$delta' : '$delta';
-    final deltaColor = delta > 0 ? Colors.green.shade700 : Colors.red.shade700;
-    final bgColor =
-        delta > 0 ? Colors.green.shade50 : Colors.red.shade50;
+    final deltaColor =
+        delta > 0 ? Colors.green.shade700 : Colors.red.shade700;
+    final bgColor = delta > 0 ? Colors.green.shade50 : Colors.red.shade50;
 
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4),
@@ -533,6 +690,7 @@ class AllStoresInventoryPage extends StatelessWidget {
       base.doc('org_legacy__stocks').get(),
     ]);
 
+    // Firestore配列順のまま（ソートなし）
     final storesRaw = results[0].data()?['items'];
     final stores = <LegacyStore>[];
     if (storesRaw is List) {
@@ -541,7 +699,6 @@ class AllStoresInventoryPage extends StatelessWidget {
         final store = LegacyStore.fromMap(map);
         if (store.id.isNotEmpty) stores.add(store);
       }
-      stores.sort((a, b) => a.code.compareTo(b.code));
     }
 
     final stocksData = results[4].data() ?? {};
@@ -975,7 +1132,8 @@ class _InventoryListState extends State<_InventoryList> {
               for (final c in changes)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: Text('• ${c.item.name}: ${c.oldCount} → ${c.newCount}'),
+                  child:
+                      Text('• ${c.item.name}: ${c.oldCount} → ${c.newCount}'),
                 ),
             ],
           ),
