@@ -289,16 +289,19 @@ class StoreInventoryPage extends StatelessWidget {
                     title: '商品',
                     items: data.products,
                     stocks: data.stocks,
+                    storeId: store.id,
                   ),
                   _InventoryList(
                     title: 'テスター',
                     items: data.testers,
                     stocks: data.stocks,
+                    storeId: store.id,
                   ),
                   _InventoryList(
                     title: '備品',
                     items: data.equipments,
                     stocks: data.stocks,
+                    storeId: store.id,
                   ),
                 ],
               );
@@ -315,11 +318,13 @@ class _InventoryList extends StatefulWidget {
     required this.title,
     required this.items,
     required this.stocks,
+    required this.storeId,
   });
 
   final String title;
   final List<LegacyItem> items;
   final Map<String, int> stocks;
+  final String storeId;
 
   @override
   State<_InventoryList> createState() => _InventoryListState();
@@ -327,6 +332,155 @@ class _InventoryList extends StatefulWidget {
 
 class _InventoryListState extends State<_InventoryList> {
   String _query = '';
+  late Map<String, int> _localStocks;
+  final Set<String> _changedIds = {};
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _localStocks = Map.from(widget.stocks);
+  }
+
+  void _increment(String id) {
+    setState(() {
+      _localStocks[id] = (_localStocks[id] ?? 0) + 1;
+      _changedIds.add(id);
+    });
+  }
+
+  void _decrement(String id) {
+    final current = _localStocks[id] ?? 0;
+    if (current <= 0) return;
+    setState(() {
+      _localStocks[id] = current - 1;
+      _changedIds.add(id);
+    });
+  }
+
+  Future<void> _showDirectInput(BuildContext context, LegacyItem item) async {
+    final controller = TextEditingController(
+      text: '${_localStocks[item.id] ?? 0}',
+    );
+    final result = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(item.name),
+        content: TextField(
+          controller: controller,
+          keyboardType: TextInputType.number,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: '在庫数',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final value = int.tryParse(controller.text.trim());
+              Navigator.of(ctx).pop(value);
+            },
+            child: const Text('セット'),
+          ),
+        ],
+      ),
+    );
+    if (result != null && result >= 0) {
+      setState(() {
+        _localStocks[item.id] = result;
+        _changedIds.add(item.id);
+      });
+    }
+  }
+
+  Future<void> _save(BuildContext context) async {
+    if (_changedIds.isEmpty || _saving) return;
+
+    final changes = _changedIds.map((id) {
+      final item = widget.items.firstWhere(
+        (i) => i.id == id,
+        orElse: () => LegacyItem(id: id, code: '', name: id),
+      );
+      final oldCount = widget.stocks[id] ?? 0;
+      final newCount = _localStocks[id] ?? 0;
+      return (item: item, oldCount: oldCount, newCount: newCount);
+    }).toList();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('在庫を更新しますか？'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final c in changes)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Text('• ${c.item.name}: ${c.oldCount} → ${c.newCount}'),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('保存する'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    setState(() => _saving = true);
+
+    try {
+      final Map<String, dynamic> updates = {};
+      for (final id in _changedIds) {
+        updates['${widget.storeId}.$id'] = _localStocks[id] ?? 0;
+      }
+
+      await FirebaseFirestore.instance
+          .collection('inventory_shared_v1')
+          .doc('org_legacy__stocks')
+          .update(updates);
+
+      setState(() {
+        _changedIds.clear();
+        _saving = false;
+      });
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('保存しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() => _saving = false);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('保存失敗: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -337,46 +491,102 @@ class _InventoryListState extends State<_InventoryList> {
           item.code.toLowerCase().contains(q);
     }).toList();
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
+    return Column(
       children: [
-        TextField(
-          decoration: const InputDecoration(
-            prefixIcon: Icon(Icons.search),
-            hintText: '検索...',
-            border: OutlineInputBorder(),
-          ),
-          onChanged: (value) {
-            setState(() {
-              _query = value;
-            });
-          },
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: ListTile(
-            title: Text('${widget.title}数'),
-            trailing: Text(
-              '${filtered.length} 件',
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-            ),
-          ),
-        ),
-        const SizedBox(height: 8),
-        for (final item in filtered)
-          Card(
-            child: ListTile(
-              title: Text(
-                item.name,
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-              subtitle: Text('コード: ${item.code}\nID: ${item.id}'),
-              trailing: Text(
-                '${widget.stocks[item.id] ?? 0}',
-                style: const TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              TextField(
+                decoration: const InputDecoration(
+                  prefixIcon: Icon(Icons.search),
+                  hintText: '検索...',
+                  border: OutlineInputBorder(),
                 ),
+                onChanged: (value) {
+                  setState(() {
+                    _query = value;
+                  });
+                },
+              ),
+              const SizedBox(height: 12),
+              Card(
+                child: ListTile(
+                  title: Text('${widget.title}数'),
+                  trailing: Text(
+                    '${filtered.length} 件',
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              for (final item in filtered)
+                Card(
+                  child: ListTile(
+                    title: Text(
+                      item.name,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    subtitle: Text('コード: ${item.code}'),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.remove_circle_outline),
+                          color: Colors.redAccent,
+                          onPressed: () => _decrement(item.id),
+                        ),
+                        GestureDetector(
+                          onLongPress: () => _showDirectInput(context, item),
+                          child: Container(
+                            constraints: const BoxConstraints(minWidth: 48),
+                            alignment: Alignment.center,
+                            child: Text(
+                              '${_localStocks[item.id] ?? 0}',
+                              style: TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold,
+                                color: _changedIds.contains(item.id)
+                                    ? Colors.orange
+                                    : null,
+                              ),
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.add_circle_outline),
+                          color: Colors.green,
+                          onPressed: () => _increment(item.id),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        if (_changedIds.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            child: ElevatedButton.icon(
+              onPressed: _saving ? null : () => _save(context),
+              icon: _saving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.save),
+              label: Text(
+                _saving ? '保存中...' : '${_changedIds.length}件の変更を保存する',
+              ),
+              style: ElevatedButton.styleFrom(
+                minimumSize: const Size.fromHeight(48),
+                backgroundColor: Colors.orange,
+                foregroundColor: Colors.white,
               ),
             ),
           ),
