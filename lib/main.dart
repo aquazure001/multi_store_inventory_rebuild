@@ -292,10 +292,21 @@ class _StoreListPageState extends State<StoreListPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: !_reordering,
+      onPopInvokedWithResult: (bool didPop, dynamic result) {
+        if (!didPop && _reordering) _cancelReorder();
+      },
+      child: Scaffold(
       backgroundColor: const Color(0xFFFFF7FF),
       appBar: AppBar(
         title: Text(_reordering ? '店舗の並び替え' : '店舗一覧'),
+        leading: _reordering
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: _cancelReorder,
+              )
+            : null,
         actions: _reordering
             ? [
                 if (_savingOrder)
@@ -391,6 +402,7 @@ class _StoreListPageState extends State<StoreListPage> {
                     ? _buildReorderableList()
                     : _buildNormalList(),
       ),
+      ),
     );
   }
 
@@ -464,8 +476,9 @@ class _StoreListPageState extends State<StoreListPage> {
         Expanded(
           child: ReorderableListView(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-            onReorderItem: (oldIndex, newIndex) {
+            onReorder: (int oldIndex, int newIndex) {
               setState(() {
+                if (newIndex > oldIndex) newIndex -= 1;
                 final store = _stores.removeAt(oldIndex);
                 _stores.insert(newIndex, store);
                 final raw = _rawMaps.removeAt(oldIndex);
