@@ -12,22 +12,9 @@ Future<void> main() async {
   runApp(const MultiStoreInventoryApp());
 }
 
-class MultiStoreInventoryApp extends StatelessWidget {
-  const MultiStoreInventoryApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: '多店舗在庫管理システム',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-      ),
-      home: const StoreListPage(),
-    );
-  }
-}
+// ─────────────────────────────────────────────
+// モデル
+// ─────────────────────────────────────────────
 
 class LegacyStore {
   const LegacyStore({
@@ -69,6 +56,125 @@ class LegacyItem {
   }
 }
 
+class HistoryEntry {
+  const HistoryEntry({
+    required this.id,
+    required this.at,
+    required this.storeId,
+    required this.storeName,
+    required this.itemId,
+    required this.itemName,
+    required this.itemType,
+    required this.oldCount,
+    required this.newCount,
+  });
+
+  final String id;
+  final DateTime at;
+  final String storeId;
+  final String storeName;
+  final String itemId;
+  final String itemName;
+  final String itemType;
+  final int oldCount;
+  final int newCount;
+
+  factory HistoryEntry.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data() ?? {};
+    final ts = data['at'];
+    final at = ts is Timestamp ? ts.toDate() : DateTime.now();
+    return HistoryEntry(
+      id: doc.id,
+      at: at,
+      storeId: (data['storeId'] ?? '').toString(),
+      storeName: (data['storeName'] ?? '').toString(),
+      itemId: (data['itemId'] ?? '').toString(),
+      itemName: (data['itemName'] ?? '').toString(),
+      itemType: (data['itemType'] ?? '').toString(),
+      oldCount: (data['oldCount'] as num?)?.toInt() ?? 0,
+      newCount: (data['newCount'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// 共通ヘルパー
+// ─────────────────────────────────────────────
+
+List<LegacyItem> _parseItemsFromDoc(
+    DocumentSnapshot<Map<String, dynamic>> doc) {
+  final raw = doc.data()?['items'];
+  if (raw is! List) return [];
+
+  final items = raw.whereType<Map>().map((item) {
+    final map = item.map((k, v) => MapEntry(k.toString(), v));
+    return LegacyItem.fromMap(map);
+  }).where((item) => item.id.isNotEmpty).toList();
+
+  items.sort((a, b) {
+    final c = a.code.compareTo(b.code);
+    return c != 0 ? c : a.name.compareTo(b.name);
+  });
+  return items;
+}
+
+Map<String, int> _parseStocksForStore(
+    Map<String, dynamic> stocksData, String storeId) {
+  final raw = stocksData[storeId];
+  final result = <String, int>{};
+  if (raw is Map) {
+    for (final entry in raw.entries) {
+      final key = entry.key.toString();
+      final value = entry.value;
+      if (value is int) {
+        result[key] = value;
+      } else if (value is num) {
+        result[key] = value.toInt();
+      }
+    }
+  }
+  return result;
+}
+
+String _shortStoreName(String name) {
+  if (name.length <= 4) return name;
+  return name.substring(0, 4);
+}
+
+String _formatDateTime(DateTime dt) {
+  final y = dt.year;
+  final mo = dt.month.toString().padLeft(2, '0');
+  final d = dt.day.toString().padLeft(2, '0');
+  final h = dt.hour.toString().padLeft(2, '0');
+  final mi = dt.minute.toString().padLeft(2, '0');
+  return '$y/$mo/$d $h:$mi';
+}
+
+// ─────────────────────────────────────────────
+// アプリルート
+// ─────────────────────────────────────────────
+
+class MultiStoreInventoryApp extends StatelessWidget {
+  const MultiStoreInventoryApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: '多店舗在庫管理システム',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+      ),
+      home: const StoreListPage(),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// 店舗一覧ページ
+// ─────────────────────────────────────────────
+
 class StoreListPage extends StatelessWidget {
   const StoreListPage({super.key});
 
@@ -97,7 +203,25 @@ class StoreListPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFFFF7FF),
-      appBar: AppBar(title: const Text('店舗一覧')),
+      appBar: AppBar(
+        title: const Text('店舗一覧'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.history),
+            tooltip: '修正・追加履歴',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const HistoryPage()),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.table_chart),
+            tooltip: '全店舗在庫確認',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const AllStoresInventoryPage()),
+            ),
+          ),
+        ],
+      ),
       body: SafeArea(
         child: FutureBuilder<List<LegacyStore>>(
           future: _loadStores(),
@@ -134,6 +258,40 @@ class StoreListPage extends StatelessWidget {
                 ),
                 const SizedBox(height: 24),
                 Card(
+                  color: Colors.deepPurple.shade50,
+                  child: ListTile(
+                    leading:
+                        const Icon(Icons.table_chart, color: Colors.deepPurple),
+                    title: const Text(
+                      '全店舗在庫確認',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    subtitle: const Text('商品ごとに全店舗の在庫を一覧表示'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                          builder: (_) => const AllStoresInventoryPage()),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Card(
+                  color: Colors.teal.shade50,
+                  child: ListTile(
+                    leading: const Icon(Icons.history, color: Colors.teal),
+                    title: const Text(
+                      '修正・追加履歴',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    subtitle: const Text('在庫変更の記録を確認'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const HistoryPage()),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Card(
                   child: ListTile(
                     title: const Text('店舗数'),
                     trailing: Text(
@@ -145,7 +303,7 @@ class StoreListPage extends StatelessWidget {
                     ),
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 8),
                 for (final store in stores)
                   Card(
                     child: ListTile(
@@ -161,13 +319,10 @@ class StoreListPage extends StatelessWidget {
                       ),
                       subtitle: Text(store.id),
                       trailing: const Icon(Icons.chevron_right),
-                      onTap: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => StoreInventoryPage(store: store),
-                          ),
-                        );
-                      },
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => StoreInventoryPage(store: store)),
+                      ),
                     ),
                   ),
               ],
@@ -178,6 +333,431 @@ class StoreListPage extends StatelessWidget {
     );
   }
 }
+
+// ─────────────────────────────────────────────
+// 履歴ページ
+// ─────────────────────────────────────────────
+
+class HistoryPage extends StatefulWidget {
+  const HistoryPage({super.key});
+
+  @override
+  State<HistoryPage> createState() => _HistoryPageState();
+}
+
+class _HistoryPageState extends State<HistoryPage> {
+  Future<List<HistoryEntry>>? _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  Future<List<HistoryEntry>> _load() async {
+    final snap = await FirebaseFirestore.instance
+        .collection('inventory_shared_v1')
+        .doc('org_legacy__history')
+        .collection('entries')
+        .orderBy('at', descending: true)
+        .limit(100)
+        .get();
+
+    return snap.docs
+        .map((doc) => HistoryEntry.fromDoc(doc))
+        .toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFFFF7FF),
+      appBar: AppBar(
+        title: const Text('修正・追加履歴'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: '更新',
+            onPressed: () => setState(() => _future = _load()),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: FutureBuilder<List<HistoryEntry>>(
+          future: _future,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            if (snapshot.hasError) {
+              return Padding(
+                padding: const EdgeInsets.all(24),
+                child: SelectableText('読み取りエラー\n\n${snapshot.error}'),
+              );
+            }
+
+            final entries = snapshot.data ?? [];
+
+            if (entries.isEmpty) {
+              return const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(32),
+                  child: Text(
+                    '履歴がありません\n在庫を変更すると記録されます',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.grey),
+                  ),
+                ),
+              );
+            }
+
+            return ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: entries.length + 1,
+              itemBuilder: (context, index) {
+                if (index == 0) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Card(
+                      child: ListTile(
+                        title: const Text('件数（直近100件）'),
+                        trailing: Text(
+                          '${entries.length} 件',
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                }
+                return _buildEntryCard(entries[index - 1]);
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEntryCard(HistoryEntry entry) {
+    final delta = entry.newCount - entry.oldCount;
+    final deltaStr = delta > 0 ? '+$delta' : '$delta';
+    final deltaColor = delta > 0 ? Colors.green.shade700 : Colors.red.shade700;
+    final bgColor =
+        delta > 0 ? Colors.green.shade50 : Colors.red.shade50;
+
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: bgColor,
+          child: Text(
+            deltaStr,
+            style: TextStyle(
+              color: deltaColor,
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
+            ),
+          ),
+        ),
+        title: Text(
+          entry.itemName,
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${entry.storeName}  ・  ${entry.itemType}'),
+            Text(
+              _formatDateTime(entry.at),
+              style: const TextStyle(color: Colors.grey, fontSize: 12),
+            ),
+          ],
+        ),
+        trailing: RichText(
+          text: TextSpan(
+            style: DefaultTextStyle.of(context).style,
+            children: [
+              TextSpan(text: '${entry.oldCount}'),
+              const TextSpan(text: ' → '),
+              TextSpan(
+                text: '${entry.newCount}',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: deltaColor,
+                ),
+              ),
+            ],
+          ),
+        ),
+        isThreeLine: true,
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// 全店舗在庫確認ページ
+// ─────────────────────────────────────────────
+
+class _AllStoresData {
+  const _AllStoresData({
+    required this.stores,
+    required this.products,
+    required this.testers,
+    required this.equipments,
+    required this.stocksByStore,
+  });
+
+  final List<LegacyStore> stores;
+  final List<LegacyItem> products;
+  final List<LegacyItem> testers;
+  final List<LegacyItem> equipments;
+  final Map<String, Map<String, int>> stocksByStore;
+}
+
+class AllStoresInventoryPage extends StatelessWidget {
+  const AllStoresInventoryPage({super.key});
+
+  Future<_AllStoresData> _load() async {
+    final base = FirebaseFirestore.instance.collection('inventory_shared_v1');
+
+    final results = await Future.wait([
+      base.doc('org_legacy__stores').get(),
+      base.doc('org_legacy__products').get(),
+      base.doc('org_legacy__testers').get(),
+      base.doc('org_legacy__equipments').get(),
+      base.doc('org_legacy__stocks').get(),
+    ]);
+
+    final storesRaw = results[0].data()?['items'];
+    final stores = <LegacyStore>[];
+    if (storesRaw is List) {
+      for (final item in storesRaw.whereType<Map>()) {
+        final map = item.map((k, v) => MapEntry(k.toString(), v));
+        final store = LegacyStore.fromMap(map);
+        if (store.id.isNotEmpty) stores.add(store);
+      }
+      stores.sort((a, b) => a.code.compareTo(b.code));
+    }
+
+    final stocksData = results[4].data() ?? {};
+    final stocksByStore = <String, Map<String, int>>{};
+    for (final store in stores) {
+      stocksByStore[store.id] = _parseStocksForStore(stocksData, store.id);
+    }
+
+    return _AllStoresData(
+      stores: stores,
+      products: _parseItemsFromDoc(results[1]),
+      testers: _parseItemsFromDoc(results[2]),
+      equipments: _parseItemsFromDoc(results[3]),
+      stocksByStore: stocksByStore,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 3,
+      child: Scaffold(
+        backgroundColor: const Color(0xFFFFF7FF),
+        appBar: AppBar(
+          title: const Text('全店舗在庫確認'),
+          bottom: const TabBar(
+            tabs: [
+              Tab(text: '商品'),
+              Tab(text: 'テスター'),
+              Tab(text: '備品'),
+            ],
+          ),
+        ),
+        body: SafeArea(
+          child: FutureBuilder<_AllStoresData>(
+            future: _load(),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState != ConnectionState.done) {
+                return const Center(child: CircularProgressIndicator());
+              }
+
+              if (snapshot.hasError) {
+                return Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: SelectableText('読み取りエラー\n\n${snapshot.error}'),
+                );
+              }
+
+              final data = snapshot.data;
+              if (data == null) {
+                return const Center(child: Text('データなし'));
+              }
+
+              return TabBarView(
+                children: [
+                  _AllStoresItemList(
+                    items: data.products,
+                    stores: data.stores,
+                    stocksByStore: data.stocksByStore,
+                  ),
+                  _AllStoresItemList(
+                    items: data.testers,
+                    stores: data.stores,
+                    stocksByStore: data.stocksByStore,
+                  ),
+                  _AllStoresItemList(
+                    items: data.equipments,
+                    stores: data.stores,
+                    stocksByStore: data.stocksByStore,
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AllStoresItemList extends StatefulWidget {
+  const _AllStoresItemList({
+    required this.items,
+    required this.stores,
+    required this.stocksByStore,
+  });
+
+  final List<LegacyItem> items;
+  final List<LegacyStore> stores;
+  final Map<String, Map<String, int>> stocksByStore;
+
+  @override
+  State<_AllStoresItemList> createState() => _AllStoresItemListState();
+}
+
+class _AllStoresItemListState extends State<_AllStoresItemList> {
+  String _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final filtered = widget.items.where((item) {
+      final q = _query.trim().toLowerCase();
+      if (q.isEmpty) return true;
+      return item.name.toLowerCase().contains(q) ||
+          item.code.toLowerCase().contains(q);
+    }).toList();
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        TextField(
+          decoration: const InputDecoration(
+            prefixIcon: Icon(Icons.search),
+            hintText: '検索...',
+            border: OutlineInputBorder(),
+          ),
+          onChanged: (v) => setState(() => _query = v),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: ListTile(
+            title: const Text('件数'),
+            trailing: Text(
+              '${filtered.length} 件',
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        for (final item in filtered) _buildItemCard(item),
+      ],
+    );
+  }
+
+  Widget _buildItemCard(LegacyItem item) {
+    final storeCounts = widget.stores.map((store) {
+      final count = widget.stocksByStore[store.id]?[item.id] ?? 0;
+      return (store: store, count: count);
+    }).toList();
+
+    final total = storeCounts.fold(0, (acc, e) => acc + e.count);
+
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    item.name,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '合計: $total',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+              ],
+            ),
+            Text(
+              'コード: ${item.code}',
+              style: const TextStyle(color: Colors.grey, fontSize: 12),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: [
+                for (final sc in storeCounts)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: sc.count > 0
+                          ? Colors.deepPurple.shade50
+                          : Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: sc.count > 0
+                            ? Colors.deepPurple.shade200
+                            : Colors.grey.shade300,
+                      ),
+                    ),
+                    child: Text(
+                      '${_shortStoreName(sc.store.name)}: ${sc.count}',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: sc.count > 0
+                            ? Colors.deepPurple.shade700
+                            : Colors.grey,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// 店舗別在庫ページ
+// ─────────────────────────────────────────────
 
 class StoreInventoryPage extends StatelessWidget {
   const StoreInventoryPage({
@@ -190,58 +770,21 @@ class StoreInventoryPage extends StatelessWidget {
   Future<_InventoryData> _loadInventory() async {
     final base = FirebaseFirestore.instance.collection('inventory_shared_v1');
 
-    final productsDoc = await base.doc('org_legacy__products').get();
-    final testersDoc = await base.doc('org_legacy__testers').get();
-    final equipmentsDoc = await base.doc('org_legacy__equipments').get();
-    final stocksDoc = await base.doc('org_legacy__stocks').get();
+    final results = await Future.wait([
+      base.doc('org_legacy__products').get(),
+      base.doc('org_legacy__testers').get(),
+      base.doc('org_legacy__equipments').get(),
+      base.doc('org_legacy__stocks').get(),
+    ]);
 
-    final products = _readItems(productsDoc);
-    final testers = _readItems(testersDoc);
-    final equipments = _readItems(equipmentsDoc);
-
-    final stocksData = stocksDoc.data() ?? {};
-    final storeStockRaw = stocksData[store.id];
-
-    final Map<String, int> stocks = {};
-    if (storeStockRaw is Map) {
-      for (final entry in storeStockRaw.entries) {
-        final key = entry.key.toString();
-        final value = entry.value;
-        if (value is int) {
-          stocks[key] = value;
-        } else if (value is num) {
-          stocks[key] = value.toInt();
-        }
-      }
-    }
+    final stocksData = results[3].data() ?? {};
 
     return _InventoryData(
-      products: products,
-      testers: testers,
-      equipments: equipments,
-      stocks: stocks,
+      products: _parseItemsFromDoc(results[0]),
+      testers: _parseItemsFromDoc(results[1]),
+      equipments: _parseItemsFromDoc(results[2]),
+      stocks: _parseStocksForStore(stocksData, store.id),
     );
-  }
-
-  List<LegacyItem> _readItems(DocumentSnapshot<Map<String, dynamic>> doc) {
-    final data = doc.data();
-    if (data == null) return [];
-
-    final raw = data['items'];
-    if (raw is! List) return [];
-
-    final items = raw.whereType<Map>().map((item) {
-      final map = item.map((key, value) => MapEntry(key.toString(), value));
-      return LegacyItem.fromMap(map);
-    }).where((item) => item.id.isNotEmpty).toList();
-
-    items.sort((a, b) {
-      final codeCompare = a.code.compareTo(b.code);
-      if (codeCompare != 0) return codeCompare;
-      return a.name.compareTo(b.name);
-    });
-
-    return items;
   }
 
   @override
@@ -290,18 +833,21 @@ class StoreInventoryPage extends StatelessWidget {
                     items: data.products,
                     stocks: data.stocks,
                     storeId: store.id,
+                    storeName: store.name,
                   ),
                   _InventoryList(
                     title: 'テスター',
                     items: data.testers,
                     stocks: data.stocks,
                     storeId: store.id,
+                    storeName: store.name,
                   ),
                   _InventoryList(
                     title: '備品',
                     items: data.equipments,
                     stocks: data.stocks,
                     storeId: store.id,
+                    storeName: store.name,
                   ),
                 ],
               );
@@ -313,18 +859,24 @@ class StoreInventoryPage extends StatelessWidget {
   }
 }
 
+// ─────────────────────────────────────────────
+// 店舗別在庫リスト（編集・履歴記録あり）
+// ─────────────────────────────────────────────
+
 class _InventoryList extends StatefulWidget {
   const _InventoryList({
     required this.title,
     required this.items,
     required this.stocks,
     required this.storeId,
+    required this.storeName,
   });
 
   final String title;
   final List<LegacyItem> items;
   final Map<String, int> stocks;
   final String storeId;
+  final String storeName;
 
   @override
   State<_InventoryList> createState() => _InventoryListState();
@@ -446,15 +998,36 @@ class _InventoryListState extends State<_InventoryList> {
     setState(() => _saving = true);
 
     try {
-      final Map<String, dynamic> updates = {};
+      // 在庫更新
+      final Map<String, dynamic> stockUpdates = {};
       for (final id in _changedIds) {
-        updates['${widget.storeId}.$id'] = _localStocks[id] ?? 0;
+        stockUpdates['${widget.storeId}.$id'] = _localStocks[id] ?? 0;
       }
-
       await FirebaseFirestore.instance
           .collection('inventory_shared_v1')
           .doc('org_legacy__stocks')
-          .update(updates);
+          .update(stockUpdates);
+
+      // 履歴書き込み
+      final historyRef = FirebaseFirestore.instance
+          .collection('inventory_shared_v1')
+          .doc('org_legacy__history')
+          .collection('entries');
+
+      final batch = FirebaseFirestore.instance.batch();
+      for (final c in changes) {
+        batch.set(historyRef.doc(), {
+          'at': FieldValue.serverTimestamp(),
+          'storeId': widget.storeId,
+          'storeName': widget.storeName,
+          'itemId': c.item.id,
+          'itemName': c.item.name,
+          'itemType': widget.title,
+          'oldCount': c.oldCount,
+          'newCount': c.newCount,
+        });
+      }
+      await batch.commit();
 
       setState(() {
         _changedIds.clear();
@@ -503,11 +1076,7 @@ class _InventoryListState extends State<_InventoryList> {
                   hintText: '検索...',
                   border: OutlineInputBorder(),
                 ),
-                onChanged: (value) {
-                  setState(() {
-                    _query = value;
-                  });
-                },
+                onChanged: (value) => setState(() => _query = value),
               ),
               const SizedBox(height: 12),
               Card(
@@ -594,6 +1163,10 @@ class _InventoryListState extends State<_InventoryList> {
     );
   }
 }
+
+// ─────────────────────────────────────────────
+// データクラス
+// ─────────────────────────────────────────────
 
 class _InventoryData {
   const _InventoryData({
