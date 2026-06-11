@@ -115,8 +115,11 @@ List<LegacyItem> _parseItemsFromDoc(
   }).where((item) => item.id.isNotEmpty).toList();
 
   items.sort((a, b) {
-    final c = a.code.compareTo(b.code);
-    return c != 0 ? c : a.name.compareTo(b.name);
+    if (a.code.isEmpty && b.code.isEmpty) return _naturalCompare(a.name, b.name);
+    if (a.code.isEmpty) return 1;
+    if (b.code.isEmpty) return -1;
+    final c = _naturalCompare(a.code, b.code);
+    return c != 0 ? c : _naturalCompare(a.name, b.name);
   });
   return items;
 }
@@ -172,6 +175,22 @@ Map<String, int> _parseMergedStocksForStore(
     }
   }
   return merged;
+}
+
+// コード・名前のナチュラルソート（T1<T2<T10、あ<い<う）
+int _naturalCompare(String a, String b) {
+  final re = RegExp(r'\d+|\D+');
+  final ap = re.allMatches(a).map((m) => m.group(0)!).toList();
+  final bp = re.allMatches(b).map((m) => m.group(0)!).toList();
+  for (int i = 0; i < ap.length && i < bp.length; i++) {
+    final an = int.tryParse(ap[i]);
+    final bn = int.tryParse(bp[i]);
+    final cmp = (an != null && bn != null)
+        ? an.compareTo(bn)
+        : ap[i].compareTo(bp[i]);
+    if (cmp != 0) return cmp;
+  }
+  return ap.length.compareTo(bp.length);
 }
 
 String _shortStoreName(String name) {
@@ -1694,8 +1713,11 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
         .where((i) => i.id.isNotEmpty)
         .toList();
     items.sort((a, b) {
-      final c = a.code.compareTo(b.code);
-      return c != 0 ? c : a.name.compareTo(b.name);
+      if (a.code.isEmpty && b.code.isEmpty) return _naturalCompare(a.name, b.name);
+      if (a.code.isEmpty) return 1;
+      if (b.code.isEmpty) return -1;
+      final c = _naturalCompare(a.code, b.code);
+      return c != 0 ? c : _naturalCompare(a.name, b.name);
     });
     return items;
   }
