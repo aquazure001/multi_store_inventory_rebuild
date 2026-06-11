@@ -1569,9 +1569,13 @@ class _InventoryListState extends State<_InventoryList> {
                               style: TextStyle(
                                 fontSize: 24,
                                 fontWeight: FontWeight.bold,
-                                color: _changedIds.contains(item.id)
-                                    ? Colors.orange
-                                    : null,
+                                color: () {
+                                  final cur = _localStocks[item.id] ?? 0;
+                                  final base = _localBaseStocks[item.id] ?? 0;
+                                  if (base > 0 && cur < base) return Colors.red;
+                                  if (_changedIds.contains(item.id)) return Colors.orange;
+                                  return null;
+                                }(),
                               ),
                             ),
                           ),
