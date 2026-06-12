@@ -102,17 +102,20 @@ class LegacyItem {
     required this.id,
     required this.code,
     required this.name,
+    this.discontinued = false,
   });
 
   final String id;
   final String code;
   final String name;
+  final bool discontinued;
 
   factory LegacyItem.fromMap(Map<String, dynamic> map) {
     return LegacyItem(
       id: (map['id'] ?? '').toString(),
       code: (map['code'] ?? '').toString(),
       name: (map['name'] ?? '').toString(),
+      discontinued: map['discontinued'] == true,
     );
   }
 }
@@ -1919,10 +1922,36 @@ class _InventoryListState extends State<_InventoryList> {
               const SizedBox(height: 8),
               for (final item in filtered)
                 Card(
+                  color: item.discontinued ? Colors.grey.shade100 : null,
                   child: ListTile(
-                    title: Text(
-                      item.name,
-                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    title: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            item.name,
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: item.discontinued ? Colors.grey : null,
+                              decoration: item.discontinued
+                                  ? TextDecoration.lineThrough
+                                  : null,
+                            ),
+                          ),
+                        ),
+                        if (item.discontinued)
+                          Container(
+                            margin: const EdgeInsets.only(left: 6),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade300,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text('販売終了',
+                                style: TextStyle(
+                                    fontSize: 10, color: Colors.grey)),
+                          ),
+                      ],
                     ),
                     subtitle: Text('コード: ${item.code}'),
                     trailing: Row(
@@ -1933,8 +1962,13 @@ class _InventoryListState extends State<_InventoryList> {
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                             decoration: BoxDecoration(
-                              color: Colors.blue.shade50,
-                              border: Border.all(color: Colors.blue.shade200),
+                              color: item.discontinued
+                                  ? Colors.grey.shade100
+                                  : Colors.blue.shade50,
+                              border: Border.all(
+                                  color: item.discontinued
+                                      ? Colors.grey.shade300
+                                      : Colors.blue.shade200),
                               borderRadius: BorderRadius.circular(6),
                             ),
                             child: Column(
@@ -1942,14 +1976,20 @@ class _InventoryListState extends State<_InventoryList> {
                               children: [
                                 Text(
                                   '基準',
-                                  style: TextStyle(fontSize: 9, color: Colors.blue.shade600),
+                                  style: TextStyle(
+                                      fontSize: 9,
+                                      color: item.discontinued
+                                          ? Colors.grey
+                                          : Colors.blue.shade600),
                                 ),
                                 Text(
                                   '${_localBaseStocks[item.id] ?? 0}',
                                   style: TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.bold,
-                                    color: Colors.blue.shade700,
+                                    color: item.discontinued
+                                        ? Colors.grey
+                                        : Colors.blue.shade700,
                                   ),
                                 ),
                               ],
@@ -1959,7 +1999,9 @@ class _InventoryListState extends State<_InventoryList> {
                         const SizedBox(width: 4),
                         IconButton(
                           icon: const Icon(Icons.remove_circle_outline),
-                          color: Colors.redAccent,
+                          color: item.discontinued
+                              ? Colors.grey
+                              : Colors.redAccent,
                           onPressed: () => _decrement(item.id),
                         ),
                         GestureDetector(
@@ -1973,6 +2015,7 @@ class _InventoryListState extends State<_InventoryList> {
                                 fontSize: 24,
                                 fontWeight: FontWeight.bold,
                                 color: () {
+                                  if (item.discontinued) return Colors.grey;
                                   final cur = _localStocks[item.id] ?? 0;
                                   final base = _localBaseStocks[item.id] ?? 0;
                                   if (base > 0 && cur < base) return Colors.red;
@@ -1985,7 +2028,7 @@ class _InventoryListState extends State<_InventoryList> {
                         ),
                         IconButton(
                           icon: const Icon(Icons.add_circle_outline),
-                          color: Colors.green,
+                          color: item.discontinued ? Colors.grey : Colors.green,
                           onPressed: () => _increment(item.id),
                         ),
                       ],
@@ -2261,6 +2304,39 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
     }
   }
 
+  Future<void> _toggleDiscontinued(LegacyItem item) async {
+    final idx = _rawItems.indexWhere((m) => m['id'] == item.id);
+    if (idx < 0) return;
+    final newVal = !item.discontinued;
+    final oldMap = Map<String, dynamic>.from(_rawItems[idx]);
+    setState(() {
+      _rawItems[idx] = Map<String, dynamic>.from(_rawItems[idx])
+        ..['discontinued'] = newVal;
+      _items = _sorted(_rawItems);
+    });
+    try {
+      await _persist();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(newVal
+              ? '「${item.name}」を販売終了にしました'
+              : '「${item.name}」の販売終了を解除しました'),
+        ));
+      }
+    } catch (e) {
+      setState(() {
+        _rawItems[idx] = oldMap;
+        _items = _sorted(_rawItems);
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('更新失敗: $e'),
+          backgroundColor: Colors.red,
+        ));
+      }
+    }
+  }
+
   Future<void> _deleteItem(LegacyItem item) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -2366,30 +2442,75 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
               const SizedBox(height: 8),
               for (final item in filtered)
                 Card(
+                  color: item.discontinued ? Colors.grey.shade100 : null,
                   child: ListTile(
                     leading: CircleAvatar(
+                      backgroundColor: item.discontinued
+                          ? Colors.grey.shade300
+                          : null,
                       child: Text(
                         item.code.isEmpty ? '-' : item.code,
-                        style: const TextStyle(fontSize: 12),
+                        style: TextStyle(
+                            fontSize: 12,
+                            color: item.discontinued ? Colors.grey : null),
                       ),
                     ),
-                    title: Text(
-                      item.name,
-                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    title: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            item.name,
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: item.discontinued ? Colors.grey : null,
+                              decoration: item.discontinued
+                                  ? TextDecoration.lineThrough
+                                  : null,
+                            ),
+                          ),
+                        ),
+                        if (item.discontinued)
+                          Container(
+                            margin: const EdgeInsets.only(left: 4),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade400,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text('販売終了',
+                                style: TextStyle(
+                                    fontSize: 10, color: Colors.white)),
+                          ),
+                      ],
                     ),
                     subtitle: Text('コード: ${item.code}'),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         IconButton(
-                          icon: const Icon(Icons.edit),
-                          onPressed: () => _editItem(item),
+                          tooltip: item.discontinued ? '販売終了を解除' : '販売終了にする',
+                          icon: Icon(
+                            item.discontinued
+                                ? Icons.replay
+                                : Icons.block,
+                            color: item.discontinued
+                                ? Colors.green
+                                : Colors.orange,
+                          ),
+                          onPressed: () => _toggleDiscontinued(item),
                         ),
-                        IconButton(
-                          icon: const Icon(Icons.delete_outline,
-                              color: Colors.red),
-                          onPressed: () => _deleteItem(item),
-                        ),
+                        if (AppSession.isAdmin) ...[
+                          IconButton(
+                            icon: const Icon(Icons.edit),
+                            onPressed: () => _editItem(item),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline,
+                                color: Colors.red),
+                            onPressed: () => _deleteItem(item),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -2492,6 +2613,7 @@ class _OrderListPageState extends State<OrderListPage> {
         final typeName = typeEntry.$1;
         final items = typeEntry.$2;
         for (final item in items) {
+          if (item.discontinued) continue;
           final b = bases[item.id] ?? 0;
           if (b <= 0) continue;
           final c = stocks[item.id] ?? 0;
@@ -3480,6 +3602,7 @@ class _OrgSetupPageState extends State<OrgSetupPage> {
       }
       await fs.collection('orgs').doc(code).set({
         'name': name,
+        'inviteCode': code,
         'createdAt': FieldValue.serverTimestamp(),
         'createdBy': AppSession.uid,
       });
@@ -3518,19 +3641,35 @@ class _OrgSetupPageState extends State<OrgSetupPage> {
     setState(() { _loading = true; _error = null; });
     try {
       final fs = FirebaseFirestore.instance;
-      final orgDoc = await fs.collection('orgs').doc(code).get();
-      if (!orgDoc.exists) {
+      // まず orgId で直接検索、なければ inviteCode フィールドで検索
+      DocumentSnapshot<Map<String, dynamic>>? orgDoc;
+      String? resolvedOrgId;
+      final direct = await fs.collection('orgs').doc(code).get();
+      if (direct.exists) {
+        orgDoc = direct;
+        resolvedOrgId = code;
+      } else {
+        final snap = await fs.collection('orgs')
+            .where('inviteCode', isEqualTo: code)
+            .limit(1)
+            .get();
+        if (snap.docs.isNotEmpty) {
+          orgDoc = snap.docs.first;
+          resolvedOrgId = snap.docs.first.id;
+        }
+      }
+      if (orgDoc == null || resolvedOrgId == null) {
         setState(() { _error = '組織が見つかりません'; _loading = false; });
         return;
       }
       await fs.collection('users').doc(AppSession.uid).set({
         'email': AppSession.email,
-        'orgId': code,
+        'orgId': resolvedOrgId,
         'role': 'member',
         'nickname': nickname,
         'createdAt': FieldValue.serverTimestamp(),
       });
-      AppSession.orgId = code;
+      AppSession.orgId = resolvedOrgId;
       AppSession.role = 'member';
       AppSession.nickname = nickname;
       if (mounted) {
@@ -3988,6 +4127,7 @@ class _OrgManagementPageState extends State<OrgManagementPage> {
   List<Map<String, dynamic>> _members = [];
   String _orgName = '';
   String _logoUrl = '';
+  String _inviteCode = '';
   bool _loading = true;
   bool _logoUploading = false;
   String? _error;
@@ -4004,8 +4144,12 @@ class _OrgManagementPageState extends State<OrgManagementPage> {
       final fs = FirebaseFirestore.instance;
       final orgDoc =
           await fs.collection('orgs').doc(AppSession.orgId).get();
-      _orgName = orgDoc.data()?['name']?.toString() ?? AppSession.orgId;
-      _logoUrl = orgDoc.data()?['logoBase64']?.toString() ?? '';
+      final od = orgDoc.data() ?? {};
+      _orgName = od['name']?.toString() ?? AppSession.orgId;
+      _logoUrl = od['logoBase64']?.toString() ?? '';
+      _inviteCode = od['inviteCode']?.toString().isNotEmpty == true
+          ? od['inviteCode'].toString()
+          : AppSession.orgId;
 
       final membersSnap = await fs
           .collection('users')
@@ -4017,7 +4161,12 @@ class _OrgManagementPageState extends State<OrgManagementPage> {
           final data = Map<String, dynamic>.from(d.data());
           data['uid'] = d.id;
           return data;
-        }).toList();
+        }).toList()
+          ..sort((a, b) {
+            if (a['role'] == 'admin' && b['role'] != 'admin') return -1;
+            if (a['role'] != 'admin' && b['role'] == 'admin') return 1;
+            return (a['email'] ?? '').compareTo(b['email'] ?? '');
+          });
         _loading = false;
       });
     } catch (e) {
@@ -4312,6 +4461,76 @@ class _OrgManagementPageState extends State<OrgManagementPage> {
     }
   }
 
+  Future<void> _changeInviteCode() async {
+    final ctrl = TextEditingController(text: _inviteCode);
+    String? dialogError;
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: const Text('招待コードを変更'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('メンバーが参加時に入力するコードです。\n英小文字・数字・_のみ使用できます。',
+                  style: TextStyle(fontSize: 12, color: Colors.grey)),
+              const SizedBox(height: 12),
+              TextField(
+                controller: ctrl,
+                decoration: const InputDecoration(
+                    labelText: '新しい招待コード', border: OutlineInputBorder()),
+                autocorrect: false,
+                autofocus: true,
+                onSubmitted: (_) => Navigator.pop(ctx, true),
+              ),
+              if (dialogError != null) ...[
+                const SizedBox(height: 6),
+                Text(dialogError!,
+                    style: const TextStyle(color: Colors.red, fontSize: 12)),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('キャンセル')),
+            TextButton(
+              onPressed: () {
+                final v = ctrl.text.trim();
+                if (!RegExp(r'^[a-z0-9_]+$').hasMatch(v)) {
+                  setS(() => dialogError = '英小文字・数字・_のみ使用できます');
+                  return;
+                }
+                Navigator.pop(ctx, true);
+              },
+              child: const Text('変更'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (result != true) return;
+    final newCode = ctrl.text.trim();
+    if (newCode.isEmpty || newCode == _inviteCode) return;
+    try {
+      await FirebaseFirestore.instance
+          .collection('orgs')
+          .doc(AppSession.orgId)
+          .update({'inviteCode': newCode});
+      setState(() => _inviteCode = newCode);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('招待コードを変更しました')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('エラー: $e'), backgroundColor: Colors.red));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -4390,19 +4609,20 @@ class _OrgManagementPageState extends State<OrgManagementPage> {
                         title: Text(_orgName,
                             style: const TextStyle(
                                 fontWeight: FontWeight.bold)),
-                        subtitle: Text('組織コード: ${AppSession.orgId}'),
+                        subtitle: Text('招待コード: $_inviteCode'),
                         trailing: PopupMenuButton<String>(
                           icon: const Icon(Icons.more_vert),
                           onSelected: (v) async {
                             if (v == 'rename') {
                               _renameOrg();
                             } else if (v == 'copy') {
-                              final messenger =
-                                  ScaffoldMessenger.of(context);
+                              final messenger = ScaffoldMessenger.of(context);
                               await Clipboard.setData(
-                                  ClipboardData(text: AppSession.orgId));
+                                  ClipboardData(text: _inviteCode));
                               messenger.showSnackBar(const SnackBar(
-                                  content: Text('組織コードをコピーしました')));
+                                  content: Text('招待コードをコピーしました')));
+                            } else if (v == 'change_code') {
+                              _changeInviteCode();
                             }
                           },
                           itemBuilder: (_) => const [
@@ -4420,6 +4640,14 @@ class _OrgManagementPageState extends State<OrgManagementPage> {
                                 Icon(Icons.copy, size: 18),
                                 SizedBox(width: 8),
                                 Text('招待コードをコピー'),
+                              ]),
+                            ),
+                            PopupMenuItem(
+                              value: 'change_code',
+                              child: Row(children: [
+                                Icon(Icons.key, size: 18),
+                                SizedBox(width: 8),
+                                Text('招待コードを変更'),
                               ]),
                             ),
                           ],
@@ -4449,11 +4677,13 @@ class _OrgManagementPageState extends State<OrgManagementPage> {
                             ),
                           ),
                           title: Text(
-                              m['email']?.toString() ??
-                                  m['uid'].toString(),
+                              m['nickname']?.toString().isNotEmpty == true
+                                  ? m['nickname'].toString()
+                                  : m['email']?.toString() ?? m['uid'].toString(),
                               style: const TextStyle(fontSize: 14)),
                           subtitle: Text(
-                              m['role'] == 'admin' ? '管理者' : 'メンバー'),
+                              '${m['role'] == 'admin' ? '管理者' : 'メンバー'}　${m['email'] ?? ''}',
+                              style: const TextStyle(fontSize: 12)),
                           trailing: m['uid'] == AppSession.uid
                               ? const Chip(label: Text('自分'))
                               : IconButton(
