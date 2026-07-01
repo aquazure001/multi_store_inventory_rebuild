@@ -4358,6 +4358,178 @@ class _OrderListPageState extends State<OrderListPage> {
     }
   }
 
+  Future<void> _editOrderQtyFromOrderList(
+    BuildContext context,
+    _OrderEntry entry,
+  ) async {
+    final key = _orderKey(entry);
+    final orderedQty = _orderedQtys[key] ?? 0;
+    if (orderedQty <= 0) return;
+
+    final controller = TextEditingController(text: '$orderedQty');
+    final newQty = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('発注数の訂正'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${entry.store.name}\n${entry.item.name}'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              keyboardType: TextInputType.number,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: '訂正後の発注数',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '0にする場合は取消ボタンを使ってください。',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final value = int.tryParse(controller.text.trim());
+              Navigator.of(ctx).pop(value);
+            },
+            child: const Text('訂正する'),
+          ),
+        ],
+      ),
+    );
+    if (newQty == null) return;
+    if (newQty <= 0) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('発注数は1以上にしてください。取消は取消ボタンを使ってください。')),
+        );
+      }
+      return;
+    }
+    if (newQty == orderedQty) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('訂正確認'),
+        content: Text(
+          '${entry.store.name}\n${entry.item.name}\n発注数を $orderedQty 個 → $newQty 個に訂正します。\n\n在庫数は変更されません。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.orange,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('訂正する'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    final typeKey = _typeKeyForType(entry.itemType);
+    try {
+      await AppSession.doc('orders').update({
+        '$typeKey.${entry.store.id}.${entry.item.id}': newQty,
+        '${_orderMetaField(entry)}.correctedAt': FieldValue.serverTimestamp(),
+        '${_orderMetaField(entry)}.correctedBy': AppSession.nickname,
+        '${_orderMetaField(entry)}.acknowledgedAt': FieldValue.delete(),
+        '${_orderMetaField(entry)}.acknowledgedBy': FieldValue.delete(),
+      });
+      setState(() => _orderedQtys[key] = newQty);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${entry.store.name}：${entry.item.name} の発注数を訂正しました'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      await _load();
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('訂正失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _cancelOrderFromOrderList(
+    BuildContext context,
+    _OrderEntry entry,
+  ) async {
+    final key = _orderKey(entry);
+    final orderedQty = _orderedQtys[key] ?? 0;
+    if (orderedQty <= 0) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('発注取消確認'),
+        content: Text(
+          '${entry.store.name}\n${entry.item.name}\n未納品の発注 $orderedQty 個を取り消します。\n\n在庫数は変更されません。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('やめる'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('取り消す'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    final typeKey = _typeKeyForType(entry.itemType);
+    try {
+      await AppSession.doc('orders').update({
+        '$typeKey.${entry.store.id}.${entry.item.id}': FieldValue.delete(),
+        '${_orderMetaField(entry)}': FieldValue.delete(),
+      });
+      setState(() => _orderedQtys.remove(key));
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${entry.store.name}：${entry.item.name} の発注を取り消しました'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      await _load();
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('取消失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
   Future<void> _deliverFromOrderList(
     BuildContext context,
     _OrderEntry entry,
@@ -4914,6 +5086,30 @@ class _OrderListPageState extends State<OrderListPage> {
                 const SizedBox(width: 4),
                 SizedBox(
                   height: 30,
+                  child: OutlinedButton(
+                    onPressed: () => _editOrderQtyFromOrderList(context, e),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      foregroundColor: Colors.orange.shade800,
+                    ),
+                    child: const Text('訂正', style: TextStyle(fontSize: 12)),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                SizedBox(
+                  height: 30,
+                  child: OutlinedButton(
+                    onPressed: () => _cancelOrderFromOrderList(context, e),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      foregroundColor: Colors.red,
+                    ),
+                    child: const Text('取消', style: TextStyle(fontSize: 12)),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                SizedBox(
+                  height: 30,
                   child: ElevatedButton(
                     onPressed: () => _deliverFromOrderList(context, e),
                     style: ElevatedButton.styleFrom(
@@ -5012,6 +5208,32 @@ class _OrderListPageState extends State<OrderListPage> {
                       color: Colors.orange.shade800,
                       fontWeight: FontWeight.bold,
                     ),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                SizedBox(
+                  height: 28,
+                  child: OutlinedButton(
+                    onPressed: () => _editOrderQtyFromOrderList(context, e),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      foregroundColor: Colors.orange.shade800,
+                      textStyle: const TextStyle(fontSize: 11),
+                    ),
+                    child: const Text('訂正'),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                SizedBox(
+                  height: 28,
+                  child: OutlinedButton(
+                    onPressed: () => _cancelOrderFromOrderList(context, e),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      foregroundColor: Colors.red,
+                      textStyle: const TextStyle(fontSize: 11),
+                    ),
+                    child: const Text('取消'),
                   ),
                 ),
                 const SizedBox(width: 4),
