@@ -689,29 +689,10 @@ class _StoreListPageState extends State<StoreListPage> {
     }
   }
 
-  static int _lastFullScreenIdx = -1;
-
   static Future<void> _showFullScreenAd(BuildContext context) async {
-    if (!AppSession.adViewEnabled) return;
-    final ads = AppSession.distributedAds;
-    if (ads.isEmpty) return;
-    int idx;
-    if (ads.length == 1) {
-      idx = 0;
-    } else {
-      do {
-        idx = Random().nextInt(ads.length);
-      } while (idx == _lastFullScreenIdx);
-    }
-    _lastFullScreenIdx = idx;
-    final ad = ads[idx];
-    if (!context.mounted) return;
-    await showDialog(
-      context: context,
-      barrierDismissible: false,
-      barrierColor: Colors.black87,
-      builder: (_) => _FullScreenAdDialog(ad: ad),
-    );
+    // 現場の在庫操作を止めないため、店舗移動・発注リスト表示前の
+    // 強制全画面広告は表示しない。広告は画面内カードと下部バナーで表示する。
+    return;
   }
 
   Future<void> _addStore() async {
@@ -1604,6 +1585,8 @@ class _StoreListPageState extends State<StoreListPage> {
                             ),
                           ),
                         ),
+                        const SizedBox(height: 8),
+                        const AdInlineCardWidget(),
                         const SizedBox(height: 8),
                         for (final store in _stores)
                           Card(
@@ -4985,6 +4968,52 @@ class _OrderListPageState extends State<OrderListPage> {
     ),
   );
 
+  Widget _buildOrderedActionButtons(BuildContext context, _OrderEntry e) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: () => _editOrderQtyFromOrderList(context, e),
+              icon: const Icon(Icons.edit, size: 16),
+              label: const Text('修正'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.orange.shade800,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: () => _cancelOrderFromOrderList(context, e),
+              icon: const Icon(Icons.delete_outline, size: 16),
+              label: const Text('削除'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.red,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: () => _deliverFromOrderList(context, e),
+              icon: const Icon(Icons.inventory_2_outlined, size: 16),
+              label: const Text('納品'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildOrderItemRow(BuildContext context, _OrderEntry e) {
     final key = _orderKey(e);
     final controller = _controllerFor(e);
@@ -5123,6 +5152,7 @@ class _OrderListPageState extends State<OrderListPage> {
               ],
             ],
           ),
+          if (orderedQty > 0) _buildOrderedActionButtons(context, e),
           const Divider(height: 10),
         ],
       ),
@@ -5253,6 +5283,7 @@ class _OrderListPageState extends State<OrderListPage> {
               ],
             ],
           ),
+          if (orderedQty > 0) _buildOrderedActionButtons(context, e),
           const Divider(height: 8),
         ],
       ),
@@ -5337,6 +5368,8 @@ class _OrderListPageState extends State<OrderListPage> {
             ),
           ],
         ),
+        const SizedBox(height: 8),
+        const AdInlineCardWidget(compact: true),
         _buildFilterChips(),
         const SizedBox(height: 8),
         if (filtered.isEmpty)
@@ -5398,6 +5431,8 @@ class _OrderListPageState extends State<OrderListPage> {
             ),
           ],
         ),
+        const SizedBox(height: 8),
+        const AdInlineCardWidget(compact: true),
         _buildFilterChips(),
         const SizedBox(height: 8),
         if (filtered.isEmpty)
@@ -7631,6 +7666,96 @@ class _FullScreenAdDialogState extends State<_FullScreenAdDialog> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// 画面内広告カード（操作を止めない広告）
+// ─────────────────────────────────────────────
+
+class AdInlineCardWidget extends StatelessWidget {
+  const AdInlineCardWidget({super.key, this.compact = false});
+
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!AppSession.adViewEnabled) return const SizedBox.shrink();
+    final ads = AppSession.distributedAds;
+    if (ads.isEmpty) return const SizedBox.shrink();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final ad = ads[(now ~/ 10000) % ads.length];
+
+    return Card(
+      color: Colors.white,
+      elevation: compact ? 1 : 2,
+      child: InkWell(
+        onTap: ad.url.isNotEmpty ? () => _openLink(ad.url) : null,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: EdgeInsets.all(compact ? 8 : 10),
+          child: Row(
+            children: [
+              if (ad.image.isNotEmpty)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.memory(
+                    base64Decode(ad.image),
+                    width: compact ? 56 : 72,
+                    height: compact ? 56 : 72,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                  ),
+                ),
+              if (ad.image.isNotEmpty) const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.campaign_outlined,
+                          size: compact ? 16 : 18,
+                          color: Colors.deepPurple,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          'お知らせ',
+                          style: TextStyle(
+                            fontSize: compact ? 12 : 13,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.deepPurple,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      ad.message.isEmpty ? ad.orgName : ad.message,
+                      style: TextStyle(fontSize: compact ? 12 : 13),
+                      maxLines: compact ? 2 : 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      ad.url.isNotEmpty ? 'タップして詳細を見る' : '提供: ${ad.orgName}',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (ad.url.isNotEmpty)
+                Icon(Icons.chevron_right, color: Colors.grey.shade500),
+            ],
+          ),
         ),
       ),
     );
