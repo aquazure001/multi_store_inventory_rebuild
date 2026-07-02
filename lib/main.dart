@@ -632,6 +632,12 @@ class _StoreListPageState extends State<StoreListPage> {
   void initState() {
     super.initState();
     _loadStores();
+    // 広告は画面表示を待たせず、背景で読み込む。
+    unawaited(
+      _reloadAds().then((_) {
+        if (mounted) setState(() {});
+      }),
+    );
     // 10分ごとに広告を再読み込み（削除済み組織の広告を除外するため）
     _adReloadTimer = Timer.periodic(const Duration(minutes: 10), (_) {
       _reloadAds();
@@ -1623,7 +1629,6 @@ class _StoreListPageState extends State<StoreListPage> {
           ],
         ),
       ),
-      bottomNavigationBar: const AdBannerWidget(),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       floatingActionButton: AppSession.isAdmin
           ? Padding(
@@ -5595,10 +5600,8 @@ class _UserLoaderState extends State<_UserLoader> {
             } catch (_) {}
           }
         }
-        // 全組織の広告を読み込む（adViewEnabled=false の組織はスキップ）
-        if (AppSession.adViewEnabled) {
-          await _loadAllAdsImpl(fs, ownOrgData: od);
-        }
+        // 広告読み込みでログイン・初期表示を待たせない。
+        // 広告は店舗一覧側で背景読み込みする。
       }
 
       if (mounted) setState(() => _loading = false);
