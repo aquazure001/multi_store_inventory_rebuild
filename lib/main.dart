@@ -1270,6 +1270,12 @@ class _StoreListPageState extends State<StoreListPage> {
                 Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const OrderListPage()),
                 );
+              } else if (value == 'delivery') {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const DeliveryProcessingPage(),
+                  ),
+                );
               } else if (value == 'reorder') {
                 _goToReorder();
               } else if (value == 'org') {
@@ -1367,6 +1373,16 @@ class _StoreListPageState extends State<StoreListPage> {
                     Icon(Icons.shopping_cart),
                     SizedBox(width: 12),
                     Text('発注リスト'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'delivery',
+                child: Row(
+                  children: [
+                    Icon(Icons.local_shipping_outlined),
+                    SizedBox(width: 12),
+                    Text('納品処理'),
                   ],
                 ),
               ),
@@ -3181,38 +3197,12 @@ class _InventoryListState extends State<_InventoryList> {
                                   ),
                                   child: Text(
                                     _localOrderMetas[item.id]?.orderedAt == null
-                                        ? '発注済: ${_localOrderedStocks[item.id]}'
-                                        : '発注済: ${_localOrderedStocks[item.id]} / ${_formatDateTime(_localOrderMetas[item.id]!.orderedAt!)}',
+                                        ? '納品予定: ${_localOrderedStocks[item.id]}'
+                                        : '納品予定: ${_localOrderedStocks[item.id]} / ${_formatDateTime(_localOrderMetas[item.id]!.orderedAt!)}',
                                     style: TextStyle(
                                       fontSize: 11,
                                       color: Colors.orange.shade800,
                                       fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                InkWell(
-                                  onTap: () => _deliver(context, item),
-                                  borderRadius: BorderRadius.circular(4),
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 2,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.green.shade100,
-                                      border: Border.all(
-                                        color: Colors.green.shade400,
-                                      ),
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: Text(
-                                      '納品',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: Colors.green.shade800,
-                                        fontWeight: FontWeight.bold,
-                                      ),
                                     ),
                                   ),
                                 ),
@@ -4130,8 +4120,8 @@ class _OrderListPageState extends State<OrderListPage> {
         title: const Text('発注リスト追加確認'),
         content: Text(
           existingQty > 0
-              ? '${entry.store.name}\n${entry.item.name}\n既存の未納品: $existingQty個\n追加: $qty個\n合計: $totalQty個で発注リストに登録します。'
-              : '${entry.store.name}\n${entry.item.name}\nを ${qty}個、発注リストに登録します。\n\n※正式な発注日はPDF発行時に記録されます。',
+              ? '${entry.store.name}\n${entry.item.name}\n$existingQty個納品予定ですが、追加で $qty個 発注しますか？\n\n合計の納品予定数は $totalQty個 になります。'
+              : '${entry.store.name}\n${entry.item.name}\nを ${qty}個、発注リストに登録します。\n\n※「発注確定PDF」を出した時点で発注日として記録されます。',
         ),
         actions: [
           TextButton(
@@ -4645,13 +4635,37 @@ class _OrderListPageState extends State<OrderListPage> {
   Future<void> _markPdfIssued(List<_OrderEntry> entries) async {
     if (entries.isEmpty) return;
     final updates = <String, dynamic>{};
+    final batchItems = <Map<String, dynamic>>[];
+    final issuedAt = DateTime.now();
     for (final e in entries) {
+      final qty = _orderedQtys[_orderKey(e)] ?? e.orderedQty;
       updates['${_orderMetaField(e)}.orderedAt'] = FieldValue.serverTimestamp();
       updates['${_orderMetaField(e)}.orderedBy'] = AppSession.nickname;
       updates['${_orderMetaField(e)}.acknowledgedAt'] = FieldValue.delete();
       updates['${_orderMetaField(e)}.acknowledgedBy'] = FieldValue.delete();
+      batchItems.add({
+        'storeId': e.store.id,
+        'storeName': e.store.name,
+        'itemType': e.itemType,
+        'typeKey': _typeKeyForType(e.itemType),
+        'itemId': e.item.id,
+        'itemName': e.item.name,
+        'itemCode': e.item.code,
+        'base': e.base,
+        'currentAtOrder': e.current,
+        'qty': qty,
+        'deliveredQty': 0,
+        'status': 'pending',
+      });
     }
     await AppSession.doc('orders').update(updates);
+    await AppSession.doc('orders').collection('batches').add({
+      'createdAt': FieldValue.serverTimestamp(),
+      'createdAtLocal': issuedAt.toIso8601String(),
+      'createdBy': AppSession.nickname,
+      'status': 'pending',
+      'items': batchItems,
+    });
   }
 
   Future<void> _exportPdfByStore(
@@ -5001,19 +5015,6 @@ class _OrderListPageState extends State<OrderListPage> {
               ),
             ),
           ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: ElevatedButton.icon(
-              onPressed: () => _deliverFromOrderList(context, e),
-              icon: const Icon(Icons.inventory_2_outlined, size: 16),
-              label: const Text('納品'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-              ),
-            ),
-          ),
         ],
       ),
     );
@@ -5109,7 +5110,7 @@ class _OrderListPageState extends State<OrderListPage> {
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
-                    '発注済:$orderedQty',
+                    '納品予定:$orderedQty',
                     style: TextStyle(
                       fontSize: 11,
                       color: Colors.orange.shade800,
@@ -5200,7 +5201,7 @@ class _OrderListPageState extends State<OrderListPage> {
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
-                    '発注済:$orderedQty',
+                    '納品予定:$orderedQty',
                     style: TextStyle(
                       fontSize: 10,
                       color: Colors.orange.shade800,
@@ -5285,7 +5286,7 @@ class _OrderListPageState extends State<OrderListPage> {
               child: ElevatedButton.icon(
                 onPressed: () => _exportPdfByStore(context, filtered),
                 icon: const Icon(Icons.picture_as_pdf, size: 18),
-                label: const Text('店舗別PDF'),
+                label: const Text('店舗別 発注確定PDF'),
               ),
             ),
             const SizedBox(width: 8),
@@ -5348,7 +5349,7 @@ class _OrderListPageState extends State<OrderListPage> {
               child: ElevatedButton.icon(
                 onPressed: () => _exportPdfByItem(context, filtered),
                 icon: const Icon(Icons.picture_as_pdf, size: 18),
-                label: const Text('商品別PDF'),
+                label: const Text('商品別 発注確定PDF'),
               ),
             ),
             const SizedBox(width: 8),
@@ -5467,6 +5468,355 @@ class _OrderListPageState extends State<OrderListPage> {
                   _buildByItem(context, _entries),
                 ],
               ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// 納品処理ページ（発注確定PDFごとの納品記録）
+// ─────────────────────────────────────────────
+
+class DeliveryProcessingPage extends StatefulWidget {
+  const DeliveryProcessingPage({super.key});
+
+  @override
+  State<DeliveryProcessingPage> createState() => _DeliveryProcessingPageState();
+}
+
+class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
+  bool _loading = true;
+  String? _error;
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _batches = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  int _toInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse('$value') ?? 0;
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final snap = await AppSession.doc('orders')
+          .collection('batches')
+          .orderBy('createdAt', descending: true)
+          .limit(100)
+          .get();
+      setState(() {
+        _batches = snap.docs;
+        _loading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  DateTime _batchDate(Map<String, dynamic> data) {
+    final ts = data['createdAt'];
+    if (ts is Timestamp) return ts.toDate();
+    return DateTime.tryParse((data['createdAtLocal'] ?? '').toString()) ??
+        DateTime.now();
+  }
+
+  String _batchTitle(Map<String, dynamic> data) {
+    final d = _batchDate(data);
+    return '${d.year}年${d.month}月${d.day}日の発注分';
+  }
+
+  Future<void> _deliverItem(
+    QueryDocumentSnapshot<Map<String, dynamic>> batchDoc,
+    int index,
+    Map<String, dynamic> item,
+  ) async {
+    final qty = _toInt(item['qty']);
+    final deliveredQty = _toInt(item['deliveredQty']);
+    final remaining = max(0, qty - deliveredQty);
+    if (remaining <= 0 || item['status'] == 'delivered') return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('納品処理'),
+        content: Text(
+          '${item['storeName']}\n${item['itemName']}\n$remaining個を納品して在庫に加算します。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('納品する'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    final storeId = (item['storeId'] ?? '').toString();
+    final storeName = (item['storeName'] ?? '').toString();
+    final itemId = (item['itemId'] ?? '').toString();
+    final itemName = (item['itemName'] ?? '').toString();
+    final itemType = (item['itemType'] ?? '').toString();
+    final typeKey = (item['typeKey'] ?? '').toString();
+
+    try {
+      await FirebaseFirestore.instance.runTransaction((tx) async {
+        final ordersRef = AppSession.doc('orders');
+        final stocksRef = itemType == '商品'
+            ? AppSession.doc('stocks')
+            : AppSession.doc('stocks_v2');
+        final stocksSnap = await tx.get(stocksRef);
+        final stockData = stocksSnap.data() ?? <String, dynamic>{};
+        var current = 0;
+        if (itemType == '商品') {
+          final storeData = stockData[storeId] is Map
+              ? stockData[storeId] as Map
+              : {};
+          current = _toInt(storeData[itemId]);
+          tx.set(stocksRef, {
+            storeId: {itemId: current + remaining},
+          }, SetOptions(merge: true));
+        } else {
+          final typeData = stockData[typeKey] is Map
+              ? stockData[typeKey] as Map
+              : {};
+          final storeData = typeData[storeId] is Map
+              ? typeData[storeId] as Map
+              : {};
+          current = _toInt(storeData[itemId]);
+          tx.set(stocksRef, {
+            typeKey: {
+              storeId: {itemId: current + remaining},
+            },
+          }, SetOptions(merge: true));
+        }
+
+        final ordersSnap = await tx.get(ordersRef);
+        final ordersData = ordersSnap.data() ?? <String, dynamic>{};
+        final typeMap = ordersData[typeKey] is Map
+            ? ordersData[typeKey] as Map
+            : {};
+        final storeOrders = typeMap[storeId] is Map
+            ? typeMap[storeId] as Map
+            : {};
+        final activeQty = _toInt(storeOrders[itemId]);
+        if (activeQty > remaining) {
+          tx.update(ordersRef, {
+            '$typeKey.$storeId.$itemId': activeQty - remaining,
+          });
+        } else {
+          tx.update(ordersRef, {
+            '$typeKey.$storeId.$itemId': FieldValue.delete(),
+            '_meta.${typeKey}__${storeId}__$itemId': FieldValue.delete(),
+          });
+        }
+
+        final batchSnap = await tx.get(batchDoc.reference);
+        final batchData = batchSnap.data() ?? <String, dynamic>{};
+        final rawItems = batchData['items'];
+        final items = rawItems is List
+            ? rawItems
+                  .whereType<Map>()
+                  .map(
+                    (e) => Map<String, dynamic>.from(
+                      e.map((k, v) => MapEntry(k.toString(), v)),
+                    ),
+                  )
+                  .toList()
+            : <Map<String, dynamic>>[];
+        if (index >= 0 && index < items.length) {
+          items[index] = {
+            ...items[index],
+            'deliveredQty': qty,
+            'status': 'delivered',
+            'deliveredAtLocal': DateTime.now().toIso8601String(),
+            'deliveredBy': AppSession.nickname,
+          };
+        }
+        final allDelivered = items.every(
+          (e) => (e['status'] ?? '') == 'delivered',
+        );
+        tx.update(batchDoc.reference, {
+          'items': items,
+          'status': allDelivered ? 'delivered' : 'partial',
+        });
+
+        tx.set(AppSession.doc('history').collection('entries').doc(), {
+          'at': FieldValue.serverTimestamp(),
+          'storeId': storeId,
+          'storeName': storeName,
+          'itemId': itemId,
+          'itemName': itemName,
+          'itemType': itemType,
+          'oldCount': current,
+          'newCount': current + remaining,
+          'nickName': AppSession.nickname,
+          'uid': AppSession.uid,
+          'action': 'delivery',
+        });
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$storeName：$itemName を $remaining個 納品しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+      await _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('納品処理失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading)
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    if (_error != null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('納品処理')),
+        body: Padding(
+          padding: const EdgeInsets.all(24),
+          child: SelectableText('読み取りエラー\n\n$_error'),
+        ),
+      );
+    }
+    return Scaffold(
+      backgroundColor: const Color(0xFFFFF7FF),
+      appBar: AppBar(
+        title: const Text('納品処理'),
+        actions: [
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
+        ],
+      ),
+      body: _batches.isEmpty
+          ? const Center(child: Text('納品処理待ちの発注はありません'))
+          : ListView(
+              padding: const EdgeInsets.all(16),
+              children: [for (final b in _batches) _buildBatchCard(b)],
+            ),
+    );
+  }
+
+  Widget _buildBatchCard(QueryDocumentSnapshot<Map<String, dynamic>> batch) {
+    final data = batch.data();
+    final rawItems = data['items'];
+    final items = rawItems is List
+        ? rawItems
+              .whereType<Map>()
+              .map(
+                (e) => Map<String, dynamic>.from(
+                  e.map((k, v) => MapEntry(k.toString(), v)),
+                ),
+              )
+              .toList()
+        : <Map<String, dynamic>>[];
+    final pending = items
+        .where((e) => (e['status'] ?? '') != 'delivered')
+        .length;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: ExpansionTile(
+        initiallyExpanded: pending > 0,
+        title: Text(
+          _batchTitle(data),
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        subtitle: Text('未納品 $pending / 全${items.length}品目'),
+        children: [
+          for (int i = 0; i < items.length; i++)
+            _buildDeliveryRow(batch, i, items[i]),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDeliveryRow(
+    QueryDocumentSnapshot<Map<String, dynamic>> batch,
+    int index,
+    Map<String, dynamic> item,
+  ) {
+    final qty = _toInt(item['qty']);
+    final delivered = (item['status'] ?? '') == 'delivered';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${item['itemName']}',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    Text(
+                      '${item['storeName']} / ${item['itemType']} / コード:${item['itemCode'] ?? ''}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Text(
+                '$qty個',
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          SizedBox(
+            width: double.infinity,
+            child: delivered
+                ? OutlinedButton.icon(
+                    onPressed: null,
+                    icon: const Icon(Icons.check_circle_outline),
+                    label: const Text('納品済み'),
+                  )
+                : ElevatedButton.icon(
+                    onPressed: () => _deliverItem(batch, index, item),
+                    icon: const Icon(Icons.inventory_2_outlined),
+                    label: const Text('この商品を納品する'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+          ),
+          const Divider(height: 12),
+        ],
       ),
     );
   }
@@ -9586,7 +9936,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Text(
-                        '発注済: $ordered 個',
+                        '納品予定: $ordered 個',
                         style: TextStyle(
                           fontSize: 11,
                           color: Colors.orange.shade800,
