@@ -5112,43 +5112,6 @@ class _OrderListPageState extends State<OrderListPage> {
                     ),
                   ),
                 ),
-                const SizedBox(width: 4),
-                SizedBox(
-                  height: 30,
-                  child: OutlinedButton(
-                    onPressed: () => _editOrderQtyFromOrderList(context, e),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      foregroundColor: Colors.orange.shade800,
-                    ),
-                    child: const Text('訂正', style: TextStyle(fontSize: 12)),
-                  ),
-                ),
-                const SizedBox(width: 4),
-                SizedBox(
-                  height: 30,
-                  child: OutlinedButton(
-                    onPressed: () => _cancelOrderFromOrderList(context, e),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      foregroundColor: Colors.red,
-                    ),
-                    child: const Text('取消', style: TextStyle(fontSize: 12)),
-                  ),
-                ),
-                const SizedBox(width: 4),
-                SizedBox(
-                  height: 30,
-                  child: ElevatedButton(
-                    onPressed: () => _deliverFromOrderList(context, e),
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      backgroundColor: Colors.green,
-                      foregroundColor: Colors.white,
-                    ),
-                    child: const Text('納品', style: TextStyle(fontSize: 12)),
-                  ),
-                ),
               ],
             ],
           ),
@@ -5238,46 +5201,6 @@ class _OrderListPageState extends State<OrderListPage> {
                       color: Colors.orange.shade800,
                       fontWeight: FontWeight.bold,
                     ),
-                  ),
-                ),
-                const SizedBox(width: 4),
-                SizedBox(
-                  height: 28,
-                  child: OutlinedButton(
-                    onPressed: () => _editOrderQtyFromOrderList(context, e),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 6),
-                      foregroundColor: Colors.orange.shade800,
-                      textStyle: const TextStyle(fontSize: 11),
-                    ),
-                    child: const Text('訂正'),
-                  ),
-                ),
-                const SizedBox(width: 4),
-                SizedBox(
-                  height: 28,
-                  child: OutlinedButton(
-                    onPressed: () => _cancelOrderFromOrderList(context, e),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 6),
-                      foregroundColor: Colors.red,
-                      textStyle: const TextStyle(fontSize: 11),
-                    ),
-                    child: const Text('取消'),
-                  ),
-                ),
-                const SizedBox(width: 4),
-                SizedBox(
-                  height: 28,
-                  child: ElevatedButton(
-                    onPressed: () => _deliverFromOrderList(context, e),
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      backgroundColor: Colors.green,
-                      foregroundColor: Colors.white,
-                      textStyle: const TextStyle(fontSize: 11),
-                    ),
-                    child: const Text('納品'),
                   ),
                 ),
               ],
