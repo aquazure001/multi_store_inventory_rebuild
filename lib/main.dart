@@ -9455,18 +9455,23 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     );
     if (result == null) return;
 
-    final newCode = _normalizeCode(result['code'] as String);
-    final duplicate = _items.any((i) => _normalizeCode(i.code) == newCode);
-    if (duplicate) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('商品コード「${result['code']}」は既に登録されています'),
-            backgroundColor: Colors.orange,
-          ),
-        );
+    if (result['type'] == '新規発注') {
+      final duplicatedMasterName = await _findDuplicatedMasterCodeName(
+        result['code'] as String,
+      );
+      if (duplicatedMasterName != null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '商品コード「${result['code']}」は$duplicatedMasterNameに既に登録されています',
+              ),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
       }
-      return;
     }
 
     final newId = FirebaseFirestore.instance.collection('_').doc().id;
@@ -9523,6 +9528,28 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     }
   }
 
+  Future<String?> _findDuplicatedMasterCodeName(String code) async {
+    final normalizedCode = _normalizeCode(code);
+    if (normalizedCode.isEmpty) return null;
+
+    final results = await Future.wait([
+      AppSession.doc('products').get(),
+      AppSession.doc('testers').get(),
+    ]);
+
+    final products = _parseItemsFromDoc(results[0]);
+    if (products.any((item) => _normalizeCode(item.code) == normalizedCode)) {
+      return '商品リスト';
+    }
+
+    final testers = _parseItemsFromDoc(results[1]);
+    if (testers.any((item) => _normalizeCode(item.code) == normalizedCode)) {
+      return 'テスター';
+    }
+
+    return null;
+  }
+
   Future<void> _duplicateItem(SpecialOrderItem item) async {
     await _addItem(template: item);
   }
@@ -9530,22 +9557,6 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   Future<void> _editItem(SpecialOrderItem item) async {
     final result = await _showRegistrationDialog(initial: item);
     if (result == null) return;
-
-    final newCode = _normalizeCode(result['code'] as String);
-    final duplicate = _items.any(
-      (i) => i.id != item.id && _normalizeCode(i.code) == newCode,
-    );
-    if (duplicate) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('商品コード「${result['code']}」は既に登録されています'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-      }
-      return;
-    }
 
     final updated = SpecialOrderItem(
       id: item.id,
