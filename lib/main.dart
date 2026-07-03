@@ -9183,6 +9183,8 @@ class _SuperAdminPageState extends State<SuperAdminPage> {
 // 特別発注・新規発注ページ
 // ─────────────────────────────────────────────
 
+enum _MasterAddResult { added, alreadyExists, skipped }
+
 class SpecialOrderPage extends StatefulWidget {
   const SpecialOrderPage({super.key});
 
@@ -9455,25 +9457,6 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     );
     if (result == null) return;
 
-    if (result['type'] == '新規発注') {
-      final duplicatedMasterName = await _findDuplicatedMasterCodeName(
-        result['code'] as String,
-      );
-      if (duplicatedMasterName != null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                '商品コード「${result['code']}」は$duplicatedMasterNameに既に登録されています',
-              ),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-        return;
-      }
-    }
-
     final newId = FirebaseFirestore.instance.collection('_').doc().id;
     final newItem = SpecialOrderItem(
       id: newId,
@@ -9491,30 +9474,20 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         'items': FieldValue.arrayUnion([newItem.toMap()]),
       }, SetOptions(merge: true));
 
-      if (result['type'] == '新規発注') {
-        final masterItem = {
-          'id': newId,
-          'code': result['code'],
-          'name': result['name'],
-        };
-        await Future.wait([
-          AppSession.doc('products').set({
-            'items': FieldValue.arrayUnion([masterItem]),
-          }, SetOptions(merge: true)),
-          AppSession.doc('testers').set({
-            'items': FieldValue.arrayUnion([masterItem]),
-          }, SetOptions(merge: true)),
-        ]);
-      }
+      final masterAddResult = result['type'] == 'その他'
+          ? _MasterAddResult.skipped
+          : await _addToProductAndTesterMastersIfMissing(newItem);
 
       setState(() => _items.insert(0, newItem));
       if (mounted) {
+        final masterMessage = switch (masterAddResult) {
+          _MasterAddResult.added => '（商品・テスターマスタに追加済み）',
+          _MasterAddResult.alreadyExists => '（商品・テスターマスタは既存コードのため追加なし）',
+          _MasterAddResult.skipped => '',
+        };
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              '${newItem.name} を登録しました'
-              '${result['type'] == '新規発注' ? '（商品・テスターマスタに追加済み）' : ''}',
-            ),
+            content: Text('${newItem.name} を登録しました$masterMessage'),
             backgroundColor: Colors.green,
           ),
         );
@@ -9528,9 +9501,11 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     }
   }
 
-  Future<String?> _findDuplicatedMasterCodeName(String code) async {
-    final normalizedCode = _normalizeCode(code);
-    if (normalizedCode.isEmpty) return null;
+  Future<_MasterAddResult> _addToProductAndTesterMastersIfMissing(
+    SpecialOrderItem item,
+  ) async {
+    final normalizedCode = _normalizeCode(item.code);
+    if (normalizedCode.isEmpty) return _MasterAddResult.skipped;
 
     final results = await Future.wait([
       AppSession.doc('products').get(),
@@ -9538,16 +9513,46 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     ]);
 
     final products = _parseItemsFromDoc(results[0]);
-    if (products.any((item) => _normalizeCode(item.code) == normalizedCode)) {
-      return '商品リスト';
-    }
-
     final testers = _parseItemsFromDoc(results[1]);
-    if (testers.any((item) => _normalizeCode(item.code) == normalizedCode)) {
-      return 'テスター';
+
+    LegacyItem? existingProduct;
+    for (final product in products) {
+      if (_normalizeCode(product.code) == normalizedCode) {
+        existingProduct = product;
+        break;
+      }
     }
 
-    return null;
+    LegacyItem? existingTester;
+    for (final tester in testers) {
+      if (_normalizeCode(tester.code) == normalizedCode) {
+        existingTester = tester;
+        break;
+      }
+    }
+
+    final masterId = existingProduct?.id ?? existingTester?.id ?? item.id;
+    final masterItem = {'id': masterId, 'code': item.code, 'name': item.name};
+
+    final writes = <Future<void>>[];
+    if (existingProduct == null) {
+      writes.add(
+        AppSession.doc('products').set({
+          'items': FieldValue.arrayUnion([masterItem]),
+        }, SetOptions(merge: true)),
+      );
+    }
+    if (existingTester == null) {
+      writes.add(
+        AppSession.doc('testers').set({
+          'items': FieldValue.arrayUnion([masterItem]),
+        }, SetOptions(merge: true)),
+      );
+    }
+
+    if (writes.isEmpty) return _MasterAddResult.alreadyExists;
+    await Future.wait(writes);
+    return _MasterAddResult.added;
   }
 
   Future<void> _duplicateItem(SpecialOrderItem item) async {
