@@ -9555,6 +9555,131 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     return _MasterAddResult.added;
   }
 
+  Future<void> _reflectExistingItemsToMasters() async {
+    final targetItems = _items
+        .where((item) => item.type == '特別発注' || item.type == '新規発注')
+        .where((item) => _normalizeCode(item.code).isNotEmpty)
+        .toList();
+
+    if (targetItems.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('反映対象がありません'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('既存分をマスタへ反映'),
+        content: Text(
+          '特別発注・新規発注の既存登録 ${targetItems.length} 件を確認し、\n'
+          '商品マスタ・テスターマスタに未登録のコードだけ追加します。\n\n'
+          '同一コードがあるものは追加しません。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('反映する'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      final results = await Future.wait([
+        AppSession.doc('products').get(),
+        AppSession.doc('testers').get(),
+      ]);
+
+      final products = _parseItemsFromDoc(results[0]);
+      final testers = _parseItemsFromDoc(results[1]);
+
+      final productByCode = <String, LegacyItem>{};
+      for (final product in products) {
+        final code = _normalizeCode(product.code);
+        if (code.isNotEmpty) productByCode[code] = product;
+      }
+
+      final testerByCode = <String, LegacyItem>{};
+      for (final tester in testers) {
+        final code = _normalizeCode(tester.code);
+        if (code.isNotEmpty) testerByCode[code] = tester;
+      }
+
+      final productAdds = <Map<String, dynamic>>[];
+      final testerAdds = <Map<String, dynamic>>[];
+      final productAddCodes = <String>{};
+      final testerAddCodes = <String>{};
+
+      for (final item in targetItems) {
+        final code = _normalizeCode(item.code);
+        final existingProduct = productByCode[code];
+        final existingTester = testerByCode[code];
+        final masterId = existingProduct?.id ?? existingTester?.id ?? item.id;
+        final masterItem = {
+          'id': masterId,
+          'code': item.code,
+          'name': item.name,
+        };
+
+        if (existingProduct == null && !productAddCodes.contains(code)) {
+          productAdds.add(masterItem);
+          productAddCodes.add(code);
+        }
+        if (existingTester == null && !testerAddCodes.contains(code)) {
+          testerAdds.add(masterItem);
+          testerAddCodes.add(code);
+        }
+      }
+
+      final writes = <Future<void>>[];
+      if (productAdds.isNotEmpty) {
+        writes.add(
+          AppSession.doc('products').set({
+            'items': FieldValue.arrayUnion(productAdds),
+          }, SetOptions(merge: true)),
+        );
+      }
+      if (testerAdds.isNotEmpty) {
+        writes.add(
+          AppSession.doc('testers').set({
+            'items': FieldValue.arrayUnion(testerAdds),
+          }, SetOptions(merge: true)),
+        );
+      }
+
+      if (writes.isNotEmpty) await Future.wait(writes);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '反映完了：商品 ${productAdds.length} 件、テスター ${testerAdds.length} 件を追加しました',
+            ),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('反映失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
   Future<void> _duplicateItem(SpecialOrderItem item) async {
     await _addItem(template: item);
   }
@@ -10182,6 +10307,11 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       appBar: AppBar(
         title: const Text('特別発注・新規発注'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.sync),
+            tooltip: '既存分を商品・テスターへ反映',
+            onPressed: _reflectExistingItemsToMasters,
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: '再読み込み',
