@@ -9448,8 +9448,11 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     }),
   ).toLowerCase().trim();
 
-  Future<void> _addItem() async {
-    final result = await _showRegistrationDialog();
+  Future<void> _addItem({SpecialOrderItem? template}) async {
+    final result = await _showRegistrationDialog(
+      initial: template,
+      duplicateMode: template != null,
+    );
     if (result == null) return;
 
     final newCode = _normalizeCode(result['code'] as String);
@@ -9518,6 +9521,10 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         );
       }
     }
+  }
+
+  Future<void> _duplicateItem(SpecialOrderItem item) async {
+    await _addItem(template: item);
   }
 
   Future<void> _editItem(SpecialOrderItem item) async {
@@ -9647,6 +9654,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
 
   Future<Map<String, dynamic>?> _showRegistrationDialog({
     SpecialOrderItem? initial,
+    bool duplicateMode = false,
   }) async {
     String selectedType = initial?.type ?? '特別発注';
     final nameCtrl = TextEditingController(text: initial?.name ?? '');
@@ -9656,7 +9664,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         initial?.salesEnd ?? DateTime.now().add(const Duration(days: 90));
     DateTime arrival =
         initial?.arrival ?? DateTime.now().add(const Duration(days: 14));
-    final isEdit = initial != null;
+    final isEdit = initial != null && !duplicateMode;
 
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -9689,7 +9697,11 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
               '${d.day.toString().padLeft(2, '0')}';
 
           return AlertDialog(
-            title: Text(isEdit ? '発注情報を編集' : '特別発注・新規発注 登録'),
+            title: Text(
+              isEdit
+                  ? '発注情報を編集'
+                  : (duplicateMode ? '複製して新規登録' : '特別発注・新規発注 登録'),
+            ),
             content: SizedBox(
               width: 340,
               child: SingleChildScrollView(
@@ -9834,7 +9846,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                     'arrival': arrival,
                   });
                 },
-                child: Text(isEdit ? '保存' : '登録'),
+                child: Text(isEdit ? '保存' : '新規登録'),
               ),
             ],
           );
@@ -10010,10 +10022,13 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         trailing: PopupMenuButton<String>(
           icon: const Icon(Icons.more_vert, size: 20),
           onSelected: (v) {
-            if (v == 'edit')
+            if (v == 'edit') {
               _editItem(item);
-            else if (v == 'delete')
+            } else if (v == 'duplicate') {
+              _duplicateItem(item);
+            } else if (v == 'delete') {
               _deleteItem(item);
+            }
           },
           itemBuilder: (_) => [
             const PopupMenuItem(
@@ -10023,6 +10038,16 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                   Icon(Icons.edit, size: 16),
                   SizedBox(width: 8),
                   Text('編集'),
+                ],
+              ),
+            ),
+            const PopupMenuItem(
+              value: 'duplicate',
+              child: Row(
+                children: [
+                  Icon(Icons.copy, size: 16),
+                  SizedBox(width: 8),
+                  Text('複製して新規登録'),
                 ],
               ),
             ),
