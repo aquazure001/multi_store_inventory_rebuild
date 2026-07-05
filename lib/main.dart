@@ -3921,6 +3921,17 @@ class _OrderListPageState extends State<OrderListPage> {
 
   static const _types = ['商品', 'テスター', '備品'];
 
+  bool get _canConfirmOrders => AppSession.isAdmin || AppSession.isSuperAdmin;
+
+  void _showOrderPermissionMessage(BuildContext context) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('発注操作は管理者のみ行えます'),
+        backgroundColor: Colors.orange,
+      ),
+    );
+  }
+
   String _typeKeyForType(String itemType) => itemType == '商品'
       ? 'products'
       : (itemType == 'テスター' ? 'testers' : 'equipments');
@@ -4104,6 +4115,10 @@ class _OrderListPageState extends State<OrderListPage> {
     _OrderEntry entry,
     int qty,
   ) async {
+    if (!_canConfirmOrders) {
+      _showOrderPermissionMessage(context);
+      return;
+    }
     if (qty <= 0) {
       ScaffoldMessenger.of(
         context,
@@ -4202,6 +4217,10 @@ class _OrderListPageState extends State<OrderListPage> {
     String typeName,
     List<_OrderEntry> entries,
   ) async {
+    if (!_canConfirmOrders) {
+      _showOrderPermissionMessage(context);
+      return;
+    }
     final targetEntries = entries
         .where((e) => e.effectiveShortage > 0)
         .toList();
@@ -4672,6 +4691,10 @@ class _OrderListPageState extends State<OrderListPage> {
     BuildContext context,
     List<_OrderEntry> entries,
   ) async {
+    if (!_canConfirmOrders) {
+      _showOrderPermissionMessage(context);
+      return;
+    }
     final pdfEntries = await _orderedEntriesForPdf(context, entries);
     if (pdfEntries.isEmpty) return;
 
@@ -4777,6 +4800,10 @@ class _OrderListPageState extends State<OrderListPage> {
     BuildContext context,
     List<_OrderEntry> entries,
   ) async {
+    if (!_canConfirmOrders) {
+      _showOrderPermissionMessage(context);
+      return;
+    }
     final pdfEntries = await _orderedEntriesForPdf(context, entries);
     if (pdfEntries.isEmpty) return;
 
@@ -5063,40 +5090,42 @@ class _OrderListPageState extends State<OrderListPage> {
           const SizedBox(height: 5),
           Row(
             children: [
-              SizedBox(
-                width: 58,
-                height: 30,
-                child: TextField(
-                  controller: controller,
-                  keyboardType: TextInputType.number,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 13),
-                  decoration: const InputDecoration(
-                    contentPadding: EdgeInsets.symmetric(
-                      horizontal: 4,
-                      vertical: 0,
+              if (_canConfirmOrders) ...[
+                SizedBox(
+                  width: 58,
+                  height: 30,
+                  child: TextField(
+                    controller: controller,
+                    keyboardType: TextInputType.number,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 13),
+                    decoration: const InputDecoration(
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 0,
+                      ),
+                      border: OutlineInputBorder(),
+                      isDense: true,
                     ),
-                    border: OutlineInputBorder(),
-                    isDense: true,
                   ),
                 ),
-              ),
-              const SizedBox(width: 6),
-              SizedBox(
-                height: 30,
-                child: ElevatedButton(
-                  onPressed: () {
-                    final qty = int.tryParse(controller.text.trim()) ?? 0;
-                    _placeOrder(context, e, qty);
-                  },
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    backgroundColor: Colors.blue,
-                    foregroundColor: Colors.white,
+                const SizedBox(width: 6),
+                SizedBox(
+                  height: 30,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      final qty = int.tryParse(controller.text.trim()) ?? 0;
+                      _placeOrder(context, e, qty);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      backgroundColor: Colors.blue,
+                      foregroundColor: Colors.white,
+                    ),
+                    child: const Text('発注', style: TextStyle(fontSize: 12)),
                   ),
-                  child: const Text('発注', style: TextStyle(fontSize: 12)),
                 ),
-              ),
+              ],
               if (orderedQty > 0) ...[
                 const SizedBox(width: 8),
                 Container(
@@ -5121,7 +5150,8 @@ class _OrderListPageState extends State<OrderListPage> {
               ],
             ],
           ),
-          if (orderedQty > 0) _buildOrderedActionButtons(context, e),
+          if (orderedQty > 0 && _canConfirmOrders)
+            _buildOrderedActionButtons(context, e),
           const Divider(height: 10),
         ],
       ),
@@ -5153,41 +5183,43 @@ class _OrderListPageState extends State<OrderListPage> {
           const SizedBox(height: 4),
           Row(
             children: [
-              SizedBox(
-                width: 52,
-                height: 28,
-                child: TextField(
-                  controller: controller,
-                  keyboardType: TextInputType.number,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 12),
-                  decoration: const InputDecoration(
-                    contentPadding: EdgeInsets.symmetric(
-                      horizontal: 2,
-                      vertical: 0,
+              if (_canConfirmOrders) ...[
+                SizedBox(
+                  width: 52,
+                  height: 28,
+                  child: TextField(
+                    controller: controller,
+                    keyboardType: TextInputType.number,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 12),
+                    decoration: const InputDecoration(
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: 2,
+                        vertical: 0,
+                      ),
+                      border: OutlineInputBorder(),
+                      isDense: true,
                     ),
-                    border: OutlineInputBorder(),
-                    isDense: true,
                   ),
                 ),
-              ),
-              const SizedBox(width: 4),
-              SizedBox(
-                height: 28,
-                child: ElevatedButton(
-                  onPressed: () {
-                    final qty = int.tryParse(controller.text.trim()) ?? 0;
-                    _placeOrder(context, e, qty);
-                  },
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    backgroundColor: Colors.blue,
-                    foregroundColor: Colors.white,
-                    textStyle: const TextStyle(fontSize: 11),
+                const SizedBox(width: 4),
+                SizedBox(
+                  height: 28,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      final qty = int.tryParse(controller.text.trim()) ?? 0;
+                      _placeOrder(context, e, qty);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      backgroundColor: Colors.blue,
+                      foregroundColor: Colors.white,
+                      textStyle: const TextStyle(fontSize: 11),
+                    ),
+                    child: const Text('発注'),
                   ),
-                  child: const Text('発注'),
                 ),
-              ),
+              ],
               if (orderedQty > 0) ...[
                 const SizedBox(width: 6),
                 Container(
@@ -5224,6 +5256,8 @@ class _OrderListPageState extends State<OrderListPage> {
     LegacyStore store,
     List<_OrderEntry> storeEntries,
   ) {
+    if (!_canConfirmOrders) return const SizedBox.shrink();
+
     final byType = <String, List<_OrderEntry>>{};
     for (final e in storeEntries) {
       byType.putIfAbsent(e.itemType, () => []).add(e);
@@ -5282,14 +5316,16 @@ class _OrderListPageState extends State<OrderListPage> {
       children: [
         Row(
           children: [
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: () => _exportPdfByStore(context, filtered),
-                icon: const Icon(Icons.picture_as_pdf, size: 18),
-                label: const Text('店舗別 発注確定PDF'),
+            if (_canConfirmOrders) ...[
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () => _exportPdfByStore(context, filtered),
+                  icon: const Icon(Icons.picture_as_pdf, size: 18),
+                  label: const Text('店舗別 発注確定PDF'),
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
+              const SizedBox(width: 8),
+            ],
             OutlinedButton.icon(
               onPressed: () => Navigator.of(context).pop(),
               icon: const Icon(Icons.arrow_back, size: 18),
@@ -5345,14 +5381,16 @@ class _OrderListPageState extends State<OrderListPage> {
       children: [
         Row(
           children: [
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: () => _exportPdfByItem(context, filtered),
-                icon: const Icon(Icons.picture_as_pdf, size: 18),
-                label: const Text('商品別 発注確定PDF'),
+            if (_canConfirmOrders) ...[
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () => _exportPdfByItem(context, filtered),
+                  icon: const Icon(Icons.picture_as_pdf, size: 18),
+                  label: const Text('商品別 発注確定PDF'),
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
+              const SizedBox(width: 8),
+            ],
             OutlinedButton.icon(
               onPressed: () => Navigator.of(context).pop(),
               icon: const Icon(Icons.arrow_back, size: 18),
