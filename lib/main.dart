@@ -2661,6 +2661,71 @@ class _InventoryListState extends State<_InventoryList> {
     }
   }
 
+  Future<void> _clearOrderedDisplay(BuildContext context) async {
+    final targetIds = _localOrderedStocks.entries
+        .where((entry) => entry.value > 0)
+        .map((entry) => entry.key)
+        .toList();
+    if (targetIds.isEmpty) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('発注済み表示をクリア'),
+        content: Text(
+          '${widget.storeName} の ${widget.title} ${targetIds.length}品目について、\n'
+          '納品予定・発注済みの表示だけを消します。\n\n'
+          '在庫数は変更しません。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.orange,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('表示だけ消す'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    final updates = <String, dynamic>{};
+    for (final id in targetIds) {
+      updates['$_typeKey.${widget.storeId}.$id'] = FieldValue.delete();
+      updates[_orderMetaField(id)] = FieldValue.delete();
+    }
+
+    try {
+      await AppSession.doc('orders').update(updates);
+      setState(() {
+        for (final id in targetIds) {
+          _localOrderedStocks.remove(id);
+          _localOrderMetas.remove(id);
+        }
+      });
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${widget.title}の発注済み表示をクリアしました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('表示クリア失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
   Future<void> _deliver(BuildContext context, LegacyItem item) async {
     final orderedQty = _localOrderedStocks[item.id] ?? 0;
     if (orderedQty <= 0) return;
@@ -3112,13 +3177,19 @@ class _InventoryListState extends State<_InventoryList> {
                         size: 18,
                       ),
                       const SizedBox(width: 8),
-                      Text(
-                        '発注済 $orderedCount 品目（リスト先頭に表示中）',
-                        style: TextStyle(
-                          color: Colors.orange.shade800,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 13,
+                      Expanded(
+                        child: Text(
+                          '発注済 $orderedCount 品目（リスト先頭に表示中）',
+                          style: TextStyle(
+                            color: Colors.orange.shade800,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
                         ),
+                      ),
+                      TextButton(
+                        onPressed: () => _clearOrderedDisplay(context),
+                        child: const Text('表示クリア'),
                       ),
                     ],
                   ),
