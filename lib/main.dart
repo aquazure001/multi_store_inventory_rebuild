@@ -343,10 +343,22 @@ class SpecialOrderItem {
   final DateTime arrival;
   final DateTime createdAt;
 
-  bool get isExpired {
-    final today = DateTime.now();
-    return salesEnd.isBefore(DateTime(today.year, today.month, today.day));
+  DateTime get _todayOnly {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day);
   }
+
+  DateTime get _salesStartOnly =>
+      DateTime(salesStart.year, salesStart.month, salesStart.day);
+
+  DateTime get _salesEndOnly =>
+      DateTime(salesEnd.year, salesEnd.month, salesEnd.day);
+
+  bool get isBeforeSales => _todayOnly.isBefore(_salesStartOnly);
+
+  bool get isExpired => _salesEndOnly.isBefore(_todayOnly);
+
+  bool get isInSalesPeriod => !isBeforeSales && !isExpired;
 
   static String _fmt(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-'
@@ -9308,6 +9320,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   Map<String, Map<String, int>> _deliveries = {};
   bool _loading = true;
   String? _error;
+  String _query = '';
   final Map<String, TextEditingController> _controllers = {};
 
   static const _kTypes = ['特別発注', '新規発注', 'その他'];
@@ -9354,8 +9367,6 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           }
         }
       }
-      items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-
       Map<String, Map<String, int>> parseNestedQty(dynamic src) {
         final result = <String, Map<String, int>>{};
         if (src is! Map) return result;
@@ -9403,11 +9414,71 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       '${d.year}年${d.month.toString().padLeft(2, '0')}月'
       '${d.day.toString().padLeft(2, '0')}日';
 
+  int _specialNameGroup(String value) {
+    final text = value.trim();
+    if (text.isEmpty) return 4;
+    final first = text.runes.first;
+    if ((first >= 0x3040 && first <= 0x30FF) ||
+        (first >= 0x4E00 && first <= 0x9FFF)) {
+      return 1;
+    }
+    if ((first >= 0x41 && first <= 0x5A) ||
+        (first >= 0x61 && first <= 0x7A) ||
+        (first >= 0xFF21 && first <= 0xFF3A) ||
+        (first >= 0xFF41 && first <= 0xFF5A)) {
+      return 2;
+    }
+    if ((first >= 0x30 && first <= 0x39) ||
+        (first >= 0xFF10 && first <= 0xFF19)) {
+      return 3;
+    }
+    return 4;
+  }
+
+  int _compareSpecialOrderItems(SpecialOrderItem a, SpecialOrderItem b) {
+    final endCompare = a.salesEnd.compareTo(b.salesEnd);
+    if (endCompare != 0) return endCompare;
+
+    final codeCompare = _naturalCompare(
+      _normalizeCode(a.code),
+      _normalizeCode(b.code),
+    );
+    if (codeCompare != 0) return codeCompare;
+
+    final groupCompare = _specialNameGroup(
+      a.name,
+    ).compareTo(_specialNameGroup(b.name));
+    if (groupCompare != 0) return groupCompare;
+
+    return _naturalCompare(a.name, b.name);
+  }
+
+  bool _matchesSpecialOrderQuery(SpecialOrderItem item) {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return true;
+    final normalizedQ = _normalizeCode(q);
+    return item.name.toLowerCase().contains(q) ||
+        item.type.toLowerCase().contains(q) ||
+        _normalizeCode(item.code).contains(normalizedQ);
+  }
+
   Future<void> _placeOrder(
     SpecialOrderItem item,
     String storeId,
     int qty,
   ) async {
+    if (qty > 0 && !item.isInSalesPeriod) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            item.isBeforeSales ? '販売期間前のため入力できません' : '販売期間終了のため入力できません',
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
     final storeName = _stores
         .firstWhere(
           (s) => s.id == storeId,
@@ -10145,7 +10216,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 width: 64,
                 child: TextField(
                   controller: ctrl,
-                  enabled: !item.isExpired,
+                  enabled: item.isInSalesPeriod,
                   keyboardType: TextInputType.number,
                   decoration: const InputDecoration(
                     isDense: true,
@@ -10160,7 +10231,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                   style: const TextStyle(fontSize: 13),
                 ),
               ),
-              if (!item.isExpired) ...[
+              if (item.isInSalesPeriod) ...[
                 const SizedBox(width: 8),
                 ElevatedButton(
                   onPressed: () {
@@ -10337,14 +10408,14 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 item.name,
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
-                  color: item.isExpired ? Colors.grey : null,
+                  color: item.isInSalesPeriod ? null : Colors.grey,
                   decoration: item.isExpired
                       ? TextDecoration.lineThrough
                       : null,
                 ),
               ),
             ),
-            if (item.isExpired)
+            if (!item.isInSalesPeriod)
               Container(
                 margin: const EdgeInsets.only(right: 4),
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -10352,9 +10423,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                   color: Colors.grey.shade200,
                   borderRadius: BorderRadius.circular(4),
                 ),
-                child: const Text(
-                  '期間終了',
-                  style: TextStyle(fontSize: 10, color: Colors.grey),
+                child: Text(
+                  item.isBeforeSales ? '期間前' : '期間終了',
+                  style: const TextStyle(fontSize: 10, color: Colors.grey),
                 ),
               )
             else if (totalOrdered > 0)
@@ -10411,6 +10482,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
 
   @override
   Widget build(BuildContext context) {
+    final filteredItems = _items.where(_matchesSpecialOrderQuery).toList()
+      ..sort(_compareSpecialOrderItems);
+
     return Scaffold(
       backgroundColor: const Color(0xFFFFF7FF),
       appBar: AppBar(
@@ -10443,10 +10517,40 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 style: TextStyle(color: Colors.grey),
               ),
             )
-          : ListView.builder(
+          : ListView(
               padding: const EdgeInsets.symmetric(vertical: 8),
-              itemCount: _items.length,
-              itemBuilder: (_, i) => _buildItemCard(_items[i]),
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                  child: TextField(
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.search),
+                      hintText: '商品名・コード・種別で検索',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    onChanged: (value) => setState(() => _query = value),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                  child: Text(
+                    '表示順：販売終了日が近い順 → コード順 → 商品名順',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                  ),
+                ),
+                if (filteredItems.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text(
+                      '検索に一致する発注はありません',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  )
+                else
+                  for (final item in filteredItems) _buildItemCard(item),
+              ],
             ),
       floatingActionButton: FloatingActionButton(
         onPressed: _addItem,
