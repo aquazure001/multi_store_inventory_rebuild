@@ -9307,7 +9307,9 @@ class _SuperAdminPageState extends State<SuperAdminPage> {
 enum _MasterAddResult { added, alreadyExists, skipped }
 
 class SpecialOrderPage extends StatefulWidget {
-  const SpecialOrderPage({super.key});
+  const SpecialOrderPage({super.key, this.showExpiredOnly = false});
+
+  final bool showExpiredOnly;
 
   @override
   State<SpecialOrderPage> createState() => _SpecialOrderPageState();
@@ -9436,7 +9438,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   }
 
   int _compareSpecialOrderItems(SpecialOrderItem a, SpecialOrderItem b) {
-    final endCompare = a.salesEnd.compareTo(b.salesEnd);
+    final endCompare = widget.showExpiredOnly
+        ? b.salesEnd.compareTo(a.salesEnd)
+        : a.salesEnd.compareTo(b.salesEnd);
     if (endCompare != 0) return endCompare;
 
     final codeCompare = _naturalCompare(
@@ -9454,6 +9458,12 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   }
 
   bool _matchesSpecialOrderQuery(SpecialOrderItem item) {
+    if (widget.showExpiredOnly) {
+      if (!item.isExpired) return false;
+    } else {
+      if (item.isExpired) return false;
+    }
+
     final q = _query.trim().toLowerCase();
     if (q.isEmpty) return true;
     final normalizedQ = _normalizeCode(q);
@@ -10488,13 +10498,27 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     return Scaffold(
       backgroundColor: const Color(0xFFFFF7FF),
       appBar: AppBar(
-        title: const Text('特別発注・新規発注'),
+        title: Text(widget.showExpiredOnly ? '販売終了' : '特別発注・新規発注'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.sync),
-            tooltip: '既存分を商品・テスターへ反映',
-            onPressed: _reflectExistingItemsToMasters,
-          ),
+          if (!widget.showExpiredOnly) ...[
+            IconButton(
+              icon: const Icon(Icons.archive_outlined),
+              tooltip: '販売終了ページ',
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        const SpecialOrderPage(showExpiredOnly: true),
+                  ),
+                );
+              },
+            ),
+            IconButton(
+              icon: const Icon(Icons.sync),
+              tooltip: '既存分を商品・テスターへ反映',
+              onPressed: _reflectExistingItemsToMasters,
+            ),
+          ],
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: '再読み込み',
@@ -10510,11 +10534,13 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
               child: Text('読み込みエラー: $_error'),
             )
           : _items.isEmpty
-          ? const Center(
+          ? Center(
               child: Text(
-                '登録された発注はありません\n＋ボタンから登録してください',
+                widget.showExpiredOnly
+                    ? '販売終了した発注はありません'
+                    : '登録された発注はありません\n＋ボタンから登録してください',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey),
+                style: const TextStyle(color: Colors.grey),
               ),
             )
           : ListView(
@@ -10535,28 +10561,34 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
                   child: Text(
-                    '表示順：販売終了日が近い順 → コード順 → 商品名順',
+                    widget.showExpiredOnly
+                        ? '表示順：販売終了日が新しい順 → コード順 → 商品名順'
+                        : '表示順：販売終了日が近い順 → コード順 → 商品名順',
                     style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
                   ),
                 ),
                 if (filteredItems.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.all(24),
+                  Padding(
+                    padding: const EdgeInsets.all(24),
                     child: Text(
-                      '検索に一致する発注はありません',
+                      widget.showExpiredOnly
+                          ? '検索に一致する販売終了発注はありません'
+                          : '検索に一致する発注はありません',
                       textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.grey),
+                      style: const TextStyle(color: Colors.grey),
                     ),
                   )
                 else
                   for (final item in filteredItems) _buildItemCard(item),
               ],
             ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _addItem,
-        tooltip: '新規登録',
-        child: const Icon(Icons.add),
-      ),
+      floatingActionButton: widget.showExpiredOnly
+          ? null
+          : FloatingActionButton(
+              onPressed: _addItem,
+              tooltip: '新規登録',
+              child: const Icon(Icons.add),
+            ),
     );
   }
 }
