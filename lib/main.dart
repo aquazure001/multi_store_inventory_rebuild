@@ -1285,7 +1285,9 @@ class _StoreListPageState extends State<StoreListPage> {
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert),
             onSelected: (value) async {
-              if (value == 'settings') {
+              if (value == 'manual_update') {
+                await _manualUpdateApp();
+              } else if (value == 'settings') {
                 Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) => SettingsPage(
@@ -1387,6 +1389,17 @@ class _StoreListPageState extends State<StoreListPage> {
               }
             },
             itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'manual_update',
+                child: Row(
+                  children: [
+                    Icon(Icons.system_update_alt),
+                    SizedBox(width: 12),
+                    Text('最新の更新を反映'),
+                  ],
+                ),
+              ),
+              const PopupMenuDivider(),
               const PopupMenuItem(
                 value: 'settings',
                 child: Row(
