@@ -607,6 +607,114 @@ class _MultiStoreInventoryAppState extends State<MultiStoreInventoryApp> {
     );
   }
 
+  Future<void> _deliverSelectedInBatch(
+    QueryDocumentSnapshot<Map<String, dynamic>> batch,
+  ) async {
+    final data = batch.data();
+    final rawItems = data['items'];
+    final items = rawItems is List
+        ? rawItems
+              .whereType<Map>()
+              .map(
+                (e) => Map<String, dynamic>.from(
+                  e.map((k, v) => MapEntry(k.toString(), v)),
+                ),
+              )
+              .toList()
+        : <Map<String, dynamic>>[];
+
+    final targets = <MapEntry<int, Map<String, dynamic>>>[];
+    for (var i = 0; i < items.length; i++) {
+      final item = items[i];
+      final key = _selectionKey(batch.id, item);
+      if (_selectedDeliveryKeys.contains(key) &&
+          !_isDeliveredInBatch(batch.id, data, item)) {
+        targets.add(MapEntry(i, item));
+      }
+    }
+
+    if (targets.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('一括納品する商品を選択してください'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    final totalQty = targets.fold<int>(
+      0,
+      (sum, entry) =>
+          sum +
+          max(
+            0,
+            _toInt(entry.value['qty']) - _toInt(entry.value['deliveredQty']),
+          ),
+    );
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('選択一括納品'),
+        content: Text('選択した ${targets.length}品目 / 合計$totalQty個 を納品します。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('一括納品する'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    var success = 0;
+    var failed = 0;
+    for (final target in targets) {
+      try {
+        await _deliverItem(
+          batch,
+          target.key,
+          target.value,
+          askConfirm: false,
+          showResult: false,
+        );
+        success++;
+      } catch (_) {
+        failed++;
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        for (final target in targets) {
+          if (failed == 0) {
+            _selectedDeliveryKeys.remove(_selectionKey(batch.id, target.value));
+          }
+        }
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            failed == 0
+                ? '選択した $success品目を納品しました'
+                : '一括納品完了: 成功$success品目 / 失敗$failed品目',
+          ),
+          backgroundColor: failed == 0 ? Colors.green : Colors.orange,
+        ),
+      );
+    }
+    await _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -5415,6 +5523,20 @@ class _OrderListPageState extends State<OrderListPage> {
         children: [
           Row(
             children: [
+              Checkbox(
+                value: delivered ? false : selected,
+                onChanged: delivered
+                    ? null
+                    : (value) {
+                        setState(() {
+                          if (value == true) {
+                            _selectedDeliveryKeys.add(selectionKey);
+                          } else {
+                            _selectedDeliveryKeys.remove(selectionKey);
+                          }
+                        });
+                      },
+              ),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -5883,6 +6005,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
   String? _error;
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _batches = [];
   final Set<String> _localDeliveredKeys = <String>{};
+  final Set<String> _selectedDeliveryKeys = <String>{};
 
   @override
   void initState() {
@@ -5938,6 +6061,10 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
     return '${typeKey}__${storeId}__$itemId';
   }
 
+  String _selectionKey(String batchId, Map<String, dynamic> item) {
+    return '$batchId::${_deliveryKey(item)}';
+  }
+
   bool _isDeliveredInBatch(
     String batchId,
     Map<String, dynamic> batchData,
@@ -5953,8 +6080,10 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
   Future<void> _deliverItem(
     QueryDocumentSnapshot<Map<String, dynamic>> batchDoc,
     int index,
-    Map<String, dynamic> item,
-  ) async {
+    Map<String, dynamic> item, {
+    bool askConfirm = true,
+    bool showResult = true,
+  }) async {
     final qty = _toInt(item['qty']);
     final deliveredQty = _toInt(item['deliveredQty']);
     final remaining = max(0, qty - deliveredQty);
@@ -5966,30 +6095,32 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
       return;
     }
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('納品処理'),
-        content: Text(
-          '${item['storeName']}\n${item['itemName']}\n$remaining個を納品して在庫に加算します。',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('キャンセル'),
+    if (askConfirm) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('納品処理'),
+          content: Text(
+            '${item['storeName']}\n${item['itemName']}\n$remaining個を納品して在庫に加算します。',
           ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.green,
-              foregroundColor: Colors.white,
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('キャンセル'),
             ),
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('納品する'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('納品する'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
 
     final storeId = (item['storeId'] ?? '').toString();
     final storeName = (item['storeName'] ?? '').toString();
@@ -6011,7 +6142,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
     }
 
     Future<void> showStep(String message) async {
-      if (!mounted) return;
+      if (!showResult || !mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
       );
@@ -6096,6 +6227,11 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
       }
 
       if (mounted) {
+        setState(() {
+          _selectedDeliveryKeys.remove(localKey);
+        });
+      }
+      if (showResult && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -6108,6 +6244,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         );
       }
     } on TimeoutException catch (e) {
+      if (!showResult) rethrow;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -6117,6 +6254,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         );
       }
     } on FirebaseException catch (e) {
+      if (!showResult) rethrow;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -6126,6 +6264,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         );
       }
     } catch (e) {
+      if (!showResult) rethrow;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('納品処理失敗: $e'), backgroundColor: Colors.red),
@@ -6190,12 +6329,59 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         ),
         subtitle: Text('未納品 $pending / 全${items.length}品目'),
         children: [
+          if (pending > 0)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        setState(() {
+                          final selectable = items.where(
+                            (e) => !_isDeliveredInBatch(batch.id, data, e),
+                          );
+                          final allSelected = selectable.every(
+                            (e) => _selectedDeliveryKeys.contains(
+                              _selectionKey(batch.id, e),
+                            ),
+                          );
+                          for (final item in selectable) {
+                            final key = _selectionKey(batch.id, item);
+                            if (allSelected) {
+                              _selectedDeliveryKeys.remove(key);
+                            } else {
+                              _selectedDeliveryKeys.add(key);
+                            }
+                          }
+                        });
+                      },
+                      icon: const Icon(Icons.checklist),
+                      label: const Text('未納品を全選択/解除'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () => _deliverSelectedInBatch(batch),
+                      icon: const Icon(Icons.inventory_2_outlined),
+                      label: const Text('選択一括納品'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           for (int i = 0; i < items.length; i++)
             _buildDeliveryRow(
               batch,
               i,
               items[i],
               _isDeliveredInBatch(batch.id, data, items[i]),
+              _selectedDeliveryKeys.contains(_selectionKey(batch.id, items[i])),
             ),
         ],
       ),
@@ -6207,8 +6393,10 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
     int index,
     Map<String, dynamic> item,
     bool delivered,
+    bool selected,
   ) {
     final qty = _toInt(item['qty']);
+    final selectionKey = _selectionKey(batch.id, item);
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
       child: Column(
