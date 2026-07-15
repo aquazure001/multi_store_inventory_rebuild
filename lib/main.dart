@@ -5932,9 +5932,68 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
           ? AppSession.doc('stocks')
           : AppSession.doc('stocks_v2');
 
-      final stocksSnap = await stocksRef.get();
-      final ordersSnap = await ordersRef.get();
-      final latestBatchSnap = await batchDoc.reference.get();
+      final stocksSnap = await stocksRef.get(
+        const GetOptions(source: Source.server),
+      );
+      final ordersSnap = await ordersRef.get(
+        const GetOptions(source: Source.server),
+      );
+      final latestBatchSnap = await batchDoc.reference.get(
+        const GetOptions(source: Source.server),
+      );
+
+      final batchData = latestBatchSnap.data() ?? <String, dynamic>{};
+      final rawItems = batchData['items'];
+      final items = rawItems is List
+          ? rawItems
+                .whereType<Map>()
+                .map(
+                  (e) => Map<String, dynamic>.from(
+                    e.map((k, v) => MapEntry(k.toString(), v)),
+                  ),
+                )
+                .toList()
+          : <Map<String, dynamic>>[];
+
+      var targetIndex = -1;
+      for (var i = 0; i < items.length; i++) {
+        final candidate = items[i];
+        final sameStore = (candidate['storeId'] ?? '').toString() == storeId;
+        final sameItem = (candidate['itemId'] ?? '').toString() == itemId;
+        final sameType =
+            (candidate['typeKey'] ?? '').toString() == typeKey ||
+            (candidate['itemType'] ?? '').toString() == itemType;
+        if (sameStore && sameItem && sameType) {
+          targetIndex = i;
+          break;
+        }
+      }
+
+      if (targetIndex < 0 && index >= 0 && index < items.length) {
+        targetIndex = index;
+      }
+
+      if (targetIndex < 0 || targetIndex >= items.length) {
+        throw Exception('納品対象の発注データが見つかりません。画面を更新して再度お試しください。');
+      }
+
+      final latestItem = items[targetIndex];
+      final latestStatus = (latestItem['status'] ?? '').toString();
+      final latestQty = _toInt(latestItem['qty']);
+      final latestDeliveredQty = _toInt(latestItem['deliveredQty']);
+      final latestRemaining = max(0, latestQty - latestDeliveredQty);
+      if (latestStatus == 'delivered' || latestRemaining <= 0) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('この商品はすでに納品済みです'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        await _load();
+        return;
+      }
 
       final stockData = stocksSnap.data() ?? <String, dynamic>{};
       var current = 0;
@@ -5962,87 +6021,56 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
           : {};
       final activeQty = _toInt(storeOrders[itemId]);
 
-      final batchData = latestBatchSnap.data() ?? <String, dynamic>{};
-      final rawItems = batchData['items'];
-      final items = rawItems is List
-          ? rawItems
-                .whereType<Map>()
-                .map(
-                  (e) => Map<String, dynamic>.from(
-                    e.map((k, v) => MapEntry(k.toString(), v)),
-                  ),
-                )
-                .toList()
-          : <Map<String, dynamic>>[];
-
-      if (index < 0 || index >= items.length) {
-        throw Exception('納品対象の発注データが見つかりません。画面を更新して再度お試しください。');
-      }
-
-      final latestItem = items[index];
-      final latestStatus = (latestItem['status'] ?? '').toString();
-      final latestQty = _toInt(latestItem['qty']);
-      final latestDeliveredQty = _toInt(latestItem['deliveredQty']);
-      final latestRemaining = max(0, latestQty - latestDeliveredQty);
-      if (latestStatus == 'delivered' || latestRemaining <= 0) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('この商品はすでに納品済みです'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-        await _load();
-        return;
-      }
-
-      items[index] = {
+      final nowLocal = DateTime.now().toIso8601String();
+      items[targetIndex] = {
         ...latestItem,
         'deliveredQty': latestQty,
         'status': 'delivered',
-        'deliveredAtLocal': DateTime.now().toIso8601String(),
+        'deliveredAtLocal': nowLocal,
         'deliveredBy': AppSession.nickname,
       };
       final allDelivered =
           items.isNotEmpty &&
           items.every((e) => (e['status'] ?? '') == 'delivered');
 
-      final writeBatch = FirebaseFirestore.instance.batch();
+      // まず納品バッチ自体を確実に納品済みに更新する。
+      await batchDoc.reference.update({
+        'items': items,
+        'status': allDelivered ? 'delivered' : 'partial',
+        'updatedAt': FieldValue.serverTimestamp(),
+        'updatedAtLocal': nowLocal,
+      });
 
+      // 次に在庫へ加算する。
       if (itemType == '商品') {
-        writeBatch.set(stocksRef, {
+        await stocksRef.set({
           storeId: {itemId: current + latestRemaining},
         }, SetOptions(merge: true));
       } else {
-        writeBatch.set(stocksRef, {
+        await stocksRef.set({
           typeKey: {
             storeId: {itemId: current + latestRemaining},
           },
         }, SetOptions(merge: true));
       }
 
-      if (activeQty > latestRemaining) {
-        writeBatch.set(ordersRef, {
-          typeKey: {
-            storeId: {itemId: activeQty - latestRemaining},
-          },
-        }, SetOptions(merge: true));
-      } else if (ordersSnap.exists) {
-        writeBatch.update(ordersRef, {
-          '$typeKey.$storeId.$itemId': FieldValue.delete(),
-          '_meta.${typeKey}__${storeId}__$itemId': FieldValue.delete(),
-        });
-      }
+      // 最後に発注残を減らす。失敗しても納品記録と在庫加算は残る。
+      try {
+        if (activeQty > latestRemaining) {
+          await ordersRef.set({
+            typeKey: {
+              storeId: {itemId: activeQty - latestRemaining},
+            },
+          }, SetOptions(merge: true));
+        } else if (ordersSnap.exists) {
+          await ordersRef.update({
+            '$typeKey.$storeId.$itemId': FieldValue.delete(),
+            '_meta.${typeKey}__${storeId}__$itemId': FieldValue.delete(),
+          });
+        }
+      } catch (_) {}
 
-      writeBatch.update(batchDoc.reference, {
-        'items': items,
-        'status': allDelivered ? 'delivered' : 'partial',
-        'updatedAt': FieldValue.serverTimestamp(),
-        'updatedAtLocal': DateTime.now().toIso8601String(),
-      });
-
-      writeBatch.set(AppSession.doc('history').collection('entries').doc(), {
+      await AppSession.doc('history').collection('entries').add({
         'at': FieldValue.serverTimestamp(),
         'storeId': storeId,
         'storeName': storeName,
@@ -6056,9 +6084,12 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         'action': 'delivery',
       });
 
-      await writeBatch.commit();
-
       if (mounted) {
+        setState(() {
+          final localItems = List<Map<String, dynamic>>.from(items);
+          final updatedData = Map<String, dynamic>.from(batchData);
+          updatedData['items'] = localItems;
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('$storeName：$itemName を $latestRemaining個 納品しました'),
