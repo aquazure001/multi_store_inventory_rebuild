@@ -2612,6 +2612,64 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
           )
         : <String, dynamic>{};
 
+    final orderedProducts = _parseStocksForStore(ordersPMap, widget.store.id);
+    final orderedTesters = _parseStocksForStore(ordersTMap, widget.store.id);
+    final orderedEquipments = _parseStocksForStore(ordersEMap, widget.store.id);
+
+    int toInt(dynamic value) {
+      if (value is int) return value;
+      if (value is num) return value.toInt();
+      return int.tryParse('$value') ?? 0;
+    }
+
+    void subtractOrdered(Map<String, int> target, String itemId, int qty) {
+      if (itemId.isEmpty || qty <= 0) return;
+      final current = target[itemId] ?? 0;
+      final next = max(0, current - qty);
+      if (next <= 0) {
+        target.remove(itemId);
+      } else {
+        target[itemId] = next;
+      }
+    }
+
+    // 納品処理の軽量化後、納品済み情報は orders/batches/* の deliveredMap に残る。
+    // 店舗在庫一覧では orders の未納品数から deliveredMap 分を差し引き、
+    // 過去に納品済みなのに「納品予定」が残る表示を防ぐ。
+    try {
+      final deliveredSnap = await AppSession.doc('orders')
+          .collection('batches')
+          .orderBy('createdAt', descending: true)
+          .limit(30)
+          .get();
+      for (final doc in deliveredSnap.docs) {
+        final deliveredMap = doc.data()['deliveredMap'];
+        if (deliveredMap is! Map) continue;
+        for (final raw in deliveredMap.values) {
+          if (raw is! Map) continue;
+          final delivered = Map<String, dynamic>.from(
+            raw.map((k, v) => MapEntry(k.toString(), v)),
+          );
+          if ((delivered['storeId'] ?? '').toString() != widget.store.id) {
+            continue;
+          }
+          final itemId = (delivered['itemId'] ?? '').toString();
+          final typeKey = (delivered['typeKey'] ?? '').toString();
+          final itemType = (delivered['itemType'] ?? '').toString();
+          final qty = toInt(delivered['qty']);
+          if (typeKey == 'products' || itemType == '商品') {
+            subtractOrdered(orderedProducts, itemId, qty);
+          } else if (typeKey == 'testers' || itemType == 'テスター') {
+            subtractOrdered(orderedTesters, itemId, qty);
+          } else if (typeKey == 'equipments' || itemType == '備品') {
+            subtractOrdered(orderedEquipments, itemId, qty);
+          }
+        }
+      }
+    } catch (_) {
+      // 納品済み補正の読み取りに失敗しても、在庫一覧自体は表示する。
+    }
+
     return _InventoryData(
       products: _parseItemsFromDoc(results[0]),
       testers: _parseItemsFromDoc(results[1]),
@@ -2620,9 +2678,9 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
       testerStocks: _parseStocksForStore(v2TMap, widget.store.id),
       equipmentStocks: _parseStocksForStore(v2EMap, widget.store.id),
       baseStocks: _parseStocksForStore(baseStocksData, widget.store.id),
-      orderedProductStocks: _parseStocksForStore(ordersPMap, widget.store.id),
-      orderedTesterStocks: _parseStocksForStore(ordersTMap, widget.store.id),
-      orderedEquipmentStocks: _parseStocksForStore(ordersEMap, widget.store.id),
+      orderedProductStocks: orderedProducts,
+      orderedTesterStocks: orderedTesters,
+      orderedEquipmentStocks: orderedEquipments,
       productOrderMetas: _parseOrderMetasForStore(
         ordersRaw,
         'products',
