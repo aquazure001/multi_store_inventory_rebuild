@@ -32,7 +32,7 @@
 
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon-20260713_large.png">
   <link rel="icon" type="image/png" sizes="32x32" href="favicon-20260713_large.png">
-  <link rel="manifest" href="manifest.json?v=20260713_large">
+  <link rel="manifest" href="manifest.json?v=20260715_delivery_cache_reset">
 </head>
 <body>
   <!--
@@ -44,48 +44,37 @@
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
   <script>
+    window.__APP_RELEASE_VERSION__ = '20260715_delivery_cache_reset';
+
+    // 強制キャッシュ解除：古いFlutter WebのService Workerが古いmain.dart.jsを掴む問題を防ぐ。
     if ('serviceWorker' in navigator) {
-      let newWorkerWaiting = null;
-      let reloading = false;
-
-      function activateWaiting(worker) {
-        newWorkerWaiting = worker;
-        worker.postMessage('skip-waiting');
-      }
-
-      navigator.serviceWorker.ready.then(function(registration) {
-        // 起動時点でもう待機中のSWがあれば即座に切り替え（閉じて開くだけで更新）
-        if (registration.waiting) {
-          activateWaiting(registration.waiting);
-        }
-
-        registration.addEventListener('updatefound', function() {
-          var newWorker = registration.installing;
-          newWorker.addEventListener('statechange', function() {
-            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              newWorkerWaiting = newWorker;
-              window.dispatchEvent(new CustomEvent('swUpdateReady'));
-            }
-          });
-        });
-      });
-
-      navigator.serviceWorker.addEventListener('controllerchange', function() {
-        if (!reloading) {
-          reloading = true;
-          window.location.reload();
+      navigator.serviceWorker.getRegistrations().then(function(registrations) {
+        for (var i = 0; i < registrations.length; i++) {
+          registrations[i].unregister();
         }
       });
-
-      window.applyUpdate = function() {
-        if (newWorkerWaiting) {
-          newWorkerWaiting.postMessage('skip-waiting');
-        } else {
-          window.location.reload();
-        }
-      };
     }
+
+    if ('caches' in window) {
+      caches.keys().then(function(keys) {
+        for (var i = 0; i < keys.length; i++) {
+          caches.delete(keys[i]);
+        }
+      });
+    }
+
+    window.applyUpdate = function() {
+      if ('caches' in window) {
+        caches.keys().then(function(keys) {
+          return Promise.all(keys.map(function(key) { return caches.delete(key); }));
+        }).finally(function() {
+          window.location.href = '/?v=20260715_delivery_cache_reset&t=' + Date.now();
+        });
+      } else {
+        window.location.href = '/?v=20260715_delivery_cache_reset&t=' + Date.now();
+      }
+    };
   </script>
-  <script src="flutter_bootstrap.js" async></script>
+  <script src="flutter_bootstrap.js?v=20260715_delivery_cache_reset" async></script>
 </body>
 </html>

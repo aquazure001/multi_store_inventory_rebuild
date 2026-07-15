@@ -19,7 +19,7 @@ import 'package:printing/printing.dart';
 
 import 'firebase_options.dart';
 
-const String _appVersion = '1.2.0';
+const String _appVersion = '1.2.1-delivery-cache-reset';
 
 // iOS Safari / Android Chrome のポップアップブロック回避:
 // AnchorElement を直接クリックすることでユーザージェスチャーコンテキストを維持する
