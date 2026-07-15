@@ -5952,106 +5952,88 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
       return;
     }
 
+    Future<void> showStep(String message) async {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
+      );
+    }
+
     try {
-      final batchData = batchDoc.data();
-      final rawItems = batchData['items'];
-      final items = rawItems is List
-          ? rawItems
-                .whereType<Map>()
-                .map(
-                  (e) => Map<String, dynamic>.from(
-                    e.map((k, v) => MapEntry(k.toString(), v)),
-                  ),
-                )
-                .toList()
-          : <Map<String, dynamic>>[];
-      final deliveredMap = batchData['deliveredMap'] is Map
-          ? Map<String, dynamic>.from(
-              (batchData['deliveredMap'] as Map).map(
-                (k, v) => MapEntry(k.toString(), v),
-              ),
-            )
-          : <String, dynamic>{};
-
-      final afterDeliveredMap = Map<String, dynamic>.from(deliveredMap);
-      afterDeliveredMap[deliveryKey] = {
-        'qty': remaining,
-        'deliveredAtLocal': DateTime.now().toIso8601String(),
-        'deliveredBy': AppSession.nickname,
-        'storeId': storeId,
-        'itemId': itemId,
-        'typeKey': typeKey,
-      };
-      final allDelivered =
-          items.isNotEmpty &&
-          items.every((e) {
-            if ((e['status'] ?? '') == 'delivered') return true;
-            return afterDeliveredMap.containsKey(
-              _deliveryKey(
-                Map<String, dynamic>.from(
-                  e.map((k, v) => MapEntry(k.toString(), v)),
-                ),
-              ),
-            );
-          });
-
+      final nowLocal = DateTime.now().toIso8601String();
       final stocksRef = itemType == '商品'
           ? AppSession.doc('stocks')
           : AppSession.doc('stocks_v2');
-      final ordersRef = AppSession.doc('orders');
-      final historyRef = AppSession.doc('history').collection('entries').doc();
 
-      final writeBatch = FirebaseFirestore.instance.batch();
-
-      // 大きいitems配列は書き換えず、軽いdeliveredMapだけ更新する。
-      writeBatch.update(batchDoc.reference, {
-        'deliveredMap.$deliveryKey': afterDeliveredMap[deliveryKey],
-        'status': allDelivered ? 'delivered' : 'partial',
-        'updatedAt': FieldValue.serverTimestamp(),
-        'updatedAtLocal': DateTime.now().toIso8601String(),
-      });
-
-      if (itemType == '商品') {
-        writeBatch.set(stocksRef, {
-          storeId: {itemId: FieldValue.increment(remaining)},
-        }, SetOptions(merge: true));
-      } else {
-        writeBatch.set(stocksRef, {
-          typeKey: {
-            storeId: {itemId: FieldValue.increment(remaining)},
-          },
-        }, SetOptions(merge: true));
-      }
-
-      // 発注残は直接減算する。0以下になっても発注画面側で0扱いにする想定。
-      writeBatch.update(ordersRef, {
-        '$typeKey.$storeId.$itemId': FieldValue.increment(-remaining),
-        '_meta.${typeKey}__${storeId}__$itemId': FieldValue.delete(),
-      });
-
-      writeBatch.set(historyRef, {
-        'at': FieldValue.serverTimestamp(),
-        'storeId': storeId,
-        'storeName': storeName,
-        'itemId': itemId,
-        'itemName': itemName,
-        'itemType': itemType,
-        'changedBy': remaining,
-        'nickName': AppSession.nickname,
-        'uid': AppSession.uid,
-        'action': 'delivery',
-      });
-
-      await writeBatch.commit();
+      await showStep('納品処理中: 納品記録を保存しています');
+      await batchDoc.reference
+          .update({
+            'deliveredMap.$deliveryKey': {
+              'qty': remaining,
+              'deliveredAtLocal': nowLocal,
+              'deliveredBy': AppSession.nickname,
+              'storeId': storeId,
+              'storeName': storeName,
+              'itemId': itemId,
+              'itemName': itemName,
+              'itemType': itemType,
+              'typeKey': typeKey,
+            },
+            'status': 'partial',
+            'updatedAt': FieldValue.serverTimestamp(),
+            'updatedAtLocal': nowLocal,
+          })
+          .timeout(
+            const Duration(seconds: 12),
+            onTimeout: () => throw TimeoutException('納品記録の保存でタイムアウトしました'),
+          );
 
       if (mounted) {
         setState(() {
           _localDeliveredKeys.add(localKey);
         });
+      }
+
+      await showStep('納品処理中: 在庫に加算しています');
+      if (itemType == '商品') {
+        await stocksRef
+            .set({
+              storeId: {itemId: FieldValue.increment(remaining)},
+            }, SetOptions(merge: true))
+            .timeout(
+              const Duration(seconds: 12),
+              onTimeout: () => throw TimeoutException('在庫加算でタイムアウトしました'),
+            );
+      } else {
+        await stocksRef
+            .set({
+              typeKey: {
+                storeId: {itemId: FieldValue.increment(remaining)},
+              },
+            }, SetOptions(merge: true))
+            .timeout(
+              const Duration(seconds: 12),
+              onTimeout: () => throw TimeoutException('在庫加算でタイムアウトしました'),
+            );
+      }
+
+      // 重い可能性があるため、orders更新とhistory追加は納品処理から一旦外す。
+      // 納品予定表示は deliveredMap を優先して判定する。
+
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('$storeName：$itemName を $remaining個 納品しました'),
             backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } on TimeoutException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('納品処理失敗: ${e.message}'),
+            backgroundColor: Colors.red,
           ),
         );
       }
