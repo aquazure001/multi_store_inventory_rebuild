@@ -5927,119 +5927,141 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
     }
 
     try {
-      await FirebaseFirestore.instance.runTransaction((tx) async {
-        final ordersRef = AppSession.doc('orders');
-        final stocksRef = itemType == '商品'
-            ? AppSession.doc('stocks')
-            : AppSession.doc('stocks_v2');
+      final ordersRef = AppSession.doc('orders');
+      final stocksRef = itemType == '商品'
+          ? AppSession.doc('stocks')
+          : AppSession.doc('stocks_v2');
 
-        // Firestore Web のトランザクションでは、読み取りをすべて先に行う必要がある。
-        // 先に書き込み、その後で読み取りを行うとWeb版で例外になり、納品処理が失敗する。
-        final stocksSnap = await tx.get(stocksRef);
-        final ordersSnap = await tx.get(ordersRef);
-        final batchSnap = await tx.get(batchDoc.reference);
+      final stocksSnap = await stocksRef.get();
+      final ordersSnap = await ordersRef.get();
+      final latestBatchSnap = await batchDoc.reference.get();
 
-        final stockData = stocksSnap.data() ?? <String, dynamic>{};
-        var current = 0;
-        if (itemType == '商品') {
-          final storeData = stockData[storeId] is Map
-              ? stockData[storeId] as Map
-              : {};
-          current = _toInt(storeData[itemId]);
-        } else {
-          final typeData = stockData[typeKey] is Map
-              ? stockData[typeKey] as Map
-              : {};
-          final storeData = typeData[storeId] is Map
-              ? typeData[storeId] as Map
-              : {};
-          current = _toInt(storeData[itemId]);
-        }
-
-        final ordersData = ordersSnap.data() ?? <String, dynamic>{};
-        final typeMap = ordersData[typeKey] is Map
-            ? ordersData[typeKey] as Map
+      final stockData = stocksSnap.data() ?? <String, dynamic>{};
+      var current = 0;
+      if (itemType == '商品') {
+        final storeData = stockData[storeId] is Map
+            ? stockData[storeId] as Map
             : {};
-        final storeOrders = typeMap[storeId] is Map
-            ? typeMap[storeId] as Map
+        current = _toInt(storeData[itemId]);
+      } else {
+        final typeData = stockData[typeKey] is Map
+            ? stockData[typeKey] as Map
             : {};
-        final activeQty = _toInt(storeOrders[itemId]);
+        final storeData = typeData[storeId] is Map
+            ? typeData[storeId] as Map
+            : {};
+        current = _toInt(storeData[itemId]);
+      }
 
-        final batchData = batchSnap.data() ?? <String, dynamic>{};
-        final rawItems = batchData['items'];
-        final items = rawItems is List
-            ? rawItems
-                  .whereType<Map>()
-                  .map(
-                    (e) => Map<String, dynamic>.from(
-                      e.map((k, v) => MapEntry(k.toString(), v)),
-                    ),
-                  )
-                  .toList()
-            : <Map<String, dynamic>>[];
+      final ordersData = ordersSnap.data() ?? <String, dynamic>{};
+      final typeMap = ordersData[typeKey] is Map
+          ? ordersData[typeKey] as Map
+          : {};
+      final storeOrders = typeMap[storeId] is Map
+          ? typeMap[storeId] as Map
+          : {};
+      final activeQty = _toInt(storeOrders[itemId]);
 
-        if (index >= 0 && index < items.length) {
-          items[index] = {
-            ...items[index],
-            'deliveredQty': qty,
-            'status': 'delivered',
-            'deliveredAt': FieldValue.serverTimestamp(),
-            'deliveredAtLocal': DateTime.now().toIso8601String(),
-            'deliveredBy': AppSession.nickname,
-          };
+      final batchData = latestBatchSnap.data() ?? <String, dynamic>{};
+      final rawItems = batchData['items'];
+      final items = rawItems is List
+          ? rawItems
+                .whereType<Map>()
+                .map(
+                  (e) => Map<String, dynamic>.from(
+                    e.map((k, v) => MapEntry(k.toString(), v)),
+                  ),
+                )
+                .toList()
+          : <Map<String, dynamic>>[];
+
+      if (index < 0 || index >= items.length) {
+        throw Exception('納品対象の発注データが見つかりません。画面を更新して再度お試しください。');
+      }
+
+      final latestItem = items[index];
+      final latestStatus = (latestItem['status'] ?? '').toString();
+      final latestQty = _toInt(latestItem['qty']);
+      final latestDeliveredQty = _toInt(latestItem['deliveredQty']);
+      final latestRemaining = max(0, latestQty - latestDeliveredQty);
+      if (latestStatus == 'delivered' || latestRemaining <= 0) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('この商品はすでに納品済みです'),
+              backgroundColor: Colors.orange,
+            ),
+          );
         }
-        final allDelivered =
-            items.isNotEmpty &&
-            items.every((e) => (e['status'] ?? '') == 'delivered');
+        await _load();
+        return;
+      }
 
-        if (itemType == '商品') {
-          tx.set(stocksRef, {
-            storeId: {itemId: current + remaining},
-          }, SetOptions(merge: true));
-        } else {
-          tx.set(stocksRef, {
-            typeKey: {
-              storeId: {itemId: current + remaining},
-            },
-          }, SetOptions(merge: true));
-        }
+      items[index] = {
+        ...latestItem,
+        'deliveredQty': latestQty,
+        'status': 'delivered',
+        'deliveredAtLocal': DateTime.now().toIso8601String(),
+        'deliveredBy': AppSession.nickname,
+      };
+      final allDelivered =
+          items.isNotEmpty &&
+          items.every((e) => (e['status'] ?? '') == 'delivered');
 
-        if (activeQty > remaining) {
-          tx.set(ordersRef, {
-            typeKey: {
-              storeId: {itemId: activeQty - remaining},
-            },
-          }, SetOptions(merge: true));
-        } else {
-          tx.update(ordersRef, {
-            '$typeKey.$storeId.$itemId': FieldValue.delete(),
-            '_meta.${typeKey}__${storeId}__$itemId': FieldValue.delete(),
-          });
-        }
+      final writeBatch = FirebaseFirestore.instance.batch();
 
-        tx.update(batchDoc.reference, {
-          'items': items,
-          'status': allDelivered ? 'delivered' : 'partial',
+      if (itemType == '商品') {
+        writeBatch.set(stocksRef, {
+          storeId: {itemId: current + latestRemaining},
+        }, SetOptions(merge: true));
+      } else {
+        writeBatch.set(stocksRef, {
+          typeKey: {
+            storeId: {itemId: current + latestRemaining},
+          },
+        }, SetOptions(merge: true));
+      }
+
+      if (activeQty > latestRemaining) {
+        writeBatch.set(ordersRef, {
+          typeKey: {
+            storeId: {itemId: activeQty - latestRemaining},
+          },
+        }, SetOptions(merge: true));
+      } else if (ordersSnap.exists) {
+        writeBatch.update(ordersRef, {
+          '$typeKey.$storeId.$itemId': FieldValue.delete(),
+          '_meta.${typeKey}__${storeId}__$itemId': FieldValue.delete(),
         });
+      }
 
-        tx.set(AppSession.doc('history').collection('entries').doc(), {
-          'at': FieldValue.serverTimestamp(),
-          'storeId': storeId,
-          'storeName': storeName,
-          'itemId': itemId,
-          'itemName': itemName,
-          'itemType': itemType,
-          'oldCount': current,
-          'newCount': current + remaining,
-          'nickName': AppSession.nickname,
-          'uid': AppSession.uid,
-          'action': 'delivery',
-        });
+      writeBatch.update(batchDoc.reference, {
+        'items': items,
+        'status': allDelivered ? 'delivered' : 'partial',
+        'updatedAt': FieldValue.serverTimestamp(),
+        'updatedAtLocal': DateTime.now().toIso8601String(),
       });
+
+      writeBatch.set(AppSession.doc('history').collection('entries').doc(), {
+        'at': FieldValue.serverTimestamp(),
+        'storeId': storeId,
+        'storeName': storeName,
+        'itemId': itemId,
+        'itemName': itemName,
+        'itemType': itemType,
+        'oldCount': current,
+        'newCount': current + latestRemaining,
+        'nickName': AppSession.nickname,
+        'uid': AppSession.uid,
+        'action': 'delivery',
+      });
+
+      await writeBatch.commit();
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('$storeName：$itemName を $remaining個 納品しました'),
+            content: Text('$storeName：$itemName を $latestRemaining個 納品しました'),
             backgroundColor: Colors.green,
           ),
         );
