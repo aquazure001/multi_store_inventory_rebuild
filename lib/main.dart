@@ -5914,13 +5914,31 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
     final itemType = (item['itemType'] ?? '').toString();
     final typeKey = (item['typeKey'] ?? '').toString();
 
+    if (storeId.isEmpty || itemId.isEmpty || typeKey.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('納品処理失敗: 発注データに必要な情報がありません'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+
     try {
       await FirebaseFirestore.instance.runTransaction((tx) async {
         final ordersRef = AppSession.doc('orders');
         final stocksRef = itemType == '商品'
             ? AppSession.doc('stocks')
             : AppSession.doc('stocks_v2');
+
+        // Firestore Web のトランザクションでは、読み取りをすべて先に行う必要がある。
+        // 先に書き込み、その後で読み取りを行うとWeb版で例外になり、納品処理が失敗する。
         final stocksSnap = await tx.get(stocksRef);
+        final ordersSnap = await tx.get(ordersRef);
+        final batchSnap = await tx.get(batchDoc.reference);
+
         final stockData = stocksSnap.data() ?? <String, dynamic>{};
         var current = 0;
         if (itemType == '商品') {
@@ -5928,9 +5946,6 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
               ? stockData[storeId] as Map
               : {};
           current = _toInt(storeData[itemId]);
-          tx.set(stocksRef, {
-            storeId: {itemId: current + remaining},
-          }, SetOptions(merge: true));
         } else {
           final typeData = stockData[typeKey] is Map
               ? stockData[typeKey] as Map
@@ -5939,14 +5954,8 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
               ? typeData[storeId] as Map
               : {};
           current = _toInt(storeData[itemId]);
-          tx.set(stocksRef, {
-            typeKey: {
-              storeId: {itemId: current + remaining},
-            },
-          }, SetOptions(merge: true));
         }
 
-        final ordersSnap = await tx.get(ordersRef);
         final ordersData = ordersSnap.data() ?? <String, dynamic>{};
         final typeMap = ordersData[typeKey] is Map
             ? ordersData[typeKey] as Map
@@ -5955,18 +5964,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
             ? typeMap[storeId] as Map
             : {};
         final activeQty = _toInt(storeOrders[itemId]);
-        if (activeQty > remaining) {
-          tx.update(ordersRef, {
-            '$typeKey.$storeId.$itemId': activeQty - remaining,
-          });
-        } else {
-          tx.update(ordersRef, {
-            '$typeKey.$storeId.$itemId': FieldValue.delete(),
-            '_meta.${typeKey}__${storeId}__$itemId': FieldValue.delete(),
-          });
-        }
 
-        final batchSnap = await tx.get(batchDoc.reference);
         final batchData = batchSnap.data() ?? <String, dynamic>{};
         final rawItems = batchData['items'];
         final items = rawItems is List
@@ -5979,18 +5977,46 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
                   )
                   .toList()
             : <Map<String, dynamic>>[];
+
         if (index >= 0 && index < items.length) {
           items[index] = {
             ...items[index],
             'deliveredQty': qty,
             'status': 'delivered',
+            'deliveredAt': FieldValue.serverTimestamp(),
             'deliveredAtLocal': DateTime.now().toIso8601String(),
             'deliveredBy': AppSession.nickname,
           };
         }
-        final allDelivered = items.every(
-          (e) => (e['status'] ?? '') == 'delivered',
-        );
+        final allDelivered =
+            items.isNotEmpty &&
+            items.every((e) => (e['status'] ?? '') == 'delivered');
+
+        if (itemType == '商品') {
+          tx.set(stocksRef, {
+            storeId: {itemId: current + remaining},
+          }, SetOptions(merge: true));
+        } else {
+          tx.set(stocksRef, {
+            typeKey: {
+              storeId: {itemId: current + remaining},
+            },
+          }, SetOptions(merge: true));
+        }
+
+        if (activeQty > remaining) {
+          tx.set(ordersRef, {
+            typeKey: {
+              storeId: {itemId: activeQty - remaining},
+            },
+          }, SetOptions(merge: true));
+        } else {
+          tx.update(ordersRef, {
+            '$typeKey.$storeId.$itemId': FieldValue.delete(),
+            '_meta.${typeKey}__${storeId}__$itemId': FieldValue.delete(),
+          });
+        }
+
         tx.update(batchDoc.reference, {
           'items': items,
           'status': allDelivered ? 'delivered' : 'partial',
@@ -6019,6 +6045,15 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         );
       }
       await _load();
+    } on FirebaseException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('納品処理失敗: ${e.message ?? e.code}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
