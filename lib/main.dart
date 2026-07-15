@@ -6017,14 +6017,35 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
             );
       }
 
-      // 重い可能性があるため、orders更新とhistory追加は納品処理から一旦外す。
-      // 納品予定表示は deliveredMap を優先して判定する。
+      // 在庫反映後に、店舗在庫一覧の「納品予定」表示を消す。
+      // ここは在庫加算とは分離し、失敗しても納品自体は成功扱いにする。
+      var orderedCleared = false;
+      try {
+        await showStep('納品処理中: 納品予定表示を更新しています');
+        final ordersRef = AppSession.doc('orders');
+        await ordersRef
+            .update({
+              '$typeKey.$storeId.$itemId': FieldValue.increment(-remaining),
+              '_meta.${typeKey}__${storeId}__$itemId': FieldValue.delete(),
+            })
+            .timeout(
+              const Duration(seconds: 8),
+              onTimeout: () => throw TimeoutException('納品予定表示の更新でタイムアウトしました'),
+            );
+        orderedCleared = true;
+      } catch (_) {
+        orderedCleared = false;
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('$storeName：$itemName を $remaining個 納品しました'),
-            backgroundColor: Colors.green,
+            content: Text(
+              orderedCleared
+                  ? '$storeName：$itemName を $remaining個 納品しました'
+                  : '$storeName：$itemName を $remaining個 納品しました（納品予定表示は更新できませんでした）',
+            ),
+            backgroundColor: orderedCleared ? Colors.green : Colors.orange,
           ),
         );
       }
