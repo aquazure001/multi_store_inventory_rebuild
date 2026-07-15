@@ -607,114 +607,6 @@ class _MultiStoreInventoryAppState extends State<MultiStoreInventoryApp> {
     );
   }
 
-  Future<void> _deliverSelectedInBatch(
-    QueryDocumentSnapshot<Map<String, dynamic>> batch,
-  ) async {
-    final data = batch.data();
-    final rawItems = data['items'];
-    final items = rawItems is List
-        ? rawItems
-              .whereType<Map>()
-              .map(
-                (e) => Map<String, dynamic>.from(
-                  e.map((k, v) => MapEntry(k.toString(), v)),
-                ),
-              )
-              .toList()
-        : <Map<String, dynamic>>[];
-
-    final targets = <MapEntry<int, Map<String, dynamic>>>[];
-    for (var i = 0; i < items.length; i++) {
-      final item = items[i];
-      final key = _selectionKey(batch.id, item);
-      if (_selectedDeliveryKeys.contains(key) &&
-          !_isDeliveredInBatch(batch.id, data, item)) {
-        targets.add(MapEntry(i, item));
-      }
-    }
-
-    if (targets.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('一括納品する商品を選択してください'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-
-    final totalQty = targets.fold<int>(
-      0,
-      (sum, entry) =>
-          sum +
-          max(
-            0,
-            _toInt(entry.value['qty']) - _toInt(entry.value['deliveredQty']),
-          ),
-    );
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('選択一括納品'),
-        content: Text('選択した ${targets.length}品目 / 合計$totalQty個 を納品します。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('キャンセル'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.green,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('一括納品する'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-
-    var success = 0;
-    var failed = 0;
-    for (final target in targets) {
-      try {
-        await _deliverItem(
-          batch,
-          target.key,
-          target.value,
-          askConfirm: false,
-          showResult: false,
-        );
-        success++;
-      } catch (_) {
-        failed++;
-      }
-    }
-
-    if (mounted) {
-      setState(() {
-        for (final target in targets) {
-          if (failed == 0) {
-            _selectedDeliveryKeys.remove(_selectionKey(batch.id, target.value));
-          }
-        }
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            failed == 0
-                ? '選択した $success品目を納品しました'
-                : '一括納品完了: 成功$success品目 / 失敗$failed品目',
-          ),
-          backgroundColor: failed == 0 ? Colors.green : Colors.orange,
-        ),
-      );
-    }
-    await _load();
-  }
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -5523,20 +5415,6 @@ class _OrderListPageState extends State<OrderListPage> {
         children: [
           Row(
             children: [
-              Checkbox(
-                value: delivered ? false : selected,
-                onChanged: delivered
-                    ? null
-                    : (value) {
-                        setState(() {
-                          if (value == true) {
-                            _selectedDeliveryKeys.add(selectionKey);
-                          } else {
-                            _selectedDeliveryKeys.remove(selectionKey);
-                          }
-                        });
-                      },
-              ),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -6273,6 +6151,114 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
     }
   }
 
+  Future<void> _deliverSelectedInBatch(
+    QueryDocumentSnapshot<Map<String, dynamic>> batch,
+  ) async {
+    final data = batch.data();
+    final rawItems = data['items'];
+    final items = rawItems is List
+        ? rawItems
+              .whereType<Map>()
+              .map(
+                (e) => Map<String, dynamic>.from(
+                  e.map((k, v) => MapEntry(k.toString(), v)),
+                ),
+              )
+              .toList()
+        : <Map<String, dynamic>>[];
+
+    final targets = <MapEntry<int, Map<String, dynamic>>>[];
+    for (var i = 0; i < items.length; i++) {
+      final item = items[i];
+      final key = _selectionKey(batch.id, item);
+      if (_selectedDeliveryKeys.contains(key) &&
+          !_isDeliveredInBatch(batch.id, data, item)) {
+        targets.add(MapEntry(i, item));
+      }
+    }
+
+    if (targets.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('一括納品する商品を選択してください'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    final totalQty = targets.fold<int>(
+      0,
+      (sum, entry) =>
+          sum +
+          max(
+            0,
+            _toInt(entry.value['qty']) - _toInt(entry.value['deliveredQty']),
+          ),
+    );
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('選択一括納品'),
+        content: Text('選択した ${targets.length}品目 / 合計$totalQty個 を納品します。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('一括納品する'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    var success = 0;
+    var failed = 0;
+    for (final target in targets) {
+      try {
+        await _deliverItem(
+          batch,
+          target.key,
+          target.value,
+          askConfirm: false,
+          showResult: false,
+        );
+        success++;
+      } catch (_) {
+        failed++;
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        for (final target in targets) {
+          if (failed == 0) {
+            _selectedDeliveryKeys.remove(_selectionKey(batch.id, target.value));
+          }
+        }
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            failed == 0
+                ? '選択した $success品目を納品しました'
+                : '一括納品完了: 成功$success品目 / 失敗$failed品目',
+          ),
+          backgroundColor: failed == 0 ? Colors.green : Colors.orange,
+        ),
+      );
+    }
+    await _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading)
@@ -6404,6 +6390,20 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         children: [
           Row(
             children: [
+              Checkbox(
+                value: delivered ? false : selected,
+                onChanged: delivered
+                    ? null
+                    : (value) {
+                        setState(() {
+                          if (value == true) {
+                            _selectedDeliveryKeys.add(selectionKey);
+                          } else {
+                            _selectedDeliveryKeys.remove(selectionKey);
+                          }
+                        });
+                      },
+              ),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
