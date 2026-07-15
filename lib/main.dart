@@ -5824,6 +5824,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
   bool _loading = true;
   String? _error;
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _batches = [];
+  final Set<String> _localDeliveredKeys = <String>{};
 
   @override
   void initState() {
@@ -5846,7 +5847,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
       final snap = await AppSession.doc('orders')
           .collection('batches')
           .orderBy('createdAt', descending: true)
-          .limit(100)
+          .limit(20)
           .get();
       setState(() {
         _batches = snap.docs;
@@ -5872,6 +5873,25 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
     return '${d.year}年${d.month}月${d.day}日の発注分';
   }
 
+  String _deliveryKey(Map<String, dynamic> item) {
+    final typeKey = (item['typeKey'] ?? item['itemType'] ?? '').toString();
+    final storeId = (item['storeId'] ?? '').toString();
+    final itemId = (item['itemId'] ?? '').toString();
+    return '${typeKey}__${storeId}__$itemId';
+  }
+
+  bool _isDeliveredInBatch(
+    String batchId,
+    Map<String, dynamic> batchData,
+    Map<String, dynamic> item,
+  ) {
+    if ((item['status'] ?? '') == 'delivered') return true;
+    final key = _deliveryKey(item);
+    if (_localDeliveredKeys.contains('$batchId::$key')) return true;
+    final deliveredMap = batchData['deliveredMap'];
+    return deliveredMap is Map && deliveredMap.containsKey(key);
+  }
+
   Future<void> _deliverItem(
     QueryDocumentSnapshot<Map<String, dynamic>> batchDoc,
     int index,
@@ -5880,7 +5900,13 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
     final qty = _toInt(item['qty']);
     final deliveredQty = _toInt(item['deliveredQty']);
     final remaining = max(0, qty - deliveredQty);
-    if (remaining <= 0 || item['status'] == 'delivered') return;
+    final deliveryKey = _deliveryKey(item);
+    final localKey = '${batchDoc.id}::$deliveryKey';
+    if (remaining <= 0 ||
+        item['status'] == 'delivered' ||
+        _localDeliveredKeys.contains(localKey)) {
+      return;
+    }
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -5939,98 +5965,70 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
                 )
                 .toList()
           : <Map<String, dynamic>>[];
+      final deliveredMap = batchData['deliveredMap'] is Map
+          ? Map<String, dynamic>.from(
+              (batchData['deliveredMap'] as Map).map(
+                (k, v) => MapEntry(k.toString(), v),
+              ),
+            )
+          : <String, dynamic>{};
 
-      var targetIndex = -1;
-      for (var i = 0; i < items.length; i++) {
-        final candidate = items[i];
-        final sameStore = (candidate['storeId'] ?? '').toString() == storeId;
-        final sameItem = (candidate['itemId'] ?? '').toString() == itemId;
-        final sameType =
-            (candidate['typeKey'] ?? '').toString() == typeKey ||
-            (candidate['itemType'] ?? '').toString() == itemType;
-        if (sameStore && sameItem && sameType) {
-          targetIndex = i;
-          break;
-        }
-      }
-
-      if (targetIndex < 0 && index >= 0 && index < items.length) {
-        targetIndex = index;
-      }
-      if (targetIndex < 0 || targetIndex >= items.length) {
-        throw Exception('納品対象の発注データが見つかりません。画面を更新して再度お試しください。');
-      }
-
-      final target = items[targetIndex];
-      final targetQty = _toInt(target['qty']);
-      final targetDeliveredQty = _toInt(target['deliveredQty']);
-      final targetRemaining = max(0, targetQty - targetDeliveredQty);
-      final targetStatus = (target['status'] ?? '').toString();
-      if (targetStatus == 'delivered' || targetRemaining <= 0) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('この商品はすでに納品済みです'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-        await _load();
-        return;
-      }
-
-      final nowLocal = DateTime.now().toIso8601String();
-      items[targetIndex] = {
-        ...target,
-        'deliveredQty': targetQty,
-        'status': 'delivered',
-        'deliveredAtLocal': nowLocal,
+      final afterDeliveredMap = Map<String, dynamic>.from(deliveredMap);
+      afterDeliveredMap[deliveryKey] = {
+        'qty': remaining,
+        'deliveredAtLocal': DateTime.now().toIso8601String(),
         'deliveredBy': AppSession.nickname,
+        'storeId': storeId,
+        'itemId': itemId,
+        'typeKey': typeKey,
       };
       final allDelivered =
           items.isNotEmpty &&
-          items.every((e) => (e['status'] ?? '') == 'delivered');
+          items.every((e) {
+            if ((e['status'] ?? '') == 'delivered') return true;
+            return afterDeliveredMap.containsKey(
+              _deliveryKey(
+                Map<String, dynamic>.from(
+                  e.map((k, v) => MapEntry(k.toString(), v)),
+                ),
+              ),
+            );
+          });
 
-      final ordersRef = AppSession.doc('orders');
       final stocksRef = itemType == '商品'
           ? AppSession.doc('stocks')
           : AppSession.doc('stocks_v2');
+      final ordersRef = AppSession.doc('orders');
       final historyRef = AppSession.doc('history').collection('entries').doc();
 
       final writeBatch = FirebaseFirestore.instance.batch();
 
-      // 1. 納品ページの表示元を納品済みにする
+      // 大きいitems配列は書き換えず、軽いdeliveredMapだけ更新する。
       writeBatch.update(batchDoc.reference, {
-        'items': items,
+        'deliveredMap.$deliveryKey': afterDeliveredMap[deliveryKey],
         'status': allDelivered ? 'delivered' : 'partial',
         'updatedAt': FieldValue.serverTimestamp(),
-        'updatedAtLocal': nowLocal,
+        'updatedAtLocal': DateTime.now().toIso8601String(),
       });
 
-      // 2. 在庫は読み取りなしで直接加算する
       if (itemType == '商品') {
         writeBatch.set(stocksRef, {
-          storeId: {itemId: FieldValue.increment(targetRemaining)},
+          storeId: {itemId: FieldValue.increment(remaining)},
         }, SetOptions(merge: true));
       } else {
         writeBatch.set(stocksRef, {
           typeKey: {
-            storeId: {itemId: FieldValue.increment(targetRemaining)},
+            storeId: {itemId: FieldValue.increment(remaining)},
           },
         }, SetOptions(merge: true));
       }
 
-      // 3. 発注残も読み取りなしで減算する。0の掃除は別画面更新時の表示側で吸収する。
-      writeBatch.set(ordersRef, {
-        typeKey: {
-          storeId: {itemId: FieldValue.increment(-targetRemaining)},
-        },
-      }, SetOptions(merge: true));
+      // 発注残は直接減算する。0以下になっても発注画面側で0扱いにする想定。
       writeBatch.update(ordersRef, {
+        '$typeKey.$storeId.$itemId': FieldValue.increment(-remaining),
         '_meta.${typeKey}__${storeId}__$itemId': FieldValue.delete(),
       });
 
-      // 4. 履歴を残す
       writeBatch.set(historyRef, {
         'at': FieldValue.serverTimestamp(),
         'storeId': storeId,
@@ -6038,9 +6036,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         'itemId': itemId,
         'itemName': itemName,
         'itemType': itemType,
-        'oldCount': null,
-        'newCount': null,
-        'changedBy': targetRemaining,
+        'changedBy': remaining,
         'nickName': AppSession.nickname,
         'uid': AppSession.uid,
         'action': 'delivery',
@@ -6049,14 +6045,16 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
       await writeBatch.commit();
 
       if (mounted) {
+        setState(() {
+          _localDeliveredKeys.add(localKey);
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('$storeName：$itemName を $targetRemaining個 納品しました'),
+            content: Text('$storeName：$itemName を $remaining個 納品しました'),
             backgroundColor: Colors.green,
           ),
         );
       }
-      await _load();
     } on FirebaseException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -6119,7 +6117,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
               .toList()
         : <Map<String, dynamic>>[];
     final pending = items
-        .where((e) => (e['status'] ?? '') != 'delivered')
+        .where((e) => !_isDeliveredInBatch(batch.id, data, e))
         .length;
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
@@ -6132,7 +6130,12 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         subtitle: Text('未納品 $pending / 全${items.length}品目'),
         children: [
           for (int i = 0; i < items.length; i++)
-            _buildDeliveryRow(batch, i, items[i]),
+            _buildDeliveryRow(
+              batch,
+              i,
+              items[i],
+              _isDeliveredInBatch(batch.id, data, items[i]),
+            ),
         ],
       ),
     );
@@ -6142,9 +6145,9 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
     QueryDocumentSnapshot<Map<String, dynamic>> batch,
     int index,
     Map<String, dynamic> item,
+    bool delivered,
   ) {
     final qty = _toInt(item['qty']);
-    final delivered = (item['status'] ?? '') == 'delivered';
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
       child: Column(
