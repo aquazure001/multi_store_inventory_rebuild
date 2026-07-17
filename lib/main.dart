@@ -5884,6 +5884,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _batches = [];
   final Set<String> _localDeliveredKeys = <String>{};
   final Set<String> _selectedDeliveryKeys = <String>{};
+  String _selectedDeliveryStoreId = '';
 
   @override
   void initState() {
@@ -5895,6 +5896,78 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
     if (value is int) return value;
     if (value is num) return value.toInt();
     return int.tryParse('$value') ?? 0;
+  }
+
+  Map<String, String> _deliveryStores() {
+    final stores = <String, String>{};
+    for (final batch in _batches) {
+      final rawItems = batch.data()['items'];
+      if (rawItems is! List) continue;
+      for (final raw in rawItems.whereType<Map>()) {
+        final item = Map<String, dynamic>.from(
+          raw.map((k, v) => MapEntry(k.toString(), v)),
+        );
+        final storeId = (item['storeId'] ?? '').toString();
+        final storeName = (item['storeName'] ?? '').toString();
+        if (storeId.isNotEmpty && storeName.isNotEmpty) {
+          stores[storeId] = storeName;
+        }
+      }
+    }
+    final entries = stores.entries.toList()
+      ..sort((a, b) => a.value.compareTo(b.value));
+    return Map<String, String>.fromEntries(entries);
+  }
+
+  Widget _buildStoreSelector() {
+    final stores = _deliveryStores();
+    if (stores.isEmpty) return const SizedBox.shrink();
+
+    return Card(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '最初に店舗を選択してください',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              value: _selectedDeliveryStoreId.isEmpty
+                  ? null
+                  : _selectedDeliveryStoreId,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                labelText: '納品する店舗',
+                prefixIcon: Icon(Icons.store),
+              ),
+              items: [
+                for (final entry in stores.entries)
+                  DropdownMenuItem(
+                    value: entry.key,
+                    child: Text(
+                      entry.value,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+              ],
+              onChanged: (value) {
+                setState(() {
+                  _selectedDeliveryStoreId = value ?? '';
+                  _selectedDeliveryKeys.clear();
+                });
+              },
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _load() async {
@@ -6164,6 +6237,12 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
                   e.map((k, v) => MapEntry(k.toString(), v)),
                 ),
               )
+              .where(
+                (item) =>
+                    _selectedDeliveryStoreId.isEmpty ||
+                    (item['storeId'] ?? '').toString() ==
+                        _selectedDeliveryStoreId,
+              )
               .toList()
         : <Map<String, dynamic>>[];
 
@@ -6282,9 +6361,26 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
       ),
       body: _batches.isEmpty
           ? const Center(child: Text('納品処理待ちの発注はありません'))
-          : ListView(
-              padding: const EdgeInsets.all(16),
-              children: [for (final b in _batches) _buildBatchCard(b)],
+          : Column(
+              children: [
+                _buildStoreSelector(),
+                Expanded(
+                  child: _selectedDeliveryStoreId.isEmpty
+                      ? const Center(
+                          child: Text(
+                            '店舗を選択すると、その店舗の未納品商品だけ表示されます',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontSize: 16),
+                          ),
+                        )
+                      : ListView(
+                          padding: const EdgeInsets.all(16),
+                          children: [
+                            for (final b in _batches) _buildBatchCard(b),
+                          ],
+                        ),
+                ),
+              ],
             ),
     );
   }
@@ -6300,8 +6396,15 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
                   e.map((k, v) => MapEntry(k.toString(), v)),
                 ),
               )
+              .where(
+                (item) =>
+                    _selectedDeliveryStoreId.isEmpty ||
+                    (item['storeId'] ?? '').toString() ==
+                        _selectedDeliveryStoreId,
+              )
               .toList()
         : <Map<String, dynamic>>[];
+    if (items.isEmpty) return const SizedBox.shrink();
     final pending = items
         .where((e) => !_isDeliveredInBatch(batch.id, data, e))
         .length;
@@ -6408,15 +6511,38 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      '${item['itemName']}',
-                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.deepPurple.shade50,
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(color: Colors.deepPurple.shade200),
+                      ),
+                      child: Text(
+                        '${item['storeName']}',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.deepPurple.shade800,
+                        ),
+                      ),
                     ),
                     Text(
-                      '${item['storeName']} / ${item['itemType']} / コード:${item['itemCode'] ?? ''}',
+                      '${item['itemName']}',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Text(
+                      '${item['itemType']} / コード:${item['itemCode'] ?? ''}',
                       style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey.shade600,
+                        fontSize: 13,
+                        color: Colors.grey.shade700,
                       ),
                     ),
                   ],
