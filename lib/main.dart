@@ -1309,6 +1309,12 @@ class _StoreListPageState extends State<StoreListPage> {
                 Navigator.of(
                   context,
                 ).push(MaterialPageRoute(builder: (_) => const HistoryPage()));
+              } else if (value == 'inventory_snapshot') {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const InventorySnapshotPage(),
+                  ),
+                );
               } else if (value == 'items') {
                 Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const ItemMasterPage()),
@@ -1428,6 +1434,16 @@ class _StoreListPageState extends State<StoreListPage> {
                     Icon(Icons.history),
                     SizedBox(width: 12),
                     Text('修正・追加履歴'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'inventory_snapshot',
+                child: Row(
+                  children: [
+                    Icon(Icons.event_note),
+                    SizedBox(width: 12),
+                    Text('棚卸し一覧出力'),
                   ],
                 ),
               ),
@@ -5862,6 +5878,259 @@ class _OrderListPageState extends State<OrderListPage> {
                   _buildByItem(context, _entries),
                 ],
               ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// 棚卸し一覧CSV出力
+// ─────────────────────────────────────────────
+
+class InventorySnapshotPage extends StatefulWidget {
+  const InventorySnapshotPage({super.key});
+
+  @override
+  State<InventorySnapshotPage> createState() => _InventorySnapshotPageState();
+}
+
+class _InventorySnapshotPageState extends State<InventorySnapshotPage> {
+  DateTime _targetDate = DateTime(2026, 6, 30, 23, 59, 59);
+  bool _loading = false;
+  String? _message;
+
+  int _toInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse('$value') ?? 0;
+  }
+
+  DateTime? _toDateTime(dynamic value) {
+    if (value is Timestamp) return value.toDate();
+    if (value is String && value.isNotEmpty) {
+      return DateTime.tryParse(value);
+    }
+    return null;
+  }
+
+  String _csvCell(Object? value) {
+    final s = (value ?? '').toString();
+    return '"${s.replaceAll('"', '""')}"';
+  }
+
+  Future<void> _selectDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: DateTime(
+        _targetDate.year,
+        _targetDate.month,
+        _targetDate.day,
+      ),
+      firstDate: DateTime(2020, 1, 1),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+    );
+    if (picked == null) return;
+    setState(() {
+      _targetDate = DateTime(picked.year, picked.month, picked.day, 23, 59, 59);
+    });
+  }
+
+  Future<void> _exportCsv() async {
+    if (_loading) return;
+    setState(() {
+      _loading = true;
+      _message = null;
+    });
+
+    try {
+      final target = _targetDate;
+      final storesDoc = await AppSession.doc('stores').get();
+      final productsDoc = await AppSession.doc('products').get();
+      final stocksDoc = await AppSession.doc('stocks').get();
+
+      final stores = _parseStores(storesDoc.data() ?? {})
+        ..sort((a, b) {
+          final c = _naturalCompare(a.code, b.code);
+          return c != 0 ? c : _naturalCompare(a.name, b.name);
+        });
+      final products = _parseItemsFromDoc(
+        productsDoc,
+      ).where((item) => !item.discontinued).toList();
+
+      final currentStocksRaw = stocksDoc.data() ?? <String, dynamic>{};
+      final snapshot = <String, Map<String, int>>{};
+      for (final store in stores) {
+        snapshot[store.id] = Map<String, int>.from(
+          _parseStocksForStore(currentStocksRaw, store.id),
+        );
+      }
+
+      // 現在在庫から、基準日より後の変更分を逆算して基準日時点に戻す。
+      // 手入力の在庫修正は history/entries の oldCount/newCount を使う。
+      final historySnap = await AppSession.doc('history')
+          .collection('entries')
+          .where('at', isGreaterThan: Timestamp.fromDate(target))
+          .get();
+
+      var historyCount = 0;
+      for (final doc in historySnap.docs) {
+        final data = doc.data();
+        if ((data['itemType'] ?? '').toString() != '商品') continue;
+        final storeId = (data['storeId'] ?? '').toString();
+        final itemId = (data['itemId'] ?? '').toString();
+        if (storeId.isEmpty || itemId.isEmpty) continue;
+        if (data['oldCount'] is! num || data['newCount'] is! num) continue;
+        final oldCount = _toInt(data['oldCount']);
+        final newCount = _toInt(data['newCount']);
+        final delta = newCount - oldCount;
+        final storeMap = snapshot.putIfAbsent(storeId, () => <String, int>{});
+        storeMap[itemId] = (storeMap[itemId] ?? 0) - delta;
+        historyCount++;
+      }
+
+      // 納品処理画面からの納品は高速化のため history ではなく batches.deliveredMap に残る場合がある。
+      // その分も基準日より後なら逆算する。
+      final batchesSnap = await AppSession.doc('orders')
+          .collection('batches')
+          .orderBy('createdAt', descending: true)
+          .limit(300)
+          .get();
+
+      var deliveryCount = 0;
+      for (final batch in batchesSnap.docs) {
+        final batchData = batch.data();
+        final deliveredMap = batchData['deliveredMap'];
+        if (deliveredMap is! Map) continue;
+        for (final raw in deliveredMap.values) {
+          if (raw is! Map) continue;
+          final item = Map<String, dynamic>.from(
+            raw.map((k, v) => MapEntry(k.toString(), v)),
+          );
+          if ((item['itemType'] ?? '').toString() != '商品') continue;
+          final deliveredAt = _toDateTime(
+            item['deliveredAt'] ?? item['deliveredAtLocal'],
+          );
+          if (deliveredAt == null || !deliveredAt.isAfter(target)) continue;
+          final storeId = (item['storeId'] ?? '').toString();
+          final itemId = (item['itemId'] ?? '').toString();
+          final qty = _toInt(item['qty']);
+          if (storeId.isEmpty || itemId.isEmpty || qty == 0) continue;
+          final storeMap = snapshot.putIfAbsent(storeId, () => <String, int>{});
+          storeMap[itemId] = (storeMap[itemId] ?? 0) - qty;
+          deliveryCount++;
+        }
+      }
+
+      final rows = <List<Object?>>[
+        ['基準日', '店舗コード', '店舗名', '商品コード', '商品名', '残高'],
+      ];
+      for (final store in stores) {
+        final storeStocks = snapshot[store.id] ?? <String, int>{};
+        for (final product in products) {
+          rows.add([
+            '${target.year}-${target.month.toString().padLeft(2, '0')}-${target.day.toString().padLeft(2, '0')}',
+            store.code,
+            store.name,
+            product.code,
+            product.name,
+            storeStocks[product.id] ?? 0,
+          ]);
+        }
+      }
+
+      final csv = rows.map((row) => row.map(_csvCell).join(',')).join('\r\n');
+      final bytes = utf8.encode('\ufeff$csv');
+      final blob = html.Blob([bytes], 'text/csv;charset=utf-8');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      final fileName =
+          '棚卸し一覧_${target.year}${target.month.toString().padLeft(2, '0')}${target.day.toString().padLeft(2, '0')}_商品.csv';
+      html.AnchorElement(href: url)
+        ..download = fileName
+        ..click();
+      html.Url.revokeObjectUrl(url);
+
+      setState(() {
+        _message =
+            'CSVを出力しました（商品 ${products.length}件 × 店舗 ${stores.length}件、履歴$historyCount件・納品記録$deliveryCount件を逆算）';
+      });
+    } catch (e) {
+      setState(() {
+        _message = '出力失敗: $e';
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final label =
+        '${_targetDate.year}年${_targetDate.month}月${_targetDate.day}日 23:59時点';
+    return Scaffold(
+      backgroundColor: const Color(0xFFFFF7FF),
+      appBar: AppBar(title: const Text('棚卸し一覧出力')),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '店舗別・商品別の月末残高CSVを作成します',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text('基準日: $label'),
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      onPressed: _loading ? null : _selectDate,
+                      icon: const Icon(Icons.calendar_month),
+                      label: const Text('基準日を変更'),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      '計算方法: 現在在庫から、基準日より後の在庫修正履歴と納品記録を差し引いて逆算します。Firestoreは読み取りのみです。',
+                      style: TextStyle(color: Colors.black54),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: _loading ? null : _exportCsv,
+              icon: _loading
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.download),
+              label: Text(_loading ? '作成中...' : '商品棚卸しCSVを出力'),
+              style: ElevatedButton.styleFrom(
+                minimumSize: const Size.fromHeight(52),
+              ),
+            ),
+            if (_message != null) ...[
+              const SizedBox(height: 16),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: SelectableText(_message!),
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
