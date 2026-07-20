@@ -4248,6 +4248,7 @@ class _OrderMeta {
     this.requestedBy = '',
     this.orderedBy = '',
     this.acknowledgedBy = '',
+    this.lastRequestedQty = 0,
   });
 
   final DateTime? requestedAt;
@@ -4256,6 +4257,7 @@ class _OrderMeta {
   final String requestedBy;
   final String orderedBy;
   final String acknowledgedBy;
+  final int lastRequestedQty;
 
   bool get isPdfIssued => orderedAt != null;
   bool get needsAcknowledgement => orderedAt != null && acknowledgedAt == null;
@@ -4277,6 +4279,7 @@ class _OrderMeta {
       requestedBy: (map['requestedBy'] ?? '').toString(),
       orderedBy: (map['orderedBy'] ?? '').toString(),
       acknowledgedBy: (map['acknowledgedBy'] ?? '').toString(),
+      lastRequestedQty: (map['lastRequestedQty'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -4602,6 +4605,7 @@ class _OrderListPageState extends State<OrderListPage> {
         '${_orderMetaField(entry)}.storeName': entry.store.name,
         '${_orderMetaField(entry)}.itemName': entry.item.name,
         '${_orderMetaField(entry)}.itemType': entry.itemType,
+        '${_orderMetaField(entry)}.lastRequestedQty': qty,
       };
       try {
         await ordersRef.update(update);
@@ -4618,6 +4622,7 @@ class _OrderListPageState extends State<OrderListPage> {
                 'storeName': entry.store.name,
                 'itemName': entry.item.name,
                 'itemType': entry.itemType,
+                'lastRequestedQty': qty,
               },
             },
           });
@@ -4739,6 +4744,7 @@ class _OrderListPageState extends State<OrderListPage> {
         updates['${_orderMetaField(e)}.storeName'] = e.store.name;
         updates['${_orderMetaField(e)}.itemName'] = e.item.name;
         updates['${_orderMetaField(e)}.itemType'] = e.itemType;
+        updates['${_orderMetaField(e)}.lastRequestedQty'] = e.effectiveShortage;
       }
       final ordersRef = AppSession.doc('orders');
       try {
@@ -4759,6 +4765,7 @@ class _OrderListPageState extends State<OrderListPage> {
                   'storeName': e.store.name,
                   'itemName': e.item.name,
                   'itemType': e.itemType,
+                  'lastRequestedQty': e.effectiveShortage,
                 },
             },
           });
@@ -5086,17 +5093,32 @@ class _OrderListPageState extends State<OrderListPage> {
     }
   }
 
+  bool _hasUnconfirmedOrderRequest(_OrderEntry entry) {
+    final requestedAt = entry.orderMeta.requestedAt;
+    if (requestedAt == null) return false;
+    final orderedAt = entry.orderMeta.orderedAt;
+    if (orderedAt == null) return true;
+    return requestedAt.isAfter(orderedAt);
+  }
+
+  int _pdfOrderQty(_OrderEntry entry) {
+    if (entry.orderMeta.lastRequestedQty > 0) {
+      return entry.orderMeta.lastRequestedQty;
+    }
+    return _orderedQtys[_orderKey(entry)] ?? entry.orderedQty;
+  }
+
   Future<List<_OrderEntry>> _orderedEntriesForPdf(
     BuildContext context,
     List<_OrderEntry> entries,
   ) async {
     final ordered = entries
-        .where((e) => (_orderedQtys[_orderKey(e)] ?? e.orderedQty) > 0)
+        .where((e) => _hasUnconfirmedOrderRequest(e) && _pdfOrderQty(e) > 0)
         .toList();
     if (ordered.isEmpty && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('PDFに出力する発注済み商品がありません'),
+          content: Text('発注ボタンを押した未確定の商品がありません'),
           backgroundColor: Colors.orange,
         ),
       );
@@ -5110,7 +5132,7 @@ class _OrderListPageState extends State<OrderListPage> {
     final batchItems = <Map<String, dynamic>>[];
     final issuedAt = DateTime.now();
     for (final e in entries) {
-      final qty = _orderedQtys[_orderKey(e)] ?? e.orderedQty;
+      final qty = _pdfOrderQty(e);
       updates['${_orderMetaField(e)}.orderedAt'] = FieldValue.serverTimestamp();
       updates['${_orderMetaField(e)}.orderedBy'] = AppSession.nickname;
       updates['${_orderMetaField(e)}.acknowledgedAt'] = FieldValue.delete();
@@ -5226,7 +5248,7 @@ class _OrderListPageState extends State<OrderListPage> {
                         _pdfCell('${e.base}', font),
                         _pdfCell('${e.current}', font),
                         _pdfCell(
-                          '${_orderedQtys[_orderKey(e)] ?? e.orderedQty}',
+                          '${_pdfOrderQty(e)}',
                           font,
                           color: PdfColors.blue700,
                         ),
@@ -5361,7 +5383,7 @@ class _OrderListPageState extends State<OrderListPage> {
                             font,
                           ),
                           _pdfCell(
-                            '${_orderedQtys[_orderKey(byTypeByItem[type]![itemId]![i])] ?? byTypeByItem[type]![itemId]![i].orderedQty}',
+                            '${_pdfOrderQty(byTypeByItem[type]![itemId]![i])}',
                             font,
                             color: PdfColors.blue700,
                           ),
@@ -6672,7 +6694,9 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
           .limit(100)
           .get();
       setState(() {
-        _batches = snap.docs;
+        _batches = snap.docs
+            .where((doc) => (doc.data()['status'] ?? '') != 'canceled')
+            .toList();
         _loading = false;
       });
     } catch (e) {
@@ -6971,6 +6995,60 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     );
   }
 
+  Future<void> _cancelBatch(
+    QueryDocumentSnapshot<Map<String, dynamic>> batch,
+  ) async {
+    final data = batch.data();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('発注表を取消しますか？'),
+        content: Text(
+          '${_batchTitle(data)}を取消します。\n\n在庫数は変更しません。納品処理画面にも出さないようにします。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('やめる'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('取消する'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await batch.reference.update({
+        'status': 'canceled',
+        'canceledAt': FieldValue.serverTimestamp(),
+        'canceledAtLocal': DateTime.now().toIso8601String(),
+        'canceledBy': AppSession.nickname,
+      });
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('発注表を取消しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('取消失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
   Widget _buildBatchCard(QueryDocumentSnapshot<Map<String, dynamic>> batch) {
     final data = batch.data();
     final items = _batchItems(data);
@@ -6980,6 +7058,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
       0,
       (sum, item) => sum + _toInt(item['qty']),
     );
+    final canceled = (data['status'] ?? '') == 'canceled';
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -7002,7 +7081,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
               children: [
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: items.isEmpty
+                    onPressed: items.isEmpty || canceled
                         ? null
                         : () => _exportPdfByStore(batch),
                     icon: const Icon(Icons.picture_as_pdf, size: 18),
@@ -7012,7 +7091,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: items.isEmpty
+                    onPressed: items.isEmpty || canceled
                         ? null
                         : () => _exportPdfByItem(batch),
                     icon: const Icon(Icons.picture_as_pdf, size: 18),
@@ -7021,6 +7100,20 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
                 ),
               ],
             ),
+            if (!canceled) ...[
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton.icon(
+                  onPressed: () => _cancelBatch(batch),
+                  icon: const Icon(Icons.cancel_outlined, color: Colors.red),
+                  label: const Text(
+                    'この発注表を取消',
+                    style: TextStyle(color: Colors.red),
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),
