@@ -1335,6 +1335,10 @@ class _StoreListPageState extends State<StoreListPage> {
                     builder: (_) => const DeliveryProcessingPage(),
                   ),
                 );
+              } else if (value == 'past_orders') {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const PastOrderPdfPage()),
+                );
               } else if (value == 'reorder') {
                 _goToReorder();
               } else if (value == 'org') {
@@ -1474,6 +1478,16 @@ class _StoreListPageState extends State<StoreListPage> {
                     Icon(Icons.local_shipping_outlined),
                     SizedBox(width: 12),
                     Text('納品処理'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'past_orders',
+                child: Row(
+                  children: [
+                    Icon(Icons.receipt_long),
+                    SizedBox(width: 12),
+                    Text('過去の発注表'),
                   ],
                 ),
               ),
@@ -6271,6 +6285,496 @@ class _InventorySnapshotPageState extends State<InventorySnapshotPage> {
             ],
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// 過去の発注表PDF再出力
+// ─────────────────────────────────────────────
+
+class PastOrderPdfPage extends StatefulWidget {
+  const PastOrderPdfPage({super.key});
+
+  @override
+  State<PastOrderPdfPage> createState() => _PastOrderPdfPageState();
+}
+
+class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
+  bool _loading = true;
+  String? _error;
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _batches = [];
+
+  bool get _canViewPastOrders => AppSession.isAdmin || AppSession.isSuperAdmin;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  int _toInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse('$value') ?? 0;
+  }
+
+  DateTime _batchDate(Map<String, dynamic> data) {
+    final ts = data['createdAt'];
+    if (ts is Timestamp) return ts.toDate();
+    return DateTime.tryParse((data['createdAtLocal'] ?? '').toString()) ??
+        DateTime.now();
+  }
+
+  String _batchTitle(Map<String, dynamic> data) {
+    final d = _batchDate(data);
+    return '${d.year}年${d.month}月${d.day}日の発注表';
+  }
+
+  List<Map<String, dynamic>> _batchItems(Map<String, dynamic> data) {
+    final raw = data['items'];
+    if (raw is! List) return <Map<String, dynamic>>[];
+    final items = raw
+        .whereType<Map>()
+        .map(
+          (e) => Map<String, dynamic>.from(
+            e.map((k, v) => MapEntry(k.toString(), v)),
+          ),
+        )
+        .toList();
+    items.sort((a, b) {
+      final storeCompare = (a['storeName'] ?? '').toString().compareTo(
+        (b['storeName'] ?? '').toString(),
+      );
+      if (storeCompare != 0) return storeCompare;
+      final typeCompare = (a['itemType'] ?? '').toString().compareTo(
+        (b['itemType'] ?? '').toString(),
+      );
+      if (typeCompare != 0) return typeCompare;
+      final codeCompare = _naturalCompare(
+        (a['itemCode'] ?? '').toString(),
+        (b['itemCode'] ?? '').toString(),
+      );
+      if (codeCompare != 0) return codeCompare;
+      return _naturalCompare(
+        (a['itemName'] ?? '').toString(),
+        (b['itemName'] ?? '').toString(),
+      );
+    });
+    return items;
+  }
+
+  Future<void> _load() async {
+    if (!_canViewPastOrders) {
+      setState(() {
+        _loading = false;
+        _error = '過去の発注表を確認できるのは管理者・統括管理者のみです';
+      });
+      return;
+    }
+
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final snap = await AppSession.doc('orders')
+          .collection('batches')
+          .orderBy('createdAt', descending: true)
+          .limit(100)
+          .get();
+      setState(() {
+        _batches = snap.docs;
+        _loading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  pw.Widget _pastOrderPdfCell(
+    String text,
+    pw.Font font, {
+    bool bold = false,
+    PdfColor? color,
+  }) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+      child: pw.Text(
+        text,
+        style: pw.TextStyle(
+          font: font,
+          fontSize: 10,
+          fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal,
+          color: color,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _exportPdfByStore(
+    QueryDocumentSnapshot<Map<String, dynamic>> batch,
+  ) async {
+    final data = batch.data();
+    final items = _batchItems(data);
+    if (items.isEmpty) return;
+
+    final font = await PdfGoogleFonts.notoSansJPRegular();
+    final doc = pw.Document();
+    final byStore = <String, List<Map<String, dynamic>>>{};
+    for (final item in items) {
+      final storeName = (item['storeName'] ?? '店舗不明').toString();
+      byStore.putIfAbsent(storeName, () => <Map<String, dynamic>>[]).add(item);
+    }
+
+    final title = '${_batchTitle(data)}（店舗別）';
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        theme: pw.ThemeData.withFont(base: font),
+        header: (ctx) => pw.Text(
+          title,
+          style: pw.TextStyle(
+            font: font,
+            fontSize: 18,
+            fontWeight: pw.FontWeight.bold,
+          ),
+        ),
+        build: (ctx) {
+          final widgets = <pw.Widget>[];
+          widgets.add(
+            pw.Text(
+              '発注確定日時: ${_formatDateTime(_batchDate(data))} / 発注者: ${(data['createdBy'] ?? '').toString()}',
+              style: pw.TextStyle(font: font, fontSize: 10),
+            ),
+          );
+          for (final storeName in byStore.keys) {
+            final storeItems = byStore[storeName]!;
+            widgets.add(pw.SizedBox(height: 12));
+            widgets.add(
+              pw.Text(
+                '■ $storeName',
+                style: pw.TextStyle(
+                  font: font,
+                  fontSize: 13,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
+            );
+            widgets.add(pw.SizedBox(height: 4));
+            widgets.add(
+              pw.Table(
+                border: pw.TableBorder.all(color: PdfColors.grey400),
+                columnWidths: {
+                  0: const pw.FlexColumnWidth(1.2),
+                  1: const pw.FlexColumnWidth(2.7),
+                  2: const pw.FlexColumnWidth(1),
+                  3: const pw.FlexColumnWidth(0.8),
+                  4: const pw.FlexColumnWidth(0.8),
+                  5: const pw.FlexColumnWidth(0.9),
+                },
+                children: [
+                  pw.TableRow(
+                    decoration: const pw.BoxDecoration(
+                      color: PdfColors.grey200,
+                    ),
+                    children: [
+                      _pastOrderPdfCell('コード', font, bold: true),
+                      _pastOrderPdfCell('商品名', font, bold: true),
+                      _pastOrderPdfCell('種別', font, bold: true),
+                      _pastOrderPdfCell('基準', font, bold: true),
+                      _pastOrderPdfCell('現在', font, bold: true),
+                      _pastOrderPdfCell('発注数', font, bold: true),
+                    ],
+                  ),
+                  for (final item in storeItems)
+                    pw.TableRow(
+                      children: [
+                        _pastOrderPdfCell(
+                          (item['itemCode'] ?? '').toString(),
+                          font,
+                        ),
+                        _pastOrderPdfCell(
+                          (item['itemName'] ?? '').toString(),
+                          font,
+                        ),
+                        _pastOrderPdfCell(
+                          (item['itemType'] ?? '').toString(),
+                          font,
+                        ),
+                        _pastOrderPdfCell('${_toInt(item['base'])}', font),
+                        _pastOrderPdfCell(
+                          '${_toInt(item['currentAtOrder'])}',
+                          font,
+                        ),
+                        _pastOrderPdfCell(
+                          '${_toInt(item['qty'])}',
+                          font,
+                          color: PdfColors.blue700,
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            );
+          }
+          return widgets;
+        },
+      ),
+    );
+
+    final d = _batchDate(data);
+    await Printing.sharePdf(
+      bytes: await doc.save(),
+      filename:
+          '過去の発注表_${d.year}${d.month.toString().padLeft(2, '0')}${d.day.toString().padLeft(2, '0')}_店舗別.pdf',
+    );
+  }
+
+  Future<void> _exportPdfByItem(
+    QueryDocumentSnapshot<Map<String, dynamic>> batch,
+  ) async {
+    final data = batch.data();
+    final items = _batchItems(data);
+    if (items.isEmpty) return;
+
+    final font = await PdfGoogleFonts.notoSansJPRegular();
+    final doc = pw.Document();
+    final byTypeByItem = <String, Map<String, List<Map<String, dynamic>>>>{};
+    for (final item in items) {
+      final type = (item['itemType'] ?? '種別不明').toString();
+      final itemId = (item['itemId'] ?? '').toString();
+      final itemKey = itemId.isEmpty
+          ? '${item['itemCode']}__${item['itemName']}'
+          : itemId;
+      byTypeByItem.putIfAbsent(
+        type,
+        () => <String, List<Map<String, dynamic>>>{},
+      );
+      byTypeByItem[type]!
+          .putIfAbsent(itemKey, () => <Map<String, dynamic>>[])
+          .add(item);
+    }
+
+    final title = '${_batchTitle(data)}（商品別）';
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        theme: pw.ThemeData.withFont(base: font),
+        header: (ctx) => pw.Text(
+          title,
+          style: pw.TextStyle(
+            font: font,
+            fontSize: 18,
+            fontWeight: pw.FontWeight.bold,
+          ),
+        ),
+        build: (ctx) {
+          final widgets = <pw.Widget>[];
+          widgets.add(
+            pw.Text(
+              '発注確定日時: ${_formatDateTime(_batchDate(data))} / 発注者: ${(data['createdBy'] ?? '').toString()}',
+              style: pw.TextStyle(font: font, fontSize: 10),
+            ),
+          );
+          for (final type in ['商品', 'テスター', '備品']) {
+            if (!byTypeByItem.containsKey(type)) continue;
+            widgets.add(pw.SizedBox(height: 12));
+            widgets.add(
+              pw.Text(
+                '■ $type',
+                style: pw.TextStyle(
+                  font: font,
+                  fontSize: 13,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
+            );
+            widgets.add(pw.SizedBox(height: 4));
+            widgets.add(
+              pw.Table(
+                border: pw.TableBorder.all(color: PdfColors.grey400),
+                columnWidths: {
+                  0: const pw.FlexColumnWidth(1.2),
+                  1: const pw.FlexColumnWidth(2.5),
+                  2: const pw.FlexColumnWidth(1.5),
+                  3: const pw.FlexColumnWidth(0.8),
+                  4: const pw.FlexColumnWidth(0.8),
+                  5: const pw.FlexColumnWidth(0.9),
+                },
+                children: [
+                  pw.TableRow(
+                    decoration: const pw.BoxDecoration(
+                      color: PdfColors.grey200,
+                    ),
+                    children: [
+                      _pastOrderPdfCell('コード', font, bold: true),
+                      _pastOrderPdfCell('商品名', font, bold: true),
+                      _pastOrderPdfCell('店舗', font, bold: true),
+                      _pastOrderPdfCell('基準', font, bold: true),
+                      _pastOrderPdfCell('現在', font, bold: true),
+                      _pastOrderPdfCell('発注数', font, bold: true),
+                    ],
+                  ),
+                  for (final itemKey in byTypeByItem[type]!.keys)
+                    for (
+                      var i = 0;
+                      i < byTypeByItem[type]![itemKey]!.length;
+                      i++
+                    )
+                      pw.TableRow(
+                        children: [
+                          _pastOrderPdfCell(
+                            i == 0
+                                ? (byTypeByItem[type]![itemKey]!
+                                              .first['itemCode'] ??
+                                          '')
+                                      .toString()
+                                : '',
+                            font,
+                          ),
+                          _pastOrderPdfCell(
+                            i == 0
+                                ? (byTypeByItem[type]![itemKey]!
+                                              .first['itemName'] ??
+                                          '')
+                                      .toString()
+                                : '',
+                            font,
+                          ),
+                          _pastOrderPdfCell(
+                            (byTypeByItem[type]![itemKey]![i]['storeName'] ??
+                                    '')
+                                .toString(),
+                            font,
+                          ),
+                          _pastOrderPdfCell(
+                            '${_toInt(byTypeByItem[type]![itemKey]![i]['base'])}',
+                            font,
+                          ),
+                          _pastOrderPdfCell(
+                            '${_toInt(byTypeByItem[type]![itemKey]![i]['currentAtOrder'])}',
+                            font,
+                          ),
+                          _pastOrderPdfCell(
+                            '${_toInt(byTypeByItem[type]![itemKey]![i]['qty'])}',
+                            font,
+                            color: PdfColors.blue700,
+                          ),
+                        ],
+                      ),
+                ],
+              ),
+            );
+          }
+          return widgets;
+        },
+      ),
+    );
+
+    final d = _batchDate(data);
+    await Printing.sharePdf(
+      bytes: await doc.save(),
+      filename:
+          '過去の発注表_${d.year}${d.month.toString().padLeft(2, '0')}${d.day.toString().padLeft(2, '0')}_商品別.pdf',
+    );
+  }
+
+  Widget _buildBatchCard(QueryDocumentSnapshot<Map<String, dynamic>> batch) {
+    final data = batch.data();
+    final items = _batchItems(data);
+    final deliveredMap = data['deliveredMap'];
+    final deliveredCount = deliveredMap is Map ? deliveredMap.length : 0;
+    final totalQty = items.fold<int>(
+      0,
+      (sum, item) => sum + _toInt(item['qty']),
+    );
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _batchTitle(data),
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '発注確定: ${_formatDateTime(_batchDate(data))}\n発注者: ${(data['createdBy'] ?? '').toString().isEmpty ? '-' : data['createdBy']}\n品目数: ${items.length} / 発注総数: $totalQty / 納品済み: $deliveredCount',
+              style: const TextStyle(color: Colors.black54),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: items.isEmpty
+                        ? null
+                        : () => _exportPdfByStore(batch),
+                    icon: const Icon(Icons.picture_as_pdf, size: 18),
+                    label: const Text('店舗別PDF'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: items.isEmpty
+                        ? null
+                        : () => _exportPdfByItem(batch),
+                    icon: const Icon(Icons.picture_as_pdf, size: 18),
+                    label: const Text('商品別PDF'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFFFF7FF),
+      appBar: AppBar(
+        title: const Text('過去の発注表'),
+        actions: [
+          IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
+        ],
+      ),
+      body: SafeArea(
+        child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _error != null
+            ? Padding(
+                padding: const EdgeInsets.all(24),
+                child: SelectableText('読み取りエラー\n\n$_error'),
+              )
+            : _batches.isEmpty
+            ? const Center(child: Text('過去の発注表はありません'))
+            : ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  const Card(
+                    child: Padding(
+                      padding: EdgeInsets.all(12),
+                      child: Text(
+                        '発注確定PDFを出した時点の発注表を再出力できます。ここでは在庫や発注数は変更しません。',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  for (final batch in _batches) _buildBatchCard(batch),
+                ],
+              ),
       ),
     );
   }
