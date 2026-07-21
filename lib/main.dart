@@ -4323,6 +4323,7 @@ class _OrderListPageState extends State<OrderListPage> {
   final Map<String, int> _orderedQtys = {};
   final Map<String, _OrderMeta> _orderMetas = {};
   final Map<String, TextEditingController> _qtyControllers = {};
+  bool _creatingPdf = false;
 
   static const _types = ['商品', 'テスター', '備品'];
 
@@ -4604,6 +4605,7 @@ class _OrderListPageState extends State<OrderListPage> {
         '${_orderMetaField(entry)}.requestedBy': AppSession.nickname,
         '${_orderMetaField(entry)}.storeName': entry.store.name,
         '${_orderMetaField(entry)}.itemName': entry.item.name,
+        '${_orderMetaField(entry)}.itemCode': entry.item.code,
         '${_orderMetaField(entry)}.itemType': entry.itemType,
         '${_orderMetaField(entry)}.lastRequestedQty': qty,
       };
@@ -4621,6 +4623,7 @@ class _OrderListPageState extends State<OrderListPage> {
                 'requestedBy': AppSession.nickname,
                 'storeName': entry.store.name,
                 'itemName': entry.item.name,
+                'itemCode': entry.item.code,
                 'itemType': entry.itemType,
                 'lastRequestedQty': qty,
               },
@@ -4743,6 +4746,7 @@ class _OrderListPageState extends State<OrderListPage> {
         updates['${_orderMetaField(e)}.requestedBy'] = AppSession.nickname;
         updates['${_orderMetaField(e)}.storeName'] = e.store.name;
         updates['${_orderMetaField(e)}.itemName'] = e.item.name;
+        updates['${_orderMetaField(e)}.itemCode'] = e.item.code;
         updates['${_orderMetaField(e)}.itemType'] = e.itemType;
         updates['${_orderMetaField(e)}.lastRequestedQty'] = e.effectiveShortage;
       }
@@ -4764,6 +4768,7 @@ class _OrderListPageState extends State<OrderListPage> {
                   'requestedBy': AppSession.nickname,
                   'storeName': e.store.name,
                   'itemName': e.item.name,
+                  'itemCode': e.item.code,
                   'itemType': e.itemType,
                   'lastRequestedQty': e.effectiveShortage,
                 },
@@ -5093,17 +5098,23 @@ class _OrderListPageState extends State<OrderListPage> {
     }
   }
 
+  _OrderMeta _latestOrderMeta(_OrderEntry entry) {
+    return _orderMetas[_orderKey(entry)] ?? entry.orderMeta;
+  }
+
   bool _hasUnconfirmedOrderRequest(_OrderEntry entry) {
-    final requestedAt = entry.orderMeta.requestedAt;
+    final meta = _latestOrderMeta(entry);
+    final requestedAt = meta.requestedAt;
     if (requestedAt == null) return false;
-    final orderedAt = entry.orderMeta.orderedAt;
+    final orderedAt = meta.orderedAt;
     if (orderedAt == null) return true;
     return requestedAt.isAfter(orderedAt);
   }
 
   int _pdfOrderQty(_OrderEntry entry) {
-    if (entry.orderMeta.lastRequestedQty > 0) {
-      return entry.orderMeta.lastRequestedQty;
+    final meta = _latestOrderMeta(entry);
+    if (meta.lastRequestedQty > 0) {
+      return meta.lastRequestedQty;
     }
     return _orderedQtys[_orderKey(entry)] ?? entry.orderedQty;
   }
@@ -5180,109 +5191,115 @@ class _OrderListPageState extends State<OrderListPage> {
       _showOrderPermissionMessage(context);
       return;
     }
-    final pdfEntries = await _orderedEntriesForPdf(context, entries);
-    if (pdfEntries.isEmpty) return;
+    if (_creatingPdf) return;
+    setState(() => _creatingPdf = true);
+    try {
+      final pdfEntries = await _orderedEntriesForPdf(context, entries);
+      if (pdfEntries.isEmpty) return;
 
-    final font = await PdfGoogleFonts.notoSansJPRegular();
-    final doc = pw.Document();
+      final font = await PdfGoogleFonts.notoSansJPRegular();
+      final doc = pw.Document();
 
-    final byStore = <LegacyStore, List<_OrderEntry>>{};
-    for (final e in pdfEntries) {
-      byStore.putIfAbsent(e.store, () => []).add(e);
-    }
+      final byStore = <LegacyStore, List<_OrderEntry>>{};
+      for (final e in pdfEntries) {
+        byStore.putIfAbsent(e.store, () => []).add(e);
+      }
 
-    doc.addPage(
-      pw.MultiPage(
-        pageFormat: PdfPageFormat.a4,
-        theme: pw.ThemeData.withFont(base: font),
-        header: (ctx) => pw.Text(
-          '発注済みリスト（店舗別）',
-          style: pw.TextStyle(
-            font: font,
-            fontSize: 18,
-            fontWeight: pw.FontWeight.bold,
-          ),
-        ),
-        build: (ctx) {
-          final widgets = <pw.Widget>[];
-          widgets.add(
-            pw.Text(
-              'PDF発行日時: ${_formatDateTime(DateTime.now())}',
-              style: pw.TextStyle(font: font, fontSize: 10),
+      doc.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4,
+          theme: pw.ThemeData.withFont(base: font),
+          header: (ctx) => pw.Text(
+            '発注済みリスト（店舗別）',
+            style: pw.TextStyle(
+              font: font,
+              fontSize: 18,
+              fontWeight: pw.FontWeight.bold,
             ),
-          );
-          byStore.forEach((store, storeEntries) {
-            widgets.add(pw.SizedBox(height: 12));
+          ),
+          build: (ctx) {
+            final widgets = <pw.Widget>[];
             widgets.add(
               pw.Text(
-                '■ ${store.name}',
-                style: pw.TextStyle(
-                  font: font,
-                  fontSize: 13,
-                  fontWeight: pw.FontWeight.bold,
-                ),
+                'PDF発行日時: ${_formatDateTime(DateTime.now())}',
+                style: pw.TextStyle(font: font, fontSize: 10),
               ),
             );
-            widgets.add(pw.SizedBox(height: 4));
-            widgets.add(
-              pw.Table(
-                border: pw.TableBorder.all(color: PdfColors.grey400),
-                columnWidths: {
-                  0: const pw.FlexColumnWidth(1.2),
-                  1: const pw.FlexColumnWidth(2.7),
-                  2: const pw.FlexColumnWidth(1),
-                  3: const pw.FlexColumnWidth(0.8),
-                  4: const pw.FlexColumnWidth(0.8),
-                  5: const pw.FlexColumnWidth(0.9),
-                },
-                children: [
-                  pw.TableRow(
-                    decoration: const pw.BoxDecoration(
-                      color: PdfColors.grey200,
-                    ),
-                    children: [
-                      _pdfCell('コード', font, bold: true),
-                      _pdfCell('商品名', font, bold: true),
-                      _pdfCell('種別', font, bold: true),
-                      _pdfCell('基準', font, bold: true),
-                      _pdfCell('現在', font, bold: true),
-                      _pdfCell('発注数', font, bold: true),
-                    ],
+            byStore.forEach((store, storeEntries) {
+              widgets.add(pw.SizedBox(height: 12));
+              widgets.add(
+                pw.Text(
+                  '■ ${store.name}',
+                  style: pw.TextStyle(
+                    font: font,
+                    fontSize: 13,
+                    fontWeight: pw.FontWeight.bold,
                   ),
-                  for (final e in storeEntries)
+                ),
+              );
+              widgets.add(pw.SizedBox(height: 4));
+              widgets.add(
+                pw.Table(
+                  border: pw.TableBorder.all(color: PdfColors.grey400),
+                  columnWidths: {
+                    0: const pw.FlexColumnWidth(1.2),
+                    1: const pw.FlexColumnWidth(2.7),
+                    2: const pw.FlexColumnWidth(1),
+                    3: const pw.FlexColumnWidth(0.8),
+                    4: const pw.FlexColumnWidth(0.8),
+                    5: const pw.FlexColumnWidth(0.9),
+                  },
+                  children: [
                     pw.TableRow(
+                      decoration: const pw.BoxDecoration(
+                        color: PdfColors.grey200,
+                      ),
                       children: [
-                        _pdfCell(e.item.code, font),
-                        _pdfCell(e.item.name, font),
-                        _pdfCell(e.itemType, font),
-                        _pdfCell('${e.base}', font),
-                        _pdfCell('${e.current}', font),
-                        _pdfCell(
-                          '${_pdfOrderQty(e)}',
-                          font,
-                          color: PdfColors.blue700,
-                        ),
+                        _pdfCell('コード', font, bold: true),
+                        _pdfCell('商品名', font, bold: true),
+                        _pdfCell('種別', font, bold: true),
+                        _pdfCell('基準', font, bold: true),
+                        _pdfCell('現在', font, bold: true),
+                        _pdfCell('発注数', font, bold: true),
                       ],
                     ),
-                ],
-              ),
-            );
-          });
-          return widgets;
-        },
-      ),
-    );
+                    for (final e in storeEntries)
+                      pw.TableRow(
+                        children: [
+                          _pdfCell(e.item.code, font),
+                          _pdfCell(e.item.name, font),
+                          _pdfCell(e.itemType, font),
+                          _pdfCell('${e.base}', font),
+                          _pdfCell('${e.current}', font),
+                          _pdfCell(
+                            '${_pdfOrderQty(e)}',
+                            font,
+                            color: PdfColors.blue700,
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+              );
+            });
+            return widgets;
+          },
+        ),
+      );
 
-    const fileName = '発注済みリスト_店舗別.pdf';
-    final pdfBytes = await doc.save();
-    await Printing.sharePdf(bytes: pdfBytes, filename: fileName);
-    await _markPdfIssued(
-      pdfEntries,
-      pdfBytes: pdfBytes,
-      pdfKind: 'store',
-      pdfFileName: fileName,
-    );
-    await _load();
+      const fileName = '発注済みリスト_店舗別.pdf';
+      final pdfBytes = await doc.save();
+      await Printing.sharePdf(bytes: pdfBytes, filename: fileName);
+      await _markPdfIssued(
+        pdfEntries,
+        pdfBytes: pdfBytes,
+        pdfKind: 'store',
+        pdfFileName: fileName,
+      );
+      await _load();
+    } finally {
+      if (mounted) setState(() => _creatingPdf = false);
+    }
   }
 
   Future<void> _exportPdfByItem(
@@ -5293,135 +5310,141 @@ class _OrderListPageState extends State<OrderListPage> {
       _showOrderPermissionMessage(context);
       return;
     }
-    final pdfEntries = await _orderedEntriesForPdf(context, entries);
-    if (pdfEntries.isEmpty) return;
+    if (_creatingPdf) return;
+    setState(() => _creatingPdf = true);
+    try {
+      final pdfEntries = await _orderedEntriesForPdf(context, entries);
+      if (pdfEntries.isEmpty) return;
 
-    final font = await PdfGoogleFonts.notoSansJPRegular();
-    final doc = pw.Document();
+      final font = await PdfGoogleFonts.notoSansJPRegular();
+      final doc = pw.Document();
 
-    final byTypeByItem = <String, Map<String, List<_OrderEntry>>>{};
-    for (final e in pdfEntries) {
-      byTypeByItem.putIfAbsent(e.itemType, () => {});
-      byTypeByItem[e.itemType]!.putIfAbsent(e.item.id, () => []).add(e);
-    }
+      final byTypeByItem = <String, Map<String, List<_OrderEntry>>>{};
+      for (final e in pdfEntries) {
+        byTypeByItem.putIfAbsent(e.itemType, () => {});
+        byTypeByItem[e.itemType]!.putIfAbsent(e.item.id, () => []).add(e);
+      }
 
-    doc.addPage(
-      pw.MultiPage(
-        pageFormat: PdfPageFormat.a4,
-        theme: pw.ThemeData.withFont(base: font),
-        header: (ctx) => pw.Text(
-          '発注済みリスト（商品別）',
-          style: pw.TextStyle(
-            font: font,
-            fontSize: 18,
-            fontWeight: pw.FontWeight.bold,
-          ),
-        ),
-        build: (ctx) {
-          final widgets = <pw.Widget>[];
-          widgets.add(
-            pw.Text(
-              'PDF発行日時: ${_formatDateTime(DateTime.now())}',
-              style: pw.TextStyle(font: font, fontSize: 10),
+      doc.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4,
+          theme: pw.ThemeData.withFont(base: font),
+          header: (ctx) => pw.Text(
+            '発注済みリスト（商品別）',
+            style: pw.TextStyle(
+              font: font,
+              fontSize: 18,
+              fontWeight: pw.FontWeight.bold,
             ),
-          );
-          for (final type in _types) {
-            if (!byTypeByItem.containsKey(type)) continue;
-            widgets.add(pw.SizedBox(height: 12));
+          ),
+          build: (ctx) {
+            final widgets = <pw.Widget>[];
             widgets.add(
               pw.Text(
-                '■ $type',
-                style: pw.TextStyle(
-                  font: font,
-                  fontSize: 13,
-                  fontWeight: pw.FontWeight.bold,
-                ),
+                'PDF発行日時: ${_formatDateTime(DateTime.now())}',
+                style: pw.TextStyle(font: font, fontSize: 10),
               ),
             );
-            widgets.add(pw.SizedBox(height: 4));
-            widgets.add(
-              pw.Table(
-                border: pw.TableBorder.all(color: PdfColors.grey400),
-                columnWidths: {
-                  0: const pw.FlexColumnWidth(1.2),
-                  1: const pw.FlexColumnWidth(2.5),
-                  2: const pw.FlexColumnWidth(1.5),
-                  3: const pw.FlexColumnWidth(0.8),
-                  4: const pw.FlexColumnWidth(0.8),
-                  5: const pw.FlexColumnWidth(0.9),
-                },
-                children: [
-                  pw.TableRow(
-                    decoration: const pw.BoxDecoration(
-                      color: PdfColors.grey200,
-                    ),
-                    children: [
-                      _pdfCell('コード', font, bold: true),
-                      _pdfCell('商品名', font, bold: true),
-                      _pdfCell('店舗', font, bold: true),
-                      _pdfCell('基準', font, bold: true),
-                      _pdfCell('現在', font, bold: true),
-                      _pdfCell('発注数', font, bold: true),
-                    ],
+            for (final type in _types) {
+              if (!byTypeByItem.containsKey(type)) continue;
+              widgets.add(pw.SizedBox(height: 12));
+              widgets.add(
+                pw.Text(
+                  '■ $type',
+                  style: pw.TextStyle(
+                    font: font,
+                    fontSize: 13,
+                    fontWeight: pw.FontWeight.bold,
                   ),
-                  for (final itemId in byTypeByItem[type]!.keys)
-                    for (
-                      int i = 0;
-                      i < byTypeByItem[type]![itemId]!.length;
-                      i++
-                    )
-                      pw.TableRow(
-                        children: [
-                          _pdfCell(
-                            i == 0
-                                ? byTypeByItem[type]![itemId]!.first.item.code
-                                : '',
-                            font,
-                          ),
-                          _pdfCell(
-                            i == 0
-                                ? byTypeByItem[type]![itemId]!.first.item.name
-                                : '',
-                            font,
-                          ),
-                          _pdfCell(
-                            byTypeByItem[type]![itemId]![i].store.name,
-                            font,
-                          ),
-                          _pdfCell(
-                            '${byTypeByItem[type]![itemId]![i].base}',
-                            font,
-                          ),
-                          _pdfCell(
-                            '${byTypeByItem[type]![itemId]![i].current}',
-                            font,
-                          ),
-                          _pdfCell(
-                            '${_pdfOrderQty(byTypeByItem[type]![itemId]![i])}',
-                            font,
-                            color: PdfColors.blue700,
-                          ),
-                        ],
+                ),
+              );
+              widgets.add(pw.SizedBox(height: 4));
+              widgets.add(
+                pw.Table(
+                  border: pw.TableBorder.all(color: PdfColors.grey400),
+                  columnWidths: {
+                    0: const pw.FlexColumnWidth(1.2),
+                    1: const pw.FlexColumnWidth(2.5),
+                    2: const pw.FlexColumnWidth(1.5),
+                    3: const pw.FlexColumnWidth(0.8),
+                    4: const pw.FlexColumnWidth(0.8),
+                    5: const pw.FlexColumnWidth(0.9),
+                  },
+                  children: [
+                    pw.TableRow(
+                      decoration: const pw.BoxDecoration(
+                        color: PdfColors.grey200,
                       ),
-                ],
-              ),
-            );
-          }
-          return widgets;
-        },
-      ),
-    );
+                      children: [
+                        _pdfCell('コード', font, bold: true),
+                        _pdfCell('商品名', font, bold: true),
+                        _pdfCell('店舗', font, bold: true),
+                        _pdfCell('基準', font, bold: true),
+                        _pdfCell('現在', font, bold: true),
+                        _pdfCell('発注数', font, bold: true),
+                      ],
+                    ),
+                    for (final itemId in byTypeByItem[type]!.keys)
+                      for (
+                        int i = 0;
+                        i < byTypeByItem[type]![itemId]!.length;
+                        i++
+                      )
+                        pw.TableRow(
+                          children: [
+                            _pdfCell(
+                              i == 0
+                                  ? byTypeByItem[type]![itemId]!.first.item.code
+                                  : '',
+                              font,
+                            ),
+                            _pdfCell(
+                              i == 0
+                                  ? byTypeByItem[type]![itemId]!.first.item.name
+                                  : '',
+                              font,
+                            ),
+                            _pdfCell(
+                              byTypeByItem[type]![itemId]![i].store.name,
+                              font,
+                            ),
+                            _pdfCell(
+                              '${byTypeByItem[type]![itemId]![i].base}',
+                              font,
+                            ),
+                            _pdfCell(
+                              '${byTypeByItem[type]![itemId]![i].current}',
+                              font,
+                            ),
+                            _pdfCell(
+                              '${_pdfOrderQty(byTypeByItem[type]![itemId]![i])}',
+                              font,
+                              color: PdfColors.blue700,
+                            ),
+                          ],
+                        ),
+                  ],
+                ),
+              );
+            }
+            return widgets;
+          },
+        ),
+      );
 
-    const fileName = '発注済みリスト_商品別.pdf';
-    final pdfBytes = await doc.save();
-    await Printing.sharePdf(bytes: pdfBytes, filename: fileName);
-    await _markPdfIssued(
-      pdfEntries,
-      pdfBytes: pdfBytes,
-      pdfKind: 'item',
-      pdfFileName: fileName,
-    );
-    await _load();
+      const fileName = '発注済みリスト_商品別.pdf';
+      final pdfBytes = await doc.save();
+      await Printing.sharePdf(bytes: pdfBytes, filename: fileName);
+      await _markPdfIssued(
+        pdfEntries,
+        pdfBytes: pdfBytes,
+        pdfKind: 'item',
+        pdfFileName: fileName,
+      );
+      await _load();
+    } finally {
+      if (mounted) setState(() => _creatingPdf = false);
+    }
   }
 
   pw.Widget _pdfCell(
@@ -5812,7 +5835,9 @@ class _OrderListPageState extends State<OrderListPage> {
             if (_canConfirmOrders) ...[
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: () => _exportPdfByStore(context, filtered),
+                  onPressed: _creatingPdf
+                      ? null
+                      : () => _exportPdfByStore(context, filtered),
                   icon: const Icon(Icons.picture_as_pdf, size: 18),
                   label: const Text('店舗別 発注確定PDF'),
                 ),
@@ -5877,7 +5902,9 @@ class _OrderListPageState extends State<OrderListPage> {
             if (_canConfirmOrders) ...[
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: () => _exportPdfByItem(context, filtered),
+                  onPressed: _creatingPdf
+                      ? null
+                      : () => _exportPdfByItem(context, filtered),
                   icon: const Icon(Icons.picture_as_pdf, size: 18),
                   label: const Text('商品別 発注確定PDF'),
                 ),
@@ -7058,7 +7085,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
       builder: (ctx) => AlertDialog(
         title: const Text('発注表を取消しますか？'),
         content: Text(
-          '${_batchTitle(data)}を取消します。\n\n在庫数は変更しません。納品処理画面にも出さないようにします。',
+          '${_batchTitle(data)}を取消します。\n\nこのPDFに含まれる発注数を納品予定から差し引きます。\n在庫数は変更しません。',
         ),
         actions: [
           TextButton(
@@ -7079,6 +7106,44 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     if (confirmed != true) return;
 
     try {
+      final ordersRef = AppSession.doc('orders');
+      final ordersSnap = await ordersRef.get();
+      final ordersData = ordersSnap.data() ?? <String, dynamic>{};
+      final updates = <String, dynamic>{};
+
+      // 発注表取消により納品予定を差し引き。在庫数は変更しない。
+      for (final item in _batchItems(data)) {
+        final typeKey = (item['typeKey'] ?? '').toString();
+        final storeId = (item['storeId'] ?? '').toString();
+        final itemId = (item['itemId'] ?? '').toString();
+        final qty = _toInt(item['qty']);
+        if (typeKey.isEmpty || storeId.isEmpty || itemId.isEmpty || qty <= 0) {
+          continue;
+        }
+
+        var currentQty = 0;
+        final typeRaw = ordersData[typeKey];
+        if (typeRaw is Map) {
+          final storeRaw = typeRaw[storeId];
+          if (storeRaw is Map) currentQty = _toInt(storeRaw[itemId]);
+        }
+        final nextQty = max(0, currentQty - qty);
+        final orderPath = '$typeKey.$storeId.$itemId';
+        final metaPath = '_meta.${typeKey}__${storeId}__$itemId';
+        if (nextQty <= 0) {
+          updates[orderPath] = FieldValue.delete();
+          updates[metaPath] = FieldValue.delete();
+        } else {
+          updates[orderPath] = nextQty;
+          updates['$metaPath.lastRequestedQty'] = nextQty;
+          updates['$metaPath.requestedAt'] = FieldValue.serverTimestamp();
+          updates['$metaPath.requestedBy'] = AppSession.nickname;
+        }
+      }
+
+      if (updates.isNotEmpty) {
+        await ordersRef.update(updates);
+      }
       await batch.reference.update({
         'status': 'canceled',
         'canceledAt': FieldValue.serverTimestamp(),
@@ -7089,7 +7154,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('発注表を取消しました'),
+            content: Text('発注表を取消し、納品予定から差し引きました'),
             backgroundColor: Colors.green,
           ),
         );
