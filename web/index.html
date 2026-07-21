@@ -44,7 +44,7 @@
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
   <script>
-    window.__APP_RELEASE_VERSION__ = '20260715_delivery_cache_reset';
+    window.__APP_RELEASE_VERSION__ = String(Date.now());
 
     // 強制キャッシュ解除：古いFlutter WebのService Workerが古いmain.dart.jsを掴む問題を防ぐ。
     if ('serviceWorker' in navigator) {
@@ -75,6 +75,6 @@
       }
     };
   </script>
-  <script src="flutter_bootstrap.js?v=20260715_delivery_cache_reset" async></script>
+  <script src="flutter_bootstrap.js?v=manual_update_reliable_20260722" async></script>
 </body>
 </html>

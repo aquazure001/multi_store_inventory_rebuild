@@ -592,7 +592,25 @@ class _MultiStoreInventoryAppState extends State<MultiStoreInventoryApp> {
           ),
           TextButton(
             onPressed: () {
-              js.context.callMethod('applyUpdate');
+              js.context.callMethod('eval', [
+                r"""
+(function() {
+  var nextUrl = window.location.origin + window.location.pathname + '?force_update=' + Date.now();
+  var jobs = [];
+  if ('serviceWorker' in navigator) {
+    jobs.push(navigator.serviceWorker.getRegistrations().then(function(registrations) {
+      return Promise.all(registrations.map(function(reg) { return reg.unregister(); }));
+    }).catch(function() {}));
+  }
+  if ('caches' in window) {
+    jobs.push(caches.keys().then(function(keys) {
+      return Promise.all(keys.map(function(key) { return caches.delete(key); }));
+    }).catch(function() {}));
+  }
+  Promise.all(jobs).finally(function() { window.location.replace(nextUrl); });
+})();
+""",
+              ]);
             },
             child: const Text(
               '今すぐ更新',
@@ -1206,9 +1224,40 @@ class _StoreListPageState extends State<StoreListPage> {
     if (confirmed != true) return;
 
     try {
-      js.context.callMethod('applyUpdate');
+      js.context.callMethod('eval', [
+        r"""
+(function() {
+  var nextUrl = window.location.origin + window.location.pathname + '?force_update=' + Date.now();
+  var jobs = [];
+  if ('serviceWorker' in navigator) {
+    jobs.push(
+      navigator.serviceWorker.getRegistrations()
+        .then(function(registrations) {
+          return Promise.all(registrations.map(function(reg) { return reg.unregister(); }));
+        })
+        .catch(function() {})
+    );
+  }
+  if ('caches' in window) {
+    jobs.push(
+      caches.keys()
+        .then(function(keys) {
+          return Promise.all(keys.map(function(key) { return caches.delete(key); }));
+        })
+        .catch(function() {})
+    );
+  }
+  Promise.all(jobs).finally(function() {
+    window.location.replace(nextUrl);
+  });
+})();
+""",
+      ]);
     } catch (_) {
-      html.window.location.reload();
+      final path = html.window.location.pathname;
+      html.window.location.replace(
+        '$path?force_update=${DateTime.now().millisecondsSinceEpoch}',
+      );
     }
   }
 
