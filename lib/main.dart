@@ -5169,17 +5169,30 @@ class _OrderListPageState extends State<OrderListPage> {
       });
     }
     await AppSession.doc('orders').update(updates);
-    await AppSession.doc('orders').collection('batches').add({
+
+    final batchRef = AppSession.doc('orders').collection('batches').doc();
+    await batchRef.set({
       'createdAt': FieldValue.serverTimestamp(),
       'createdAtLocal': issuedAt.toIso8601String(),
       'createdBy': AppSession.nickname,
       'status': 'pending',
       'items': batchItems,
-      // 本日以降の過去発注表は、再集計ではなくPDF作成時点のPDFそのものを保存する。
-      'pdfBase64': base64Encode(pdfBytes),
+      // 一覧・納品処理を重くしないため、PDF本体は別ドキュメントへ保存する。
+      'hasSavedPdf': true,
       'pdfKind': pdfKind,
       'pdfFileName': pdfFileName,
       'pdfSavedAtLocal': issuedAt.toIso8601String(),
+    });
+    await AppSession.doc(
+      'order_saved_pdfs',
+    ).collection('entries').doc(batchRef.id).set({
+      'batchId': batchRef.id,
+      'createdAt': FieldValue.serverTimestamp(),
+      'createdAtLocal': issuedAt.toIso8601String(),
+      'createdBy': AppSession.nickname,
+      'pdfBase64': base64Encode(pdfBytes),
+      'pdfKind': pdfKind,
+      'pdfFileName': pdfFileName,
     });
   }
 
@@ -6773,14 +6786,28 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
   }
 
   bool _hasSavedPdf(Map<String, dynamic> data) {
-    return (data['pdfBase64'] ?? '').toString().isNotEmpty;
+    return data['hasSavedPdf'] == true ||
+        (data['pdfBase64'] ?? '').toString().isNotEmpty;
   }
 
   Future<void> _openSavedPdf(
     QueryDocumentSnapshot<Map<String, dynamic>> batch,
   ) async {
     final data = batch.data();
-    final raw = (data['pdfBase64'] ?? '').toString();
+    var raw = (data['pdfBase64'] ?? '').toString();
+    var savedName = (data['pdfFileName'] ?? '').toString();
+
+    if (raw.isEmpty && data['hasSavedPdf'] == true) {
+      final pdfDoc = await AppSession.doc(
+        'order_saved_pdfs',
+      ).collection('entries').doc(batch.id).get();
+      final pdfData = pdfDoc.data() ?? <String, dynamic>{};
+      raw = (pdfData['pdfBase64'] ?? '').toString();
+      if (savedName.isEmpty) {
+        savedName = (pdfData['pdfFileName'] ?? '').toString();
+      }
+    }
+
     if (raw.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -6794,7 +6821,6 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     try {
       final bytes = base64Decode(raw);
       final d = _batchDate(data);
-      final savedName = (data['pdfFileName'] ?? '').toString();
       final fallbackName =
           '保存済み発注表_${d.year}${d.month.toString().padLeft(2, '0')}${d.day.toString().padLeft(2, '0')}.pdf';
       await Printing.sharePdf(
