@@ -5126,7 +5126,12 @@ class _OrderListPageState extends State<OrderListPage> {
     return ordered;
   }
 
-  Future<void> _markPdfIssued(List<_OrderEntry> entries) async {
+  Future<void> _markPdfIssued(
+    List<_OrderEntry> entries, {
+    required List<int> pdfBytes,
+    required String pdfKind,
+    required String pdfFileName,
+  }) async {
     if (entries.isEmpty) return;
     final updates = <String, dynamic>{};
     final batchItems = <Map<String, dynamic>>[];
@@ -5159,6 +5164,11 @@ class _OrderListPageState extends State<OrderListPage> {
       'createdBy': AppSession.nickname,
       'status': 'pending',
       'items': batchItems,
+      // 本日以降の過去発注表は、再集計ではなくPDF作成時点のPDFそのものを保存する。
+      'pdfBase64': base64Encode(pdfBytes),
+      'pdfKind': pdfKind,
+      'pdfFileName': pdfFileName,
+      'pdfSavedAtLocal': issuedAt.toIso8601String(),
     });
   }
 
@@ -5263,11 +5273,15 @@ class _OrderListPageState extends State<OrderListPage> {
       ),
     );
 
-    await Printing.sharePdf(
-      bytes: await doc.save(),
-      filename: '発注済みリスト_店舗別.pdf',
+    const fileName = '発注済みリスト_店舗別.pdf';
+    final pdfBytes = await doc.save();
+    await Printing.sharePdf(bytes: pdfBytes, filename: fileName);
+    await _markPdfIssued(
+      pdfEntries,
+      pdfBytes: pdfBytes,
+      pdfKind: 'store',
+      pdfFileName: fileName,
     );
-    await _markPdfIssued(pdfEntries);
     await _load();
   }
 
@@ -5398,11 +5412,15 @@ class _OrderListPageState extends State<OrderListPage> {
       ),
     );
 
-    await Printing.sharePdf(
-      bytes: await doc.save(),
-      filename: '発注済みリスト_商品別.pdf',
+    const fileName = '発注済みリスト_商品別.pdf';
+    final pdfBytes = await doc.save();
+    await Printing.sharePdf(bytes: pdfBytes, filename: fileName);
+    await _markPdfIssued(
+      pdfEntries,
+      pdfBytes: pdfBytes,
+      pdfKind: 'item',
+      pdfFileName: fileName,
     );
-    await _markPdfIssued(pdfEntries);
     await _load();
   }
 
@@ -6727,6 +6745,42 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     );
   }
 
+  bool _hasSavedPdf(Map<String, dynamic> data) {
+    return (data['pdfBase64'] ?? '').toString().isNotEmpty;
+  }
+
+  Future<void> _openSavedPdf(
+    QueryDocumentSnapshot<Map<String, dynamic>> batch,
+  ) async {
+    final data = batch.data();
+    final raw = (data['pdfBase64'] ?? '').toString();
+    if (raw.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('この発注表には保存済みPDFがありません'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    try {
+      final bytes = base64Decode(raw);
+      final d = _batchDate(data);
+      final savedName = (data['pdfFileName'] ?? '').toString();
+      final fallbackName =
+          '保存済み発注表_${d.year}${d.month.toString().padLeft(2, '0')}${d.day.toString().padLeft(2, '0')}.pdf';
+      await Printing.sharePdf(
+        bytes: bytes,
+        filename: savedName.isEmpty ? fallbackName : savedName,
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('保存PDFを開けません: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
   Future<void> _exportPdfByStore(
     QueryDocumentSnapshot<Map<String, dynamic>> batch,
   ) async {
@@ -7059,6 +7113,11 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
       (sum, item) => sum + _toInt(item['qty']),
     );
     final canceled = (data['status'] ?? '') == 'canceled';
+    final hasSavedPdf = _hasSavedPdf(data);
+    final pdfKind = (data['pdfKind'] ?? '').toString();
+    final pdfKindLabel = pdfKind == 'store'
+        ? '店舗別'
+        : (pdfKind == 'item' ? '商品別' : '保存済み');
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -7073,19 +7132,30 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
             ),
             const SizedBox(height: 4),
             Text(
-              '発注確定: ${_formatDateTime(_batchDate(data))}\n発注者: ${(data['createdBy'] ?? '').toString().isEmpty ? '-' : data['createdBy']}\n品目数: ${items.length} / 発注総数: $totalQty / 納品済み: $deliveredCount',
+              '発注確定: ${_formatDateTime(_batchDate(data))}\n発注者: ${(data['createdBy'] ?? '').toString().isEmpty ? '-' : data['createdBy']}\n品目数: ${items.length} / 発注総数: $totalQty / 納品済み: $deliveredCount${hasSavedPdf ? '\n保存PDFあり: $pdfKindLabel' : '\n保存PDFなし: 旧形式のため再作成'}${canceled ? '\n取消済み' : ''}',
               style: const TextStyle(color: Colors.black54),
             ),
             const SizedBox(height: 12),
+            if (hasSavedPdf) ...[
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: canceled ? null : () => _openSavedPdf(batch),
+                  icon: const Icon(Icons.picture_as_pdf, size: 18),
+                  label: Text('保存PDFを開く（$pdfKindLabel）'),
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
             Row(
               children: [
                 Expanded(
-                  child: ElevatedButton.icon(
+                  child: OutlinedButton.icon(
                     onPressed: items.isEmpty || canceled
                         ? null
                         : () => _exportPdfByStore(batch),
-                    icon: const Icon(Icons.picture_as_pdf, size: 18),
-                    label: const Text('店舗別PDF'),
+                    icon: const Icon(Icons.refresh, size: 18),
+                    label: const Text('店舗別を再作成'),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -7094,8 +7164,8 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
                     onPressed: items.isEmpty || canceled
                         ? null
                         : () => _exportPdfByItem(batch),
-                    icon: const Icon(Icons.picture_as_pdf, size: 18),
-                    label: const Text('商品別PDF'),
+                    icon: const Icon(Icons.refresh, size: 18),
+                    label: const Text('商品別を再作成'),
                   ),
                 ),
               ],
