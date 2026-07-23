@@ -7387,6 +7387,8 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _batches = [];
   final Set<String> _localDeliveredKeys = <String>{};
   final Set<String> _selectedDeliveryKeys = <String>{};
+  final Map<String, Map<String, dynamic>> _externalDeliveredMaps =
+      <String, Map<String, dynamic>>{};
   String _selectedDeliveryStoreId = '';
 
   @override
@@ -7484,8 +7486,34 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
           .orderBy('createdAt', descending: true)
           .limit(20)
           .get();
+
+      final visibleBatches = snap.docs
+          .where((doc) => (doc.data()['status'] ?? '').toString() != 'canceled')
+          .toList();
+
+      final externalDeliveredMaps = <String, Map<String, dynamic>>{};
+      for (final batch in visibleBatches) {
+        final deliveryDoc = await AppSession.doc('order_delivery_status')
+            .collection('entries')
+            .doc(batch.id)
+            .get()
+            .timeout(const Duration(seconds: 8));
+        final deliveryData = deliveryDoc.data();
+        final rawDeliveredMap = deliveryData == null
+            ? null
+            : deliveryData['deliveredMap'];
+        if (rawDeliveredMap is Map) {
+          externalDeliveredMaps[batch.id] = Map<String, dynamic>.from(
+            rawDeliveredMap.map((k, v) => MapEntry(k.toString(), v)),
+          );
+        }
+      }
+
       setState(() {
-        _batches = snap.docs;
+        _batches = visibleBatches;
+        _externalDeliveredMaps
+          ..clear()
+          ..addAll(externalDeliveredMaps);
         _loading = false;
       });
     } catch (e) {
@@ -7527,6 +7555,12 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
     if ((item['status'] ?? '') == 'delivered') return true;
     final key = _deliveryKey(item);
     if (_localDeliveredKeys.contains('$batchId::$key')) return true;
+
+    final externalDeliveredMap = _externalDeliveredMaps[batchId];
+    if (externalDeliveredMap != null && externalDeliveredMap.containsKey(key)) {
+      return true;
+    }
+
     final deliveredMap = batchData['deliveredMap'];
     return deliveredMap is Map && deliveredMap.containsKey(key);
   }
@@ -7602,38 +7636,86 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
       );
     }
 
+    var deliveryStatusSaved = false;
+
+    Future<void> rollbackDeliveryStatus() async {
+      if (!deliveryStatusSaved) return;
+      try {
+        await AppSession.doc('order_delivery_status')
+            .collection('entries')
+            .doc(batchDoc.id)
+            .update({
+              'deliveredMap.$deliveryKey': FieldValue.delete(),
+              'updatedAt': FieldValue.serverTimestamp(),
+              'updatedAtLocal': DateTime.now().toIso8601String(),
+            })
+            .timeout(const Duration(seconds: 6));
+      } catch (_) {
+        // ロールバック失敗は画面エラーを増やさない。
+      }
+      if (mounted) {
+        setState(() {
+          _localDeliveredKeys.remove(localKey);
+          _externalDeliveredMaps[batchDoc.id]?.remove(deliveryKey);
+        });
+      }
+    }
+
     try {
       final nowLocal = DateTime.now().toIso8601String();
+      final deliveryRecord = {
+        'qty': remaining,
+        'deliveredAtLocal': nowLocal,
+        'deliveredBy': AppSession.nickname,
+        'storeId': storeId,
+        'storeName': storeName,
+        'itemId': itemId,
+        'itemName': itemName,
+        'itemType': itemType,
+        'typeKey': typeKey,
+      };
       final stocksRef = itemType == '商品'
           ? AppSession.doc('stocks')
           : AppSession.doc('stocks_v2');
 
       await showStep('納品処理中: 納品記録を保存しています');
-      await batchDoc.reference
-          .update({
-            'deliveredMap.$deliveryKey': {
-              'qty': remaining,
-              'deliveredAtLocal': nowLocal,
-              'deliveredBy': AppSession.nickname,
-              'storeId': storeId,
-              'storeName': storeName,
-              'itemId': itemId,
-              'itemName': itemName,
-              'itemType': itemType,
-              'typeKey': typeKey,
-            },
-            'status': 'partial',
+      await AppSession.doc('order_delivery_status')
+          .collection('entries')
+          .doc(batchDoc.id)
+          .set({
+            'batchId': batchDoc.id,
+            'deliveredMap': {deliveryKey: deliveryRecord},
             'updatedAt': FieldValue.serverTimestamp(),
             'updatedAtLocal': nowLocal,
-          })
+          }, SetOptions(merge: true))
           .timeout(
             const Duration(seconds: 12),
             onTimeout: () => throw TimeoutException('納品記録の保存でタイムアウトしました'),
           );
+      deliveryStatusSaved = true;
+
+      // 旧形式の発注表ドキュメントはPDF本体を含んで重い場合があるため、
+      // 納品済み情報は軽量な order_delivery_status に保存する。
+      // 発注表側の状態更新は失敗しても納品処理を止めない。
+      try {
+        await batchDoc.reference
+            .update({
+              'status': 'partial',
+              'updatedAt': FieldValue.serverTimestamp(),
+              'updatedAtLocal': nowLocal,
+            })
+            .timeout(const Duration(seconds: 5));
+      } catch (_) {
+        // 旧PDF内蔵バッチなどで失敗しても、別保存した納品記録を正とする。
+      }
 
       if (mounted) {
         setState(() {
           _localDeliveredKeys.add(localKey);
+          _externalDeliveredMaps.putIfAbsent(
+            batchDoc.id,
+            () => <String, dynamic>{},
+          )[deliveryKey] = deliveryRecord;
         });
       }
 
@@ -7698,6 +7780,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         );
       }
     } on TimeoutException catch (e) {
+      await rollbackDeliveryStatus();
       if (!showResult) rethrow;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -7708,6 +7791,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         );
       }
     } on FirebaseException catch (e) {
+      await rollbackDeliveryStatus();
       if (!showResult) rethrow;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -7718,6 +7802,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         );
       }
     } catch (e) {
+      await rollbackDeliveryStatus();
       if (!showResult) rethrow;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
