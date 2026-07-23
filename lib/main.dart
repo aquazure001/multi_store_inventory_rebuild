@@ -7492,20 +7492,49 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
           .toList();
 
       final externalDeliveredMaps = <String, Map<String, dynamic>>{};
+
+      // まず、既存の orders ドキュメント内に保存した軽量な納品済み情報を読む。
+      // orders は発注・納品予定で既に使っているため、新規ドキュメントより権限面で安全。
+      final ordersData = await AppSession.doc(
+        'orders',
+      ).get().timeout(const Duration(seconds: 8));
+      final rawDeliveredBatches = ordersData.data()?['_deliveredBatches'];
+      if (rawDeliveredBatches is Map) {
+        for (final entry in rawDeliveredBatches.entries) {
+          final batchId = entry.key.toString();
+          final deliveredMap = entry.value;
+          if (deliveredMap is Map) {
+            externalDeliveredMaps[batchId] = Map<String, dynamic>.from(
+              deliveredMap.map((k, v) => MapEntry(k.toString(), v)),
+            );
+          }
+        }
+      }
+
+      // 以前の修正で作った別ドキュメント側も、読める場合だけ併用する。
+      // 読めなくても納品画面は止めない。
       for (final batch in visibleBatches) {
-        final deliveryDoc = await AppSession.doc('order_delivery_status')
-            .collection('entries')
-            .doc(batch.id)
-            .get()
-            .timeout(const Duration(seconds: 8));
-        final deliveryData = deliveryDoc.data();
-        final rawDeliveredMap = deliveryData == null
-            ? null
-            : deliveryData['deliveredMap'];
-        if (rawDeliveredMap is Map) {
-          externalDeliveredMaps[batch.id] = Map<String, dynamic>.from(
-            rawDeliveredMap.map((k, v) => MapEntry(k.toString(), v)),
-          );
+        try {
+          final deliveryDoc = await AppSession.doc('order_delivery_status')
+              .collection('entries')
+              .doc(batch.id)
+              .get()
+              .timeout(const Duration(seconds: 4));
+          final deliveryData = deliveryDoc.data();
+          final rawDeliveredMap = deliveryData == null
+              ? null
+              : deliveryData['deliveredMap'];
+          if (rawDeliveredMap is Map) {
+            externalDeliveredMaps
+                .putIfAbsent(batch.id, () => <String, dynamic>{})
+                .addAll(
+                  Map<String, dynamic>.from(
+                    rawDeliveredMap.map((k, v) => MapEntry(k.toString(), v)),
+                  ),
+                );
+          }
+        } catch (_) {
+          // 新規保存先が読めない場合でも、納品画面自体は表示する。
         }
       }
 
@@ -7678,47 +7707,8 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
           ? AppSession.doc('stocks')
           : AppSession.doc('stocks_v2');
 
-      await showStep('納品処理中: 納品記録を保存しています');
-      await AppSession.doc('order_delivery_status')
-          .collection('entries')
-          .doc(batchDoc.id)
-          .set({
-            'batchId': batchDoc.id,
-            'deliveredMap': {deliveryKey: deliveryRecord},
-            'updatedAt': FieldValue.serverTimestamp(),
-            'updatedAtLocal': nowLocal,
-          }, SetOptions(merge: true))
-          .timeout(
-            const Duration(seconds: 12),
-            onTimeout: () => throw TimeoutException('納品記録の保存でタイムアウトしました'),
-          );
-      deliveryStatusSaved = true;
-
-      // 旧形式の発注表ドキュメントはPDF本体を含んで重い場合があるため、
-      // 納品済み情報は軽量な order_delivery_status に保存する。
-      // 発注表側の状態更新は失敗しても納品処理を止めない。
-      try {
-        await batchDoc.reference
-            .update({
-              'status': 'partial',
-              'updatedAt': FieldValue.serverTimestamp(),
-              'updatedAtLocal': nowLocal,
-            })
-            .timeout(const Duration(seconds: 5));
-      } catch (_) {
-        // 旧PDF内蔵バッチなどで失敗しても、別保存した納品記録を正とする。
-      }
-
-      if (mounted) {
-        setState(() {
-          _localDeliveredKeys.add(localKey);
-          _externalDeliveredMaps.putIfAbsent(
-            batchDoc.id,
-            () => <String, dynamic>{},
-          )[deliveryKey] = deliveryRecord;
-        });
-      }
-
+      // 納品記録の保存を先に行うと、権限・キャッシュ・旧データの影響で
+      // 在庫加算前に止まることがある。納品処理では在庫加算を最優先にする。
       await showStep('納品処理中: 在庫に加算しています');
       if (itemType == '商品') {
         await stocksRef
@@ -7752,6 +7742,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
             .update({
               '$typeKey.$storeId.$itemId': FieldValue.increment(-remaining),
               '_meta.${typeKey}__${storeId}__$itemId': FieldValue.delete(),
+              '_deliveredBatches.${batchDoc.id}.$deliveryKey': deliveryRecord,
             })
             .timeout(
               const Duration(seconds: 8),
@@ -7764,9 +7755,39 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
 
       if (mounted) {
         setState(() {
+          _localDeliveredKeys.add(localKey);
+          _externalDeliveredMaps.putIfAbsent(
+            batchDoc.id,
+            () => <String, dynamic>{},
+          )[deliveryKey] = deliveryRecord;
           _selectedDeliveryKeys.remove(localKey);
         });
       }
+
+      // 互換用: 旧発注表側と別保存先にも書ける場合だけ書く。
+      // ここが失敗しても、在庫加算と orders 側の軽量記録を正とする。
+      try {
+        await batchDoc.reference
+            .update({
+              'status': 'partial',
+              'updatedAt': FieldValue.serverTimestamp(),
+              'updatedAtLocal': nowLocal,
+            })
+            .timeout(const Duration(seconds: 4));
+      } catch (_) {}
+      try {
+        await AppSession.doc('order_delivery_status')
+            .collection('entries')
+            .doc(batchDoc.id)
+            .set({
+              'batchId': batchDoc.id,
+              'deliveredMap': {deliveryKey: deliveryRecord},
+              'updatedAt': FieldValue.serverTimestamp(),
+              'updatedAtLocal': nowLocal,
+            }, SetOptions(merge: true))
+            .timeout(const Duration(seconds: 4));
+        deliveryStatusSaved = true;
+      } catch (_) {}
       if (showResult && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
