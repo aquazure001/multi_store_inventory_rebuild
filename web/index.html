@@ -32,7 +32,7 @@
 
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon-20260713_large.png">
   <link rel="icon" type="image/png" sizes="32x32" href="favicon-20260713_large.png">
-  <link rel="manifest" href="manifest.json?v=20260715_delivery_cache_reset">
+  <link rel="manifest" href="manifest.json?v=20260723_201121">
 </head>
 <body>
   <!--
@@ -44,7 +44,7 @@
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
   <script>
-    window.__APP_RELEASE_VERSION__ = String(Date.now());
+    window.__APP_RELEASE_VERSION__ = '20260723_180123';
 
     // 強制キャッシュ解除：古いFlutter WebのService Workerが古いmain.dart.jsを掴む問題を防ぐ。
     if ('serviceWorker' in navigator) {
@@ -63,18 +63,8 @@
       });
     }
 
-    window.applyUpdate = function() {
-      if ('caches' in window) {
-        caches.keys().then(function(keys) {
-          return Promise.all(keys.map(function(key) { return caches.delete(key); }));
-        }).finally(function() {
-          window.location.href = '/?v=20260715_delivery_cache_reset&t=' + Date.now();
-        });
-      } else {
-        window.location.href = '/?v=20260715_delivery_cache_reset&t=' + Date.now();
-      }
-    };
+    window.applyUpdate = function() { window.location.href = '/force_update.html?t=' + Date.now(); };
   </script>
-  <script src="flutter_bootstrap.js?v=manual_update_reliable_20260722" async></script>
+  <script src="flutter_bootstrap.js?v=20260723_201121" async></script>
 </body>
 </html>

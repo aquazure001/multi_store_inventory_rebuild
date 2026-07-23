@@ -1227,37 +1227,20 @@ class _StoreListPageState extends State<StoreListPage> {
       js.context.callMethod('eval', [
         r"""
 (function() {
-  var nextUrl = window.location.origin + window.location.pathname + '?force_update=' + Date.now();
-  var jobs = [];
-  if ('serviceWorker' in navigator) {
-    jobs.push(
-      navigator.serviceWorker.getRegistrations()
-        .then(function(registrations) {
-          return Promise.all(registrations.map(function(reg) { return reg.unregister(); }));
-        })
-        .catch(function() {})
-    );
-  }
-  if ('caches' in window) {
-    jobs.push(
-      caches.keys()
-        .then(function(keys) {
-          return Promise.all(keys.map(function(key) { return caches.delete(key); }));
-        })
-        .catch(function() {})
-    );
-  }
-  Promise.all(jobs).finally(function() {
-    window.location.replace(nextUrl);
-  });
+  var stamp = Date.now();
+  var target = '/force_update.html?t=' + stamp;
+  try {
+    if (window.location && window.location.origin) {
+      target = window.location.origin + target;
+    }
+  } catch (e) {}
+  window.location.href = target;
 })();
 """,
       ]);
     } catch (_) {
-      final path = html.window.location.pathname;
-      html.window.location.replace(
-        '$path?force_update=${DateTime.now().millisecondsSinceEpoch}',
-      );
+      html.window.location.href =
+          '/force_update.html?t=${DateTime.now().millisecondsSinceEpoch}';
     }
   }
 
