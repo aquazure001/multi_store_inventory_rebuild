@@ -703,9 +703,10 @@ class _StoreListPageState extends State<StoreListPage> {
                   MaterialPageRoute(builder: (_) => const SpecialOrderPage()),
                 );
               } else if (value == 'order') {
+                final navigator = Navigator.of(context);
                 await _showFullScreenAd(context);
                 if (!mounted) return;
-                Navigator.of(context).push(
+                navigator.push(
                   MaterialPageRoute(builder: (_) => const OrderListPage()),
                 );
               } else if (value == 'delivery') {
@@ -1142,9 +1143,10 @@ class _StoreListPageState extends State<StoreListPage> {
                             subtitle: Text(store.id),
                             trailing: const Icon(Icons.chevron_right),
                             onTap: () async {
+                              final navigator = Navigator.of(context);
                               await _showFullScreenAd(context);
                               if (!mounted) return;
-                              Navigator.of(context).push(
+                              navigator.push(
                                 MaterialPageRoute(
                                   builder: (_) =>
                                       StoreInventoryPage(store: store),
