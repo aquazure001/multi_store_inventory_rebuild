@@ -644,20 +644,23 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
               )
             : _batches.isEmpty
             ? const Center(child: Text('過去の発注表はありません'))
-            : ListView(
+            : ListView.builder(
                 padding: const EdgeInsets.all(16),
-                children: [
-                  const Card(
-                    child: Padding(
-                      padding: EdgeInsets.all(12),
-                      child: Text(
-                        '発注確定PDFを出した時点の発注表を再出力できます。ここでは在庫や発注数は変更しません。',
+                itemCount: _batches.length + 2,
+                itemBuilder: (context, index) {
+                  if (index == 0) {
+                    return const Card(
+                      child: Padding(
+                        padding: EdgeInsets.all(12),
+                        child: Text(
+                          '発注確定PDFを出した時点の発注表を再出力できます。ここでは在庫や発注数は変更しません。',
+                        ),
                       ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  for (final batch in _batches) _buildBatchCard(batch),
-                ],
+                    );
+                  }
+                  if (index == 1) return const SizedBox(height: 12);
+                  return _buildBatchCard(_batches[index - 2]);
+                },
               ),
       ),
     );
