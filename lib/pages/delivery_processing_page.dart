@@ -174,21 +174,11 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
     return '${d.year}年${d.month}月${d.day}日の発注分';
   }
 
-  String _deliveryTypeKey(Map<String, dynamic> item) {
-    final rawTypeKey = (item['typeKey'] ?? '').toString();
-    if (rawTypeKey == 'products' ||
-        rawTypeKey == 'testers' ||
-        rawTypeKey == 'equipments') {
-      return rawTypeKey;
-    }
-
-    final itemType = (item['itemType'] ?? rawTypeKey).toString();
-    if (itemType == '商品' || itemType == 'products') return 'products';
-    if (itemType == 'テスター' || itemType == 'testers') return 'testers';
-    if (itemType == '備品' || itemType == 'equipments') return 'equipments';
-
-    return rawTypeKey.isNotEmpty ? rawTypeKey : itemType;
-  }
+  String _deliveryTypeKey(Map<String, dynamic> item) =>
+      normalizeInventoryTypeKey(
+        typeKey: (item['typeKey'] ?? '').toString(),
+        itemType: (item['itemType'] ?? '').toString(),
+      );
 
   String _deliveryKey(Map<String, dynamic> item) {
     final typeKey = _deliveryTypeKey(item);
@@ -270,7 +260,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
     final itemName = (item['itemName'] ?? '').toString();
     final itemType = (item['itemType'] ?? '').toString();
     final typeKey = _deliveryTypeKey(item);
-    final isProduct = typeKey == 'products' || itemType == '商品';
+    final isProduct = isProductsType(typeKey: typeKey, itemType: itemType);
 
     if (storeId.isEmpty || itemId.isEmpty || typeKey.isEmpty) {
       if (mounted) {

@@ -38,12 +38,8 @@ class _InventorySnapshotPageState extends State<InventorySnapshotPage> {
     return '"${s.replaceAll('"', '""')}"';
   }
 
-  String _typeKeyFromItemType(String itemType) {
-    if (itemType == '商品') return 'products';
-    if (itemType == 'テスター') return 'testers';
-    if (itemType == '備品') return 'equipments';
-    return itemType;
-  }
+  String _typeKeyFromItemType(String itemType) =>
+      normalizeInventoryTypeKey(itemType: itemType);
 
   Map<String, int> _parseNestedStocks(
     Map<String, dynamic> data,

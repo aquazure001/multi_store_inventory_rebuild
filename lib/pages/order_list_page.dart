@@ -31,9 +31,8 @@ class _OrderListPageState extends State<OrderListPage> {
     );
   }
 
-  String _typeKeyForType(String itemType) => itemType == '商品'
-      ? 'products'
-      : (itemType == 'テスター' ? 'testers' : 'equipments');
+  String _typeKeyForType(String itemType) =>
+      normalizeInventoryTypeKey(itemType: itemType);
 
   String _orderMetaKey(String typeKey, String storeId, String itemId) =>
       '${typeKey}__${storeId}__${itemId}';
@@ -113,9 +112,7 @@ class _OrderListPageState extends State<OrderListPage> {
       }
 
       for (final typeKey in ['products', 'testers', 'equipments']) {
-        final typeName = typeKey == 'products'
-            ? '商品'
-            : (typeKey == 'testers' ? 'テスター' : '備品');
+        final typeName = inventoryTypeLabelFromKey(typeKey);
         final typeMap = (ordersRaw[typeKey] is Map)
             ? ordersRaw[typeKey] as Map
             : {};

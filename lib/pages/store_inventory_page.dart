@@ -133,11 +133,15 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
           final typeKey = (delivered['typeKey'] ?? '').toString();
           final itemType = (delivered['itemType'] ?? '').toString();
           final qty = toInt(delivered['qty']);
-          if (typeKey == 'products' || itemType == '商品') {
+          final normalizedTypeKey = normalizeInventoryTypeKey(
+            typeKey: typeKey,
+            itemType: itemType,
+          );
+          if (normalizedTypeKey == 'products') {
             subtractOrdered(orderedProducts, itemId, qty);
-          } else if (typeKey == 'testers' || itemType == 'テスター') {
+          } else if (normalizedTypeKey == 'testers') {
             subtractOrdered(orderedTesters, itemId, qty);
-          } else if (typeKey == 'equipments' || itemType == '備品') {
+          } else if (normalizedTypeKey == 'equipments') {
             subtractOrdered(orderedEquipments, itemId, qty);
           }
         }

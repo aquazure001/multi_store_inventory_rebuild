@@ -42,6 +42,7 @@ part 'core/app_session.dart';
 part 'core/models.dart';
 part 'core/inventory_data.dart';
 part 'core/master_data_cache.dart';
+part 'core/item_type_utils.dart';
 
 const String _appVersion = '1.2.1-delivery-cache-reset';
 
