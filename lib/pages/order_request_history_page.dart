@@ -16,6 +16,7 @@ class _OrderRequestHistoryPageState extends State<OrderRequestHistoryPage> {
   bool _loading = true;
   String? _error;
   List<Map<String, dynamic>> _entries = [];
+  int _visibleCount = 50;
 
   bool get _canView => AppSession.isAdmin || AppSession.isSuperAdmin;
 
@@ -128,6 +129,7 @@ class _OrderRequestHistoryPageState extends State<OrderRequestHistoryPage> {
 
       setState(() {
         _entries = result;
+        _visibleCount = 50;
         _loading = false;
       });
     } catch (e) {
@@ -192,31 +194,60 @@ class _OrderRequestHistoryPageState extends State<OrderRequestHistoryPage> {
                 padding: const EdgeInsets.all(24),
                 child: SelectableText('読み取りエラー\n\n$_error'),
               )
-            : ListView.builder(
-                padding: const EdgeInsets.all(16),
-                itemCount: 2 + (_entries.isEmpty ? 1 : _entries.length),
-                itemBuilder: (context, index) {
-                  if (index == 0) {
-                    return const Card(
-                      child: Padding(
-                        padding: EdgeInsets.all(12),
-                        child: Text(
-                          '発注ボタンを押した履歴です。今後の発注は1回ごとに保存されます。旧形式・残存データは、以前から残っている現在の発注予定情報です。',
+            : Builder(
+                builder: (context) {
+                  final visibleEntries = _entries.take(_visibleCount).toList();
+                  final hasMore = visibleEntries.length < _entries.length;
+                  return ListView.builder(
+                    padding: const EdgeInsets.all(16),
+                    itemCount:
+                        2 +
+                        (_entries.isEmpty ? 1 : visibleEntries.length) +
+                        (hasMore ? 1 : 0),
+                    itemBuilder: (context, index) {
+                      if (index == 0) {
+                        return const Card(
+                          child: Padding(
+                            padding: EdgeInsets.all(12),
+                            child: Text(
+                              '発注ボタンを押した履歴です。今後の発注は1回ごとに保存されます。旧形式・残存データは、以前から残っている現在の発注予定情報です。',
+                            ),
+                          ),
+                        );
+                      }
+                      if (index == 1) return const SizedBox(height: 12);
+                      if (_entries.isEmpty) {
+                        return const Padding(
+                          padding: EdgeInsets.all(24),
+                          child: Text(
+                            '発注ボタン履歴はまだありません',
+                            textAlign: TextAlign.center,
+                          ),
+                        );
+                      }
+                      final entryIndex = index - 2;
+                      if (entryIndex < visibleEntries.length) {
+                        return _buildEntry(visibleEntries[entryIndex]);
+                      }
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        child: OutlinedButton.icon(
+                          onPressed: () {
+                            setState(() {
+                              _visibleCount = min(
+                                _visibleCount + 50,
+                                _entries.length,
+                              );
+                            });
+                          },
+                          icon: const Icon(Icons.expand_more),
+                          label: Text(
+                            'もっと見る（${visibleEntries.length}/${_entries.length}件）',
+                          ),
                         ),
-                      ),
-                    );
-                  }
-                  if (index == 1) return const SizedBox(height: 12);
-                  if (_entries.isEmpty) {
-                    return const Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Text(
-                        '発注ボタン履歴はまだありません',
-                        textAlign: TextAlign.center,
-                      ),
-                    );
-                  }
-                  return _buildEntry(_entries[index - 2]);
+                      );
+                    },
+                  );
                 },
               ),
       ),
