@@ -13,7 +13,7 @@ class AppSession {
   static String logoUrl = '';
   static String nickname = '';
   static int adSlotBase = -1;
-  static List<_AdEntry> distributedAds = [];
+  static List<AdEntry> distributedAds = [];
   static bool approved = true; // 既存組織はデフォルト承認済み
   static bool adViewEnabled = true; // 広告表示（デフォルトON）
 
@@ -46,14 +46,14 @@ class AppSession {
 }
 
 // 広告エントリ（スロット番号付き）
-class _AdEntry {
+class AdEntry {
   final String orgId;
   final String orgName;
   final String image;
   final String message;
   final String url;
   final int slotNumber;
-  const _AdEntry({
+  const AdEntry({
     required this.orgId,
     required this.orgName,
     required this.image,
@@ -86,7 +86,7 @@ Future<void> _loadAllAdsImpl(
   FirebaseFirestore fs, {
   Map<String, dynamic>? ownOrgData,
 }) async {
-  final entries = <_AdEntry>[];
+  final entries = <AdEntry>[];
   int fallbackSlot = 10000;
 
   void addFromDoc(String docId, Map<String, dynamic> data) {
@@ -106,7 +106,7 @@ Future<void> _loadAllAdsImpl(
         if (image.isEmpty && message.isEmpty) continue;
         final base = slotBase >= 0 ? slotBase : fallbackSlot++;
         entries.add(
-          _AdEntry(
+          AdEntry(
             orgId: docId,
             orgName: orgName,
             image: image,
@@ -126,7 +126,7 @@ Future<void> _loadAllAdsImpl(
       if (image.isNotEmpty || message.isNotEmpty) {
         final base = slotBase >= 0 ? slotBase : fallbackSlot++;
         entries.add(
-          _AdEntry(
+          AdEntry(
             orgId: docId,
             orgName: orgName,
             image: image,

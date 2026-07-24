@@ -5,7 +5,7 @@ part of '../main.dart';
 // ─────────────────────────────────────────────
 
 class _FullScreenAdDialog extends StatefulWidget {
-  final _AdEntry ad;
+  final AdEntry ad;
   const _FullScreenAdDialog({required this.ad});
 
   @override
