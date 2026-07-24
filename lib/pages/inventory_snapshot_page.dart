@@ -110,29 +110,32 @@ class _InventorySnapshotPageState extends State<InventorySnapshotPage> {
 
     try {
       final target = _targetDate;
-      final storesDoc = await AppSession.doc('stores').get();
-      final productsDoc = await AppSession.doc('products').get();
-      final testersDoc = await AppSession.doc('testers').get();
-      final equipmentsDoc = await AppSession.doc('equipments').get();
-      final stocksDoc = await AppSession.doc('stocks').get();
-      final stocksV2Doc = await AppSession.doc('stocks_v2').get();
+      final masterData = await _loadMasterData();
+      final results = await Future.wait([
+        AppSession.doc('stocks').get(),
+        AppSession.doc('stocks_v2').get(),
+        AppSession.doc('orders').get(),
+      ]);
+      final stocksDoc = results[0];
+      final stocksV2Doc = results[1];
+      final ordersDoc = results[2];
 
-      final stores = _parseStores(storesDoc.data() ?? {})
+      final stores = List<LegacyStore>.from(masterData.stores)
         ..sort((a, b) {
           final c = _naturalCompare(a.code, b.code);
           return c != 0 ? c : _naturalCompare(a.name, b.name);
         });
 
       final itemsByType = <String, List<LegacyItem>>{
-        'products': _parseItemsFromDoc(
-          productsDoc,
-        ).where((item) => !item.discontinued).toList(),
-        'testers': _parseItemsFromDoc(
-          testersDoc,
-        ).where((item) => !item.discontinued).toList(),
-        'equipments': _parseItemsFromDoc(
-          equipmentsDoc,
-        ).where((item) => !item.discontinued).toList(),
+        'products': masterData.products
+            .where((item) => !item.discontinued)
+            .toList(),
+        'testers': masterData.testers
+            .where((item) => !item.discontinued)
+            .toList(),
+        'equipments': masterData.equipments
+            .where((item) => !item.discontinued)
+            .toList(),
       };
       const typeLabels = <String, String>{
         'products': '商品',
@@ -189,43 +192,64 @@ class _InventorySnapshotPageState extends State<InventorySnapshotPage> {
         historyCount++;
       }
 
-      // 納品処理画面からの納品は高速化のため history ではなく batches.deliveredMap に残る場合がある。
-      // その分も基準日より後なら逆算する。
-      final batchesSnap = await AppSession.doc('orders')
-          .collection('batches')
-          .orderBy('createdAt', descending: true)
-          .limit(300)
-          .get();
-
+      // 納品処理画面からの納品は orders._deliveredBatches の軽量記録を優先して読む。
+      // 旧データだけ必要な場合に限り、従来の発注表側 deliveredMap を確認する。
       var deliveryCount = 0;
-      for (final batch in batchesSnap.docs) {
-        final batchData = batch.data();
-        final deliveredMap = batchData['deliveredMap'];
-        if (deliveredMap is! Map) continue;
-        for (final raw in deliveredMap.values) {
-          if (raw is! Map) continue;
-          final item = Map<String, dynamic>.from(
-            raw.map((k, v) => MapEntry(k.toString(), v)),
-          );
-          final typeKey = (item['typeKey'] ?? '').toString().isNotEmpty
-              ? (item['typeKey'] ?? '').toString()
-              : _typeKeyFromItemType((item['itemType'] ?? '').toString());
-          if (!selectedTypes.contains(typeKey)) continue;
-          if (!snapshot.containsKey(typeKey)) continue;
-          final deliveredAt = _toDateTime(
-            item['deliveredAt'] ?? item['deliveredAtLocal'],
-          );
-          if (deliveredAt == null || !deliveredAt.isAfter(target)) continue;
-          final storeId = (item['storeId'] ?? '').toString();
-          final itemId = (item['itemId'] ?? '').toString();
-          final qty = _toInt(item['qty']);
-          if (storeId.isEmpty || itemId.isEmpty || qty == 0) continue;
-          final storeMap = snapshot[typeKey]!.putIfAbsent(
-            storeId,
-            () => <String, int>{},
-          );
-          storeMap[itemId] = (storeMap[itemId] ?? 0) - qty;
-          deliveryCount++;
+
+      void applyDeliveredItem(Map<String, dynamic> item) {
+        final typeKey = (item['typeKey'] ?? '').toString().isNotEmpty
+            ? (item['typeKey'] ?? '').toString()
+            : _typeKeyFromItemType((item['itemType'] ?? '').toString());
+        if (!selectedTypes.contains(typeKey)) return;
+        if (!snapshot.containsKey(typeKey)) return;
+        final deliveredAt = _toDateTime(
+          item['deliveredAt'] ?? item['deliveredAtLocal'],
+        );
+        if (deliveredAt == null || !deliveredAt.isAfter(target)) return;
+        final storeId = (item['storeId'] ?? '').toString();
+        final itemId = (item['itemId'] ?? '').toString();
+        final qty = _toInt(item['qty']);
+        if (storeId.isEmpty || itemId.isEmpty || qty == 0) return;
+        final storeMap = snapshot[typeKey]!.putIfAbsent(
+          storeId,
+          () => <String, int>{},
+        );
+        storeMap[itemId] = (storeMap[itemId] ?? 0) - qty;
+        deliveryCount++;
+      }
+
+      final deliveredBatches = ordersDoc.data()?['_deliveredBatches'];
+      if (deliveredBatches is Map) {
+        for (final batchRaw in deliveredBatches.values) {
+          if (batchRaw is! Map) continue;
+          for (final raw in batchRaw.values) {
+            if (raw is! Map) continue;
+            applyDeliveredItem(
+              Map<String, dynamic>.from(
+                raw.map((k, v) => MapEntry(k.toString(), v)),
+              ),
+            );
+          }
+        }
+      }
+
+      if (deliveryCount == 0) {
+        final batchesSnap = await AppSession.doc('orders')
+            .collection('batches')
+            .orderBy('createdAt', descending: true)
+            .limit(300)
+            .get();
+        for (final batch in batchesSnap.docs) {
+          final deliveredMap = batch.data()['deliveredMap'];
+          if (deliveredMap is! Map) continue;
+          for (final raw in deliveredMap.values) {
+            if (raw is! Map) continue;
+            applyDeliveredItem(
+              Map<String, dynamic>.from(
+                raw.map((k, v) => MapEntry(k.toString(), v)),
+              ),
+            );
+          }
         }
       }
 
