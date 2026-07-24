@@ -68,7 +68,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
             ),
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
-              value: _selectedDeliveryStoreId.isEmpty
+              initialValue: _selectedDeliveryStoreId.isEmpty
                   ? null
                   : _selectedDeliveryStoreId,
               decoration: const InputDecoration(
@@ -488,8 +488,8 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
 
     final totalQty = targets.fold<int>(
       0,
-      (sum, entry) =>
-          sum +
+      (total, entry) =>
+          total +
           max(
             0,
             _toInt(entry.value['qty']) - _toInt(entry.value['deliveredQty']),
@@ -560,8 +560,9 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading)
+    if (_loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
     if (_error != null) {
       return Scaffold(
         appBar: AppBar(title: const Text('納品処理')),
