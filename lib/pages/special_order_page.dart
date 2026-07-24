@@ -442,6 +442,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
 
     if (writes.isEmpty) return _MasterAddResult.alreadyExists;
     await Future.wait(writes);
+    _clearMasterDataCache();
     return _MasterAddResult.added;
   }
 
@@ -549,7 +550,10 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         );
       }
 
-      if (writes.isNotEmpty) await Future.wait(writes);
+      if (writes.isNotEmpty) {
+        await Future.wait(writes);
+        _clearMasterDataCache();
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

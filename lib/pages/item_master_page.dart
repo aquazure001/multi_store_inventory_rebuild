@@ -123,6 +123,7 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
         .collection('inventory_shared_v1')
         .doc(widget.docId)
         .update({'items': _rawItems});
+    _clearMasterDataCache();
   }
 
   Future<Map<String, String>?> _showItemDialog({

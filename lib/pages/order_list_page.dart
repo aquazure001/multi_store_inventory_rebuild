@@ -73,35 +73,31 @@ class _OrderListPageState extends State<OrderListPage> {
       _error = null;
     });
     try {
+      final master = await _loadMasterData();
       final results = await Future.wait([
-        AppSession.doc('stores').get(),
-        AppSession.doc('products').get(),
-        AppSession.doc('testers').get(),
-        AppSession.doc('equipments').get(),
         AppSession.doc('stocks').get(),
         AppSession.doc('baseline').get(),
         AppSession.doc('stocks_v2').get(),
         AppSession.doc('orders').get(),
       ]);
 
-      final storesRaw = results[0].data() ?? {};
-      final stores = _parseStores(storesRaw);
-      final products = _parseItemsFromDoc(results[1]);
-      final testers = _parseItemsFromDoc(results[2]);
-      final equipments = _parseItemsFromDoc(results[3]);
-      final stocksData = results[4].data() ?? {};
-      final baseDoc = results[5];
+      final stores = master.stores;
+      final products = master.products;
+      final testers = master.testers;
+      final equipments = master.equipments;
+      final stocksData = results[0].data() ?? {};
+      final baseDoc = results[1];
       final baseData = baseDoc.exists
           ? (baseDoc.data() ?? <String, dynamic>{})
           : <String, dynamic>{};
-      final v2Raw = results[6].data() ?? {};
+      final v2Raw = results[2].data() ?? {};
       final v2TMap = (v2Raw['testers'] is Map) ? v2Raw['testers'] as Map : {};
       final v2EMap = (v2Raw['equipments'] is Map)
           ? v2Raw['equipments'] as Map
           : {};
 
-      final ordersRaw = results[7].exists
-          ? (results[7].data() ?? <String, dynamic>{})
+      final ordersRaw = results[3].exists
+          ? (results[3].data() ?? <String, dynamic>{})
           : <String, dynamic>{};
       final Map<String, int> orderedQtys = {};
       final Map<String, _OrderMeta> orderMetas = {};

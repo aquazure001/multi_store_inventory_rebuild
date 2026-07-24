@@ -42,21 +42,19 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
   }
 
   Future<_InventoryData> _loadInventory() async {
+    final master = await _loadMasterData();
     final results = await Future.wait([
-      AppSession.doc('products').get(),
-      AppSession.doc('testers').get(),
-      AppSession.doc('equipments').get(),
       AppSession.doc('stocks').get(),
       AppSession.doc('baseline').get(),
       AppSession.doc('stocks_v2').get(),
       AppSession.doc('orders').get(),
     ]);
 
-    final stocksData = results[3].data() ?? {};
-    final baseStocksData = results[4].exists
-        ? (results[4].data() ?? <String, dynamic>{})
+    final stocksData = results[0].data() ?? {};
+    final baseStocksData = results[1].exists
+        ? (results[1].data() ?? <String, dynamic>{})
         : <String, dynamic>{};
-    final v2Raw = results[5].data() ?? {};
+    final v2Raw = results[2].data() ?? {};
 
     final v2TMap = (v2Raw['testers'] is Map)
         ? Map<String, dynamic>.from(
@@ -71,8 +69,8 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
           )
         : <String, dynamic>{};
 
-    final ordersRaw = results[6].exists
-        ? (results[6].data() ?? <String, dynamic>{})
+    final ordersRaw = results[3].exists
+        ? (results[3].data() ?? <String, dynamic>{})
         : <String, dynamic>{};
     final ordersPMap = (ordersRaw['products'] is Map)
         ? Map<String, dynamic>.from(
@@ -155,9 +153,9 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
     }
 
     return _InventoryData(
-      products: _parseItemsFromDoc(results[0]),
-      testers: _parseItemsFromDoc(results[1]),
-      equipments: _parseItemsFromDoc(results[2]),
+      products: master.products,
+      testers: master.testers,
+      equipments: master.equipments,
       productStocks: _parseStocksForStore(stocksData, widget.store.id),
       testerStocks: _parseStocksForStore(v2TMap, widget.store.id),
       equipmentStocks: _parseStocksForStore(v2EMap, widget.store.id),
