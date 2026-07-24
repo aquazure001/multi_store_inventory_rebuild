@@ -56,24 +56,9 @@ class _StoreListPageState extends State<StoreListPage> {
       _error = null;
     });
     try {
-      final doc = await AppSession.doc('stores').get();
-
-      final data = doc.data();
-      final raw = data?['items'];
-      final stores = <LegacyStore>[];
-
-      if (raw is List) {
-        for (final item in raw.whereType<Map>()) {
-          final map = Map<String, dynamic>.from(
-            item.map((k, v) => MapEntry(k.toString(), v)),
-          );
-          final store = LegacyStore.fromMap(map);
-          if (store.id.isNotEmpty) stores.add(store);
-        }
-      }
-
+      final masterData = await _loadMasterData();
       setState(() {
-        _stores = stores;
+        _stores = List<LegacyStore>.from(masterData.stores);
         _loading = false;
       });
     } catch (e) {
@@ -1084,74 +1069,88 @@ class _StoreListPageState extends State<StoreListPage> {
                       padding: const EdgeInsets.all(24),
                       child: SelectableText('読み取りエラー\n\n$_error'),
                     )
-                  : ListView(
+                  : ListView.builder(
                       padding: const EdgeInsets.all(16),
-                      children: [
-                        const Text(
-                          '多店舗在庫管理システム',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 28,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '組織: ${AppSession.orgId.isEmpty ? "（未設定）" : AppSession.orgId}',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: AppSession.orgId == 'legacy'
-                                ? Colors.green.shade700
-                                : Colors.orange.shade700,
-                            fontSize: 13,
-                          ),
-                        ),
-                        const SizedBox(height: 24),
-                        Card(
-                          child: ListTile(
-                            title: const Text('店舗数'),
-                            trailing: Text(
-                              '${_stores.length} 件',
-                              style: const TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.bold,
-                              ),
+                      itemCount: 6 + _stores.length,
+                      itemBuilder: (context, index) {
+                        if (index == 0) {
+                          return const Text(
+                            '多店舗在庫管理システム',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.bold,
                             ),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        const AdInlineCardWidget(),
-                        const SizedBox(height: 8),
-                        for (final store in _stores)
-                          Card(
+                          );
+                        }
+                        if (index == 1) return const SizedBox(height: 4);
+                        if (index == 2) {
+                          return Text(
+                            '組織: ${AppSession.orgId.isEmpty ? "（未設定）" : AppSession.orgId}',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: AppSession.orgId == 'legacy'
+                                  ? Colors.green.shade700
+                                  : Colors.orange.shade700,
+                              fontSize: 13,
+                            ),
+                          );
+                        }
+                        if (index == 3) return const SizedBox(height: 24);
+                        if (index == 4) {
+                          return Card(
                             child: ListTile(
-                              leading: CircleAvatar(
-                                child: Text(
-                                  store.code.isEmpty ? '-' : store.code,
-                                ),
-                              ),
-                              title: Text(
-                                store.name,
+                              title: const Text('店舗数'),
+                              trailing: Text(
+                                '${_stores.length} 件',
                                 style: const TextStyle(
-                                  fontSize: 18,
+                                  fontSize: 22,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
-                              subtitle: Text(store.id),
-                              trailing: const Icon(Icons.chevron_right),
-                              onTap: () async {
-                                await _showFullScreenAd(context);
-                                if (!context.mounted) return;
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) =>
-                                        StoreInventoryPage(store: store),
-                                  ),
-                                );
-                              },
                             ),
+                          );
+                        }
+                        if (index == 5) {
+                          return const Column(
+                            children: [
+                              SizedBox(height: 8),
+                              AdInlineCardWidget(),
+                              SizedBox(height: 8),
+                            ],
+                          );
+                        }
+
+                        final store = _stores[index - 6];
+                        return Card(
+                          child: ListTile(
+                            leading: CircleAvatar(
+                              child: Text(
+                                store.code.isEmpty ? '-' : store.code,
+                              ),
+                            ),
+                            title: Text(
+                              store.name,
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            subtitle: Text(store.id),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () async {
+                              await _showFullScreenAd(context);
+                              if (!context.mounted) return;
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) =>
+                                      StoreInventoryPage(store: store),
+                                ),
+                              );
+                            },
                           ),
-                      ],
+                        );
+                      },
                     ),
             ),
           ],
