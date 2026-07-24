@@ -12,20 +12,58 @@ class HistoryPage extends StatefulWidget {
 }
 
 class _HistoryPageState extends State<HistoryPage> {
-  Future<List<HistoryEntry>>? _future;
+  List<HistoryEntry> _entries = <HistoryEntry>[];
+  DocumentSnapshot<Map<String, dynamic>>? _lastDoc;
+  bool _loading = true;
+  bool _loadingMore = false;
+  bool _hasMore = true;
+  Object? _error;
 
   @override
   void initState() {
     super.initState();
-    _future = _load();
+    _load(reset: true);
   }
 
-  Future<List<HistoryEntry>> _load() async {
-    final snap = await AppSession.doc(
-      'history',
-    ).collection('entries').orderBy('at', descending: true).limit(100).get();
+  Future<void> _load({bool reset = false}) async {
+    if (_loadingMore) return;
+    if (reset) {
+      setState(() {
+        _entries = <HistoryEntry>[];
+        _lastDoc = null;
+        _hasMore = true;
+        _loading = true;
+        _error = null;
+      });
+    } else {
+      if (!_hasMore) return;
+      setState(() => _loadingMore = true);
+    }
 
-    return snap.docs.map((doc) => HistoryEntry.fromDoc(doc)).toList();
+    try {
+      var query = AppSession.doc(
+        'history',
+      ).collection('entries').orderBy('at', descending: true).limit(50);
+      final lastDoc = _lastDoc;
+      if (!reset && lastDoc != null) {
+        query = query.startAfterDocument(lastDoc);
+      }
+      final snap = await query.get();
+      final loaded = snap.docs.map((doc) => HistoryEntry.fromDoc(doc)).toList();
+      setState(() {
+        _entries = reset ? loaded : [..._entries, ...loaded];
+        _lastDoc = snap.docs.isEmpty ? _lastDoc : snap.docs.last;
+        _hasMore = snap.docs.length == 50;
+        _loading = false;
+        _loadingMore = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = e;
+        _loading = false;
+        _loadingMore = false;
+      });
+    }
   }
 
   @override
@@ -38,29 +76,20 @@ class _HistoryPageState extends State<HistoryPage> {
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: '更新',
-            onPressed: () => setState(() => _future = _load()),
+            onPressed: () => _load(reset: true),
           ),
         ],
       ),
       body: SafeArea(
-        child: FutureBuilder<List<HistoryEntry>>(
-          future: _future,
-          builder: (context, snapshot) {
-            if (snapshot.connectionState != ConnectionState.done) {
-              return const Center(child: CircularProgressIndicator());
-            }
-
-            if (snapshot.hasError) {
-              return Padding(
+        child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _error != null
+            ? Padding(
                 padding: const EdgeInsets.all(24),
-                child: SelectableText('読み取りエラー\n\n${snapshot.error}'),
-              );
-            }
-
-            final entries = snapshot.data ?? [];
-
-            if (entries.isEmpty) {
-              return const Center(
+                child: SelectableText('読み取りエラー\n\n$_error'),
+              )
+            : _entries.isEmpty
+            ? const Center(
                 child: Padding(
                   padding: EdgeInsets.all(32),
                   child: Text(
@@ -69,35 +98,49 @@ class _HistoryPageState extends State<HistoryPage> {
                     style: TextStyle(color: Colors.grey),
                   ),
                 ),
-              );
-            }
-
-            return ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: entries.length + 1,
-              itemBuilder: (context, index) {
-                if (index == 0) {
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Card(
-                      child: ListTile(
-                        title: const Text('件数（直近100件）'),
-                        trailing: Text(
-                          '${entries.length} 件',
-                          style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
+              )
+            : ListView.builder(
+                padding: const EdgeInsets.all(16),
+                itemCount: _entries.length + 1 + (_hasMore ? 1 : 0),
+                itemBuilder: (context, index) {
+                  if (index == 0) {
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Card(
+                        child: ListTile(
+                          title: const Text('件数'),
+                          subtitle: const Text('直近から50件ずつ読み込みます'),
+                          trailing: Text(
+                            '${_entries.length} 件',
+                            style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
                       ),
+                    );
+                  }
+                  final entryIndex = index - 1;
+                  if (entryIndex < _entries.length) {
+                    return _buildEntryCard(_entries[entryIndex]);
+                  }
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: OutlinedButton.icon(
+                      onPressed: _loadingMore ? null : () => _load(),
+                      icon: _loadingMore
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.expand_more),
+                      label: Text(_loadingMore ? '読み込み中...' : 'もっと見る'),
                     ),
                   );
-                }
-                return _buildEntryCard(entries[index - 1]);
-              },
-            );
-          },
-        ),
+                },
+              ),
       ),
     );
   }
