@@ -19,11 +19,7 @@ class _InventorySnapshotPageState extends State<InventorySnapshotPage> {
   bool _includeEquipments = false;
   String? _message;
 
-  int _toInt(dynamic value) {
-    if (value is int) return value;
-    if (value is num) return value.toInt();
-    return int.tryParse('$value') ?? 0;
-  }
+  int _toInt(dynamic value) => inventoryIntValue(value);
 
   DateTime? _toDateTime(dynamic value) {
     if (value is Timestamp) return value.toDate();

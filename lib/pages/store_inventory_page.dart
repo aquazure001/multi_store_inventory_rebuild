@@ -98,11 +98,7 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
     final orderedTesters = _parseStocksForStore(ordersTMap, widget.store.id);
     final orderedEquipments = _parseStocksForStore(ordersEMap, widget.store.id);
 
-    int toInt(dynamic value) {
-      if (value is int) return value;
-      if (value is num) return value.toInt();
-      return int.tryParse('$value') ?? 0;
-    }
+    int toInt(dynamic value) => inventoryIntValue(value);
 
     void subtractOrdered(Map<String, int> target, String itemId, int qty) {
       if (itemId.isEmpty || qty <= 0) return;
@@ -343,9 +339,7 @@ class _InventoryListState extends State<_InventoryList> {
       final newQtys = <String, int>{};
       for (final e in storeData.entries) {
         final v = e.value;
-        final qty = v is int
-            ? v
-            : (v is num ? v.toInt() : int.tryParse('$v') ?? 0);
+        final qty = v is int ? v : inventoryIntValue(v);
         if (qty > 0) newQtys[e.key.toString()] = qty;
       }
       final newMetas = _parseOrderMetasForStore(

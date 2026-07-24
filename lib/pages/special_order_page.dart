@@ -76,9 +76,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           final storeMap = <String, int>{};
           for (final s in (e.value as Map).entries) {
             final v = s.value;
-            final qty = v is int
-                ? v
-                : (v is num ? v.toInt() : int.tryParse('$v') ?? 0);
+            final qty = v is int ? v : inventoryIntValue(v);
             if (qty > 0) storeMap[s.key.toString()] = qty;
           }
           if (storeMap.isNotEmpty) result[itemId] = storeMap;

@@ -25,11 +25,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     _load();
   }
 
-  int _toInt(dynamic value) {
-    if (value is int) return value;
-    if (value is num) return value.toInt();
-    return int.tryParse('$value') ?? 0;
-  }
+  int _toInt(dynamic value) => inventoryIntValue(value);
 
   DateTime _batchDate(Map<String, dynamic> data) {
     final ts = data['createdAt'];

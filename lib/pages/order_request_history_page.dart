@@ -26,11 +26,7 @@ class _OrderRequestHistoryPageState extends State<OrderRequestHistoryPage> {
     _load();
   }
 
-  int _toInt(dynamic value) {
-    if (value is int) return value;
-    if (value is num) return value.toInt();
-    return int.tryParse('$value') ?? 0;
-  }
+  int _toInt(dynamic value) => inventoryIntValue(value);
 
   DateTime? _readTime(dynamic value) {
     if (value is Timestamp) return value.toDate();

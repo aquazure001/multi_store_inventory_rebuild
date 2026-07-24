@@ -28,11 +28,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
     _load();
   }
 
-  int _toInt(dynamic value) {
-    if (value is int) return value;
-    if (value is num) return value.toInt();
-    return int.tryParse('$value') ?? 0;
-  }
+  int _toInt(dynamic value) => inventoryIntValue(value);
 
   Map<String, String> _deliveryStores() {
     final stores = <String, String>{};
