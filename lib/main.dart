@@ -45,7 +45,7 @@ part 'core/master_data_cache.dart';
 part 'core/item_type_utils.dart';
 part 'core/value_utils.dart';
 
-const String _appVersion = '1.2.1-delivery-cache-reset';
+const String _appVersion = '1.2.2-update-version-sync';
 
 // iOS Safari / Android Chrome のポップアップブロック回避:
 // AnchorElement を直接クリックすることでユーザージェスチャーコンテキストを維持する
