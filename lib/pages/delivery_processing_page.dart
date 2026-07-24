@@ -204,6 +204,24 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
     return deliveredMap is Map && deliveredMap.containsKey(key);
   }
 
+  Future<int> _currentStockQty({
+    required bool isProduct,
+    required String typeKey,
+    required String storeId,
+    required String itemId,
+  }) async {
+    try {
+      final ref = isProduct ? AppSession.stocksDoc : AppSession.stocksV2Doc;
+      final data = (await ref.get()).data() ?? <String, dynamic>{};
+      final storeMap = isProduct
+          ? data[storeId]
+          : (data[typeKey] is Map ? (data[typeKey] as Map)[storeId] : null);
+      return storeMap is Map ? _toInt(storeMap[itemId]) : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   Future<void> _deliverItem(
     QueryDocumentSnapshot<Map<String, dynamic>> batchDoc,
     int index,
@@ -222,13 +240,34 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
       return;
     }
 
+    final storeId = (item['storeId'] ?? '').toString();
+    final storeName = (item['storeName'] ?? '').toString();
+    final itemId = (item['itemId'] ?? '').toString();
+    final itemName = (item['itemName'] ?? '').toString();
+    final itemType = (item['itemType'] ?? '').toString();
+    final typeKey = _deliveryTypeKey(item);
+    final isProduct = isProductsType(typeKey: typeKey, itemType: itemType);
+    final typeLabel = inventoryTypeLabelFromKey(typeKey);
+    final saveTarget = isProduct ? 'stocks' : 'stocks_v2';
+
     if (askConfirm) {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('納品処理'),
-          content: Text(
-            '${item['storeName']}\n${item['itemName']}\n$remaining個を納品して在庫に加算します。',
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('種別: $typeLabel'),
+              Text('保存先: $saveTarget'),
+              const SizedBox(height: 8),
+              Text('店舗: $storeName'),
+              Text('商品: $itemName'),
+              Text('数量: $remaining個'),
+              const SizedBox(height: 8),
+              const Text('この内容で納品して在庫に加算します。'),
+            ],
           ),
           actions: [
             TextButton(
@@ -248,14 +287,6 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
       );
       if (confirmed != true) return;
     }
-
-    final storeId = (item['storeId'] ?? '').toString();
-    final storeName = (item['storeName'] ?? '').toString();
-    final itemId = (item['itemId'] ?? '').toString();
-    final itemName = (item['itemName'] ?? '').toString();
-    final itemType = (item['itemType'] ?? '').toString();
-    final typeKey = _deliveryTypeKey(item);
-    final isProduct = isProductsType(typeKey: typeKey, itemType: itemType);
 
     if (storeId.isEmpty || itemId.isEmpty || typeKey.isEmpty) {
       if (mounted) {
@@ -318,6 +349,16 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
           ? AppSession.stocksDoc
           : AppSession.stocksV2Doc;
 
+      // 納品前の在庫数を控えておき、納品後に再読込した値と比較表示する。
+      final beforeQty = showResult
+          ? await _currentStockQty(
+              isProduct: isProduct,
+              typeKey: typeKey,
+              storeId: storeId,
+              itemId: itemId,
+            )
+          : null;
+
       // 納品記録の保存を先に行うと、権限・キャッシュ・旧データの影響で
       // 在庫加算前に止まることがある。納品処理では在庫加算を最優先にする。
       await showStep('納品処理中: 在庫に加算しています');
@@ -342,6 +383,16 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
               onTimeout: () => throw TimeoutException('在庫加算でタイムアウトしました'),
             );
       }
+
+      // 納品後の在庫数を再読込し、反映結果を確認できるようにする。
+      final afterQty = showResult
+          ? await _currentStockQty(
+              isProduct: isProduct,
+              typeKey: typeKey,
+              storeId: storeId,
+              itemId: itemId,
+            )
+          : null;
 
       // 在庫反映後に、店舗在庫一覧の「納品予定」表示を消す。
       // ここは在庫加算とは分離し、失敗しても納品自体は成功扱いにする。
@@ -400,14 +451,18 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         deliveryStatusSaved = true;
       } catch (_) {}
       if (showResult && mounted) {
+        final changeText = (beforeQty != null && afterQty != null)
+            ? '\n$beforeQty個 → $afterQty個 に更新されました'
+            : '';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
               orderedCleared
-                  ? '$storeName：$itemName を $remaining個 納品しました'
-                  : '$storeName：$itemName を $remaining個 納品しました（納品予定表示は更新できませんでした）',
+                  ? '$storeName：$itemName を $remaining個 納品しました$changeText'
+                  : '$storeName：$itemName を $remaining個 納品しました（納品予定表示は更新できませんでした）$changeText',
             ),
             backgroundColor: orderedCleared ? Colors.green : Colors.orange,
+            duration: const Duration(seconds: 4),
           ),
         );
       }
