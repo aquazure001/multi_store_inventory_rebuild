@@ -35,7 +35,7 @@ class _OrderListPageState extends State<OrderListPage> {
       normalizeInventoryTypeKey(itemType: itemType);
 
   String _orderMetaKey(String typeKey, String storeId, String itemId) =>
-      '${typeKey}__${storeId}__${itemId}';
+      '${typeKey}__${storeId}__$itemId';
 
   String _orderMetaField(_OrderEntry entry) =>
       '_meta.${_orderMetaKey(_typeKeyForType(entry.itemType), entry.store.id, entry.item.id)}';
@@ -306,7 +306,7 @@ class _OrderListPageState extends State<OrderListPage> {
         content: Text(
           existingQty > 0
               ? '${entry.store.name}\n${entry.item.name}\n$existingQty個納品予定ですが、追加で $qty個 発注しますか？\n\n合計の納品予定数は $totalQty個 になります。'
-              : '${entry.store.name}\n${entry.item.name}\nを ${qty}個、発注リストに登録します。\n\n※「発注確定PDF」を出した時点で発注日として記録されます。',
+              : '${entry.store.name}\n${entry.item.name}\nを $qty個、発注リストに登録します。\n\n※「発注確定PDF」を出した時点で発注日として記録されます。',
         ),
         actions: [
           TextButton(
@@ -424,7 +424,7 @@ class _OrderListPageState extends State<OrderListPage> {
                       children: [
                         Expanded(
                           child: Text(
-                            '${e.item.name}',
+                            e.item.name,
                             style: const TextStyle(fontSize: 13),
                           ),
                         ),
@@ -609,6 +609,7 @@ class _OrderListPageState extends State<OrderListPage> {
       return;
     }
     if (newQty == orderedQty) return;
+    if (!context.mounted) return;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -699,7 +700,7 @@ class _OrderListPageState extends State<OrderListPage> {
     try {
       await AppSession.ordersDoc.update({
         '$typeKey.${entry.store.id}.${entry.item.id}': FieldValue.delete(),
-        '${_orderMetaField(entry)}': FieldValue.delete(),
+        _orderMetaField(entry): FieldValue.delete(),
       });
       _applyOrderCancelLocally(entry);
       if (context.mounted) {
