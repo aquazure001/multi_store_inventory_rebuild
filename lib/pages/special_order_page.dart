@@ -278,7 +278,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('納品確認'),
-        content: Text('${item.name}\n${store.name}: ${orderedQty}個を納品済みにします'),
+        content: Text('${item.name}\n${store.name}: $orderedQty個を納品済みにします'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
@@ -1100,8 +1100,8 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               decoration: BoxDecoration(
-                color: c.withOpacity(0.15),
-                border: Border.all(color: c.withOpacity(0.4)),
+                color: c.withValues(alpha: 0.15),
+                border: Border.all(color: c.withValues(alpha: 0.4)),
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
