@@ -26,8 +26,8 @@ class AllStoresInventoryPage extends StatelessWidget {
   Future<_AllStoresData> _load() async {
     final masterDataFuture = _loadMasterData();
     final results = await Future.wait([
-      AppSession.doc('stocks').get(),
-      AppSession.doc('stocks_v2').get(),
+      AppSession.stocksDoc.get(),
+      AppSession.stocksV2Doc.get(),
     ]);
     final masterData = await masterDataFuture;
 

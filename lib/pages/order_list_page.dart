@@ -74,10 +74,10 @@ class _OrderListPageState extends State<OrderListPage> {
     try {
       final master = await _loadMasterData();
       final results = await Future.wait([
-        AppSession.doc('stocks').get(),
-        AppSession.doc('baseline').get(),
-        AppSession.doc('stocks_v2').get(),
-        AppSession.doc('orders').get(),
+        AppSession.stocksDoc.get(),
+        AppSession.baselineDoc.get(),
+        AppSession.stocksV2Doc.get(),
+        AppSession.ordersDoc.get(),
       ]);
 
       final stores = master.stores;
@@ -327,7 +327,7 @@ class _OrderListPageState extends State<OrderListPage> {
     if (confirmed != true) return;
 
     try {
-      final ordersRef = AppSession.doc('orders');
+      final ordersRef = AppSession.ordersDoc;
       final update = {
         '$typeKey.${entry.store.id}.${entry.item.id}': totalQty,
         '${_orderMetaField(entry)}.requestedAt': FieldValue.serverTimestamp(),
@@ -478,7 +478,7 @@ class _OrderListPageState extends State<OrderListPage> {
         updates['${_orderMetaField(e)}.itemType'] = e.itemType;
         updates['${_orderMetaField(e)}.lastRequestedQty'] = e.effectiveShortage;
       }
-      final ordersRef = AppSession.doc('orders');
+      final ordersRef = AppSession.ordersDoc;
       try {
         await ordersRef.update(updates);
       } on FirebaseException catch (ex) {
@@ -637,7 +637,7 @@ class _OrderListPageState extends State<OrderListPage> {
 
     final typeKey = _typeKeyForType(entry.itemType);
     try {
-      await AppSession.doc('orders').update({
+      await AppSession.ordersDoc.update({
         '$typeKey.${entry.store.id}.${entry.item.id}': newQty,
         '${_orderMetaField(entry)}.correctedAt': FieldValue.serverTimestamp(),
         '${_orderMetaField(entry)}.correctedBy': AppSession.nickname,
@@ -697,7 +697,7 @@ class _OrderListPageState extends State<OrderListPage> {
 
     final typeKey = _typeKeyForType(entry.itemType);
     try {
-      await AppSession.doc('orders').update({
+      await AppSession.ordersDoc.update({
         '$typeKey.${entry.store.id}.${entry.item.id}': FieldValue.delete(),
         '${_orderMetaField(entry)}': FieldValue.delete(),
       });
@@ -789,9 +789,9 @@ class _OrderListPageState extends State<OrderListPage> {
         'status': 'pending',
       });
     }
-    await AppSession.doc('orders').update(updates);
+    await AppSession.ordersDoc.update(updates);
 
-    final batchRef = AppSession.doc('orders').collection('batches').doc();
+    final batchRef = AppSession.orderBatches.doc();
     await batchRef.set({
       'createdAt': FieldValue.serverTimestamp(),
       'createdAtLocal': issuedAt.toIso8601String(),

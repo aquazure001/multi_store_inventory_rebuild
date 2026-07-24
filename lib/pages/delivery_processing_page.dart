@@ -113,8 +113,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
       _error = null;
     });
     try {
-      final snap = await AppSession.doc('orders')
-          .collection('batches')
+      final snap = await AppSession.orderBatches
           .orderBy('createdAt', descending: true)
           .limit(20)
           .get();
@@ -320,8 +319,8 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         'typeKey': typeKey,
       };
       final stocksRef = isProduct
-          ? AppSession.doc('stocks')
-          : AppSession.doc('stocks_v2');
+          ? AppSession.stocksDoc
+          : AppSession.stocksV2Doc;
 
       // 納品記録の保存を先に行うと、権限・キャッシュ・旧データの影響で
       // 在庫加算前に止まることがある。納品処理では在庫加算を最優先にする。
@@ -353,7 +352,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
       var orderedCleared = false;
       try {
         await showStep('納品処理中: 納品予定表示を更新しています');
-        final ordersRef = AppSession.doc('orders');
+        final ordersRef = AppSession.ordersDoc;
         await ordersRef
             .update({
               '$typeKey.$storeId.$itemId': FieldValue.increment(-remaining),

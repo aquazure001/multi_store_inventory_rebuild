@@ -90,8 +90,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
       _error = null;
     });
     try {
-      final snap = await AppSession.doc('orders')
-          .collection('batches')
+      final snap = await AppSession.orderBatches
           .orderBy('createdAt', descending: true)
           .limit(100)
           .get();
@@ -558,7 +557,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     if (confirmed != true) return;
 
     try {
-      final ordersRef = AppSession.doc('orders');
+      final ordersRef = AppSession.ordersDoc;
       final ordersSnap = await ordersRef.get();
       final ordersData = ordersSnap.data() ?? <String, dynamic>{};
       final updates = <String, dynamic>{};

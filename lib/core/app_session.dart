@@ -33,6 +33,16 @@ class AppSession {
       FirebaseFirestore.instance
           .collection('inventory_shared_v1')
           .doc('org_${orgId}__$suffix');
+
+  static DocumentReference<Map<String, dynamic>> get stocksDoc => doc('stocks');
+  static DocumentReference<Map<String, dynamic>> get stocksV2Doc =>
+      doc('stocks_v2');
+  static DocumentReference<Map<String, dynamic>> get baselineDoc =>
+      doc('baseline');
+  static DocumentReference<Map<String, dynamic>> get ordersDoc => doc('orders');
+
+  static CollectionReference<Map<String, dynamic>> get orderBatches =>
+      ordersDoc.collection('batches');
 }
 
 // 広告エントリ（スロット番号付き）

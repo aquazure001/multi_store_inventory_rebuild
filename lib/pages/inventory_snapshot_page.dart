@@ -108,9 +108,9 @@ class _InventorySnapshotPageState extends State<InventorySnapshotPage> {
       final target = _targetDate;
       final masterData = await _loadMasterData();
       final results = await Future.wait([
-        AppSession.doc('stocks').get(),
-        AppSession.doc('stocks_v2').get(),
-        AppSession.doc('orders').get(),
+        AppSession.stocksDoc.get(),
+        AppSession.stocksV2Doc.get(),
+        AppSession.ordersDoc.get(),
       ]);
       final stocksDoc = results[0];
       final stocksV2Doc = results[1];
@@ -230,8 +230,7 @@ class _InventorySnapshotPageState extends State<InventorySnapshotPage> {
       }
 
       if (deliveryCount == 0) {
-        final batchesSnap = await AppSession.doc('orders')
-            .collection('batches')
+        final batchesSnap = await AppSession.orderBatches
             .orderBy('createdAt', descending: true)
             .limit(300)
             .get();

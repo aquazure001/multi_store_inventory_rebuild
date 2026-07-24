@@ -227,7 +227,7 @@ class _OrgManagementPageState extends State<OrgManagementPage> {
 
   // 全在庫が0かチェック（0以外があれば false）
   Future<bool> _checkAllStocksZero() async {
-    final stocksDoc = await AppSession.doc('stocks').get();
+    final stocksDoc = await AppSession.stocksDoc.get();
     if (stocksDoc.exists) {
       for (final storeData in (stocksDoc.data() ?? {}).values) {
         if (storeData is Map) {
@@ -238,7 +238,7 @@ class _OrgManagementPageState extends State<OrgManagementPage> {
         }
       }
     }
-    final v2Doc = await AppSession.doc('stocks_v2').get();
+    final v2Doc = await AppSession.stocksV2Doc.get();
     if (v2Doc.exists) {
       for (final typeData in (v2Doc.data() ?? {}).values) {
         if (typeData is Map) {

@@ -44,10 +44,10 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
   Future<_InventoryData> _loadInventory() async {
     final master = await _loadMasterData();
     final results = await Future.wait([
-      AppSession.doc('stocks').get(),
-      AppSession.doc('baseline').get(),
-      AppSession.doc('stocks_v2').get(),
-      AppSession.doc('orders').get(),
+      AppSession.stocksDoc.get(),
+      AppSession.baselineDoc.get(),
+      AppSession.stocksV2Doc.get(),
+      AppSession.ordersDoc.get(),
     ]);
 
     final stocksData = results[0].data() ?? {};
@@ -329,7 +329,7 @@ class _InventoryListState extends State<_InventoryList> {
     final typeKey = widget.title == '商品'
         ? 'products'
         : (widget.title == 'テスター' ? 'testers' : 'equipments');
-    _ordersSub = AppSession.doc('orders').snapshots().listen((snap) {
+    _ordersSub = AppSession.ordersDoc.snapshots().listen((snap) {
       if (!mounted) return;
       final raw = snap.exists
           ? (snap.data() ?? <String, dynamic>{})
@@ -393,7 +393,7 @@ class _InventoryListState extends State<_InventoryList> {
           AppSession.nickname;
     }
     try {
-      await AppSession.doc('orders').update(updates);
+      await AppSession.ordersDoc.update(updates);
       setState(() {
         for (final entry in targets) {
           final old = entry.value;
@@ -465,7 +465,7 @@ class _InventoryListState extends State<_InventoryList> {
     }
 
     try {
-      await AppSession.doc('orders').update(updates);
+      await AppSession.ordersDoc.update(updates);
       setState(() {
         for (final id in targetIds) {
           _localOrderedStocks.remove(id);
@@ -528,7 +528,7 @@ class _InventoryListState extends State<_InventoryList> {
 
     setState(() => _localBaseStocks[item.id] = result);
 
-    final docRef = AppSession.doc('baseline');
+    final docRef = AppSession.baselineDoc;
     final updates = <String, dynamic>{'${widget.storeId}.${item.id}': result};
     try {
       await docRef.update(updates);
@@ -655,14 +655,14 @@ class _InventoryListState extends State<_InventoryList> {
         for (final id in _changedIds) {
           stockUpdates['${widget.storeId}.$id'] = _localStocks[id] ?? 0;
         }
-        await AppSession.doc('stocks').update(stockUpdates);
+        await AppSession.stocksDoc.update(stockUpdates);
       } else {
         final typeKey = widget.title == 'テスター' ? 'testers' : 'equipments';
         for (final id in _changedIds) {
           stockUpdates['$typeKey.${widget.storeId}.$id'] =
               _localStocks[id] ?? 0;
         }
-        final v2Ref = AppSession.doc('stocks_v2');
+        final v2Ref = AppSession.stocksV2Doc;
         try {
           await v2Ref.update(stockUpdates);
         } on FirebaseException catch (e) {

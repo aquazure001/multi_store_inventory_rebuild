@@ -73,7 +73,7 @@ class _OrderRequestHistoryPageState extends State<OrderRequestHistoryPage> {
 
       // 旧形式: 以前から orders._meta に残っている「最後に発注ボタンを押した情報」。
       // クリックごとの完全履歴ではなく、残存している現在値だけを表示する。
-      final ordersDoc = await AppSession.doc('orders').get();
+      final ordersDoc = await AppSession.ordersDoc.get();
       final ordersData = ordersDoc.data() ?? <String, dynamic>{};
       final metaRaw = ordersData['_meta'];
       if (metaRaw is Map) {
