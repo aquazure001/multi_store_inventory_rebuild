@@ -47,13 +47,11 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       _error = null;
     });
     try {
-      final results = await Future.wait([
-        AppSession.doc('stores').get(),
-        AppSession.doc('special_orders').get(),
-      ]);
-      final stores = _parseStores(results[0].data() ?? {});
-
-      final doc = results[1];
+      final masterDataFuture = _loadMasterData();
+      final specialOrdersFuture = AppSession.doc('special_orders').get();
+      final masterData = await masterDataFuture;
+      final doc = await specialOrdersFuture;
+      final stores = List<LegacyStore>.from(masterData.stores);
       final raw = doc.exists
           ? (doc.data() ?? <String, dynamic>{})
           : <String, dynamic>{};
@@ -1247,32 +1245,40 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 style: const TextStyle(color: Colors.grey),
               ),
             )
-          : ListView(
+          : ListView.builder(
               padding: const EdgeInsets.symmetric(vertical: 8),
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                  child: TextField(
-                    decoration: const InputDecoration(
-                      prefixIcon: Icon(Icons.search),
-                      hintText: '商品名・コード・種別で検索',
-                      border: OutlineInputBorder(),
-                      isDense: true,
+              itemCount: 2 + (filteredItems.isEmpty ? 1 : filteredItems.length),
+              itemBuilder: (context, index) {
+                if (index == 0) {
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                    child: TextField(
+                      decoration: const InputDecoration(
+                        prefixIcon: Icon(Icons.search),
+                        hintText: '商品名・コード・種別で検索',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      onChanged: (value) => setState(() => _query = value),
                     ),
-                    onChanged: (value) => setState(() => _query = value),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-                  child: Text(
-                    widget.showExpiredOnly
-                        ? '表示順：販売終了日が新しい順 → コード順 → 商品名順'
-                        : '表示順：販売終了日が近い順 → コード順 → 商品名順',
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
-                  ),
-                ),
-                if (filteredItems.isEmpty)
-                  Padding(
+                  );
+                }
+                if (index == 1) {
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                    child: Text(
+                      widget.showExpiredOnly
+                          ? '表示順：販売終了日が新しい順 → コード順 → 商品名順'
+                          : '表示順：販売終了日が近い順 → コード順 → 商品名順',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade700,
+                      ),
+                    ),
+                  );
+                }
+                if (filteredItems.isEmpty) {
+                  return Padding(
                     padding: const EdgeInsets.all(24),
                     child: Text(
                       widget.showExpiredOnly
@@ -1281,10 +1287,10 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: Colors.grey),
                     ),
-                  )
-                else
-                  for (final item in filteredItems) _buildItemCard(item),
-              ],
+                  );
+                }
+                return _buildItemCard(filteredItems[index - 2]);
+              },
             ),
       floatingActionButton: widget.showExpiredOnly
           ? null
