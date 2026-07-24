@@ -174,8 +174,24 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
     return '${d.year}年${d.month}月${d.day}日の発注分';
   }
 
+  String _deliveryTypeKey(Map<String, dynamic> item) {
+    final rawTypeKey = (item['typeKey'] ?? '').toString();
+    if (rawTypeKey == 'products' ||
+        rawTypeKey == 'testers' ||
+        rawTypeKey == 'equipments') {
+      return rawTypeKey;
+    }
+
+    final itemType = (item['itemType'] ?? rawTypeKey).toString();
+    if (itemType == '商品' || itemType == 'products') return 'products';
+    if (itemType == 'テスター' || itemType == 'testers') return 'testers';
+    if (itemType == '備品' || itemType == 'equipments') return 'equipments';
+
+    return rawTypeKey.isNotEmpty ? rawTypeKey : itemType;
+  }
+
   String _deliveryKey(Map<String, dynamic> item) {
-    final typeKey = (item['typeKey'] ?? item['itemType'] ?? '').toString();
+    final typeKey = _deliveryTypeKey(item);
     final storeId = (item['storeId'] ?? '').toString();
     final itemId = (item['itemId'] ?? '').toString();
     return '${typeKey}__${storeId}__$itemId';
@@ -253,7 +269,8 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
     final itemId = (item['itemId'] ?? '').toString();
     final itemName = (item['itemName'] ?? '').toString();
     final itemType = (item['itemType'] ?? '').toString();
-    final typeKey = (item['typeKey'] ?? '').toString();
+    final typeKey = _deliveryTypeKey(item);
+    final isProduct = typeKey == 'products' || itemType == '商品';
 
     if (storeId.isEmpty || itemId.isEmpty || typeKey.isEmpty) {
       if (mounted) {
@@ -312,14 +329,14 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         'itemType': itemType,
         'typeKey': typeKey,
       };
-      final stocksRef = itemType == '商品'
+      final stocksRef = isProduct
           ? AppSession.doc('stocks')
           : AppSession.doc('stocks_v2');
 
       // 納品記録の保存を先に行うと、権限・キャッシュ・旧データの影響で
       // 在庫加算前に止まることがある。納品処理では在庫加算を最優先にする。
       await showStep('納品処理中: 在庫に加算しています');
-      if (itemType == '商品') {
+      if (isProduct) {
         await stocksRef
             .set({
               storeId: {itemId: FieldValue.increment(remaining)},
