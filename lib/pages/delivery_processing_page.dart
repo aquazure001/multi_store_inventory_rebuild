@@ -20,6 +20,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
   final Map<String, Map<String, dynamic>> _externalDeliveredMaps =
       <String, Map<String, dynamic>>{};
   String _selectedDeliveryStoreId = '';
+  int _visibleBatchCount = 5;
 
   @override
   void initState() {
@@ -96,6 +97,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
                 setState(() {
                   _selectedDeliveryStoreId = value ?? '';
                   _selectedDeliveryKeys.clear();
+                  _visibleBatchCount = 5;
                 });
               },
             ),
@@ -149,6 +151,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         _externalDeliveredMaps
           ..clear()
           ..addAll(externalDeliveredMaps);
+        _visibleBatchCount = 5;
         _loading = false;
       });
     } catch (e) {
@@ -588,13 +591,46 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
                             style: TextStyle(fontSize: 16),
                           ),
                         )
-                      : ListView.builder(
-                          padding: const EdgeInsets.all(16),
-                          itemCount: _batches.length,
-                          itemBuilder: (context, index) => _buildBatchCard(
-                            _batches[index],
-                            initiallyExpanded: index == 0,
-                          ),
+                      : Builder(
+                          builder: (context) {
+                            final visibleBatches = _batches
+                                .take(_visibleBatchCount)
+                                .toList();
+                            final hasMore =
+                                visibleBatches.length < _batches.length;
+                            return ListView.builder(
+                              padding: const EdgeInsets.all(16),
+                              itemCount:
+                                  visibleBatches.length + (hasMore ? 1 : 0),
+                              itemBuilder: (context, index) {
+                                if (index < visibleBatches.length) {
+                                  return _buildBatchCard(
+                                    visibleBatches[index],
+                                    initiallyExpanded: index == 0,
+                                  );
+                                }
+                                return Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 12,
+                                  ),
+                                  child: OutlinedButton.icon(
+                                    onPressed: () {
+                                      setState(() {
+                                        _visibleBatchCount = min(
+                                          _visibleBatchCount + 5,
+                                          _batches.length,
+                                        );
+                                      });
+                                    },
+                                    icon: const Icon(Icons.expand_more),
+                                    label: Text(
+                                      'もっと見る（${visibleBatches.length}/${_batches.length}件）',
+                                    ),
+                                  ),
+                                );
+                              },
+                            );
+                          },
                         ),
                 ),
               ],
