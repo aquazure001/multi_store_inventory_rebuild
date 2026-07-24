@@ -97,6 +97,8 @@ class _StoreListPageState extends State<StoreListPage> {
     final codeCtrl = TextEditingController();
     final idCtrl = TextEditingController();
 
+    if (!context.mounted) return;
+
     final result = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -600,7 +602,8 @@ class _StoreListPageState extends State<StoreListPage> {
                   child: Image.memory(
                     base64Decode(AppSession.logoUrl),
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => const Icon(Icons.business),
+                    errorBuilder: (context, error, stackTrace) =>
+                        const Icon(Icons.business),
                   ),
                 ),
               )

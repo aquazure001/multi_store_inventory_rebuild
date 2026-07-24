@@ -274,6 +274,7 @@ class _OrgManagementPageState extends State<OrgManagementPage> {
     setState(() => _loading = false);
 
     // パスワード確認ダイアログ
+    if (!context.mounted) return;
     final passCtrl = TextEditingController();
     final confirmed = await showDialog<bool>(
       context: context,
@@ -526,8 +527,9 @@ class _OrgManagementPageState extends State<OrgManagementPage> {
                                         width: 100,
                                         height: 100,
                                         fit: BoxFit.cover,
-                                        errorBuilder: (_, __, ___) =>
-                                            _logoPlaceholder(),
+                                        errorBuilder:
+                                            (context, error, stackTrace) =>
+                                                _logoPlaceholder(),
                                       )
                                     : _logoPlaceholder(),
                               ),

@@ -82,7 +82,7 @@ class _PendingApprovalPageState extends State<PendingApprovalPage> {
                 onPressed: () async {
                   await FirebaseAuth.instance.signOut();
                   AppSession.clear();
-                  if (mounted) {
+                  if (context.mounted) {
                     Navigator.of(context).pushAndRemoveUntil(
                       MaterialPageRoute(builder: (_) => const AuthGate()),
                       (_) => false,
@@ -297,9 +297,9 @@ class _SuperAdminPageState extends State<SuperAdminPage> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
+          color: color.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: color.withOpacity(0.5)),
+          border: Border.all(color: color.withValues(alpha: 0.5)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
