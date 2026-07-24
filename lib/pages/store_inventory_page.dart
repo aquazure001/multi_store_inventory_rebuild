@@ -746,273 +746,111 @@ class _InventoryListState extends State<_InventoryList> {
               latest == null || date.isAfter(latest) ? date : latest,
         );
 
+    final headerWidgets = <Widget>[
+      TextField(
+        decoration: const InputDecoration(
+          prefixIcon: Icon(Icons.search),
+          hintText: '検索...',
+          border: OutlineInputBorder(),
+        ),
+        onChanged: (value) => setState(() => _query = value),
+      ),
+      const SizedBox(height: 8),
+      if (unacknowledgedOrders.isNotEmpty)
+        Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.red.shade50,
+            border: Border.all(color: Colors.red.shade200),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.notifications_active_outlined,
+                color: Colors.red.shade700,
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  latestOrderDate == null
+                      ? 'PDF発行済み・未確認の${widget.title}があります'
+                      : 'PDF発行済み・未確認: ${unacknowledgedOrders.length}品目\n発注日: ${_formatDateTime(latestOrderDate)}',
+                  style: TextStyle(
+                    color: Colors.red.shade800,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: () => _acknowledgeOrders(context),
+                child: const Text('確認済み'),
+              ),
+            ],
+          ),
+        ),
+      if (orderedCount > 0)
+        Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.orange.shade50,
+            border: Border.all(color: Colors.orange.shade300),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.local_shipping_outlined,
+                color: Colors.orange.shade700,
+                size: 18,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '発注済 $orderedCount 品目（リスト先頭に表示中）',
+                  style: TextStyle(
+                    color: Colors.orange.shade800,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: () => _clearOrderedDisplay(context),
+                child: const Text('表示クリア'),
+              ),
+            ],
+          ),
+        ),
+      Card(
+        child: ListTile(
+          title: Text('${widget.title}数'),
+          trailing: Text(
+            '${filtered.length} 件',
+            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+          ),
+        ),
+      ),
+      const SizedBox(height: 8),
+    ];
+
     return Column(
       children: [
         Expanded(
-          child: ListView(
+          child: ListView.builder(
             padding: const EdgeInsets.all(16),
-            children: [
-              TextField(
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.search),
-                  hintText: '検索...',
-                  border: OutlineInputBorder(),
-                ),
-                onChanged: (value) => setState(() => _query = value),
-              ),
-              const SizedBox(height: 8),
-              if (unacknowledgedOrders.isNotEmpty)
-                Container(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.red.shade50,
-                    border: Border.all(color: Colors.red.shade200),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.notifications_active_outlined,
-                        color: Colors.red.shade700,
-                        size: 20,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          latestOrderDate == null
-                              ? 'PDF発行済み・未確認の${widget.title}があります'
-                              : 'PDF発行済み・未確認: ${unacknowledgedOrders.length}品目\n発注日: ${_formatDateTime(latestOrderDate)}',
-                          style: TextStyle(
-                            color: Colors.red.shade800,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
-                          ),
-                        ),
-                      ),
-                      TextButton(
-                        onPressed: () => _acknowledgeOrders(context),
-                        child: const Text('確認済み'),
-                      ),
-                    ],
-                  ),
-                ),
-              if (orderedCount > 0)
-                Container(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.orange.shade50,
-                    border: Border.all(color: Colors.orange.shade300),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.local_shipping_outlined,
-                        color: Colors.orange.shade700,
-                        size: 18,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          '発注済 $orderedCount 品目（リスト先頭に表示中）',
-                          style: TextStyle(
-                            color: Colors.orange.shade800,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
-                          ),
-                        ),
-                      ),
-                      TextButton(
-                        onPressed: () => _clearOrderedDisplay(context),
-                        child: const Text('表示クリア'),
-                      ),
-                    ],
-                  ),
-                ),
-              Card(
-                child: ListTile(
-                  title: Text('${widget.title}数'),
-                  trailing: Text(
-                    '${filtered.length} 件',
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              for (final item in filtered)
-                Card(
-                  color: item.discontinued ? Colors.grey.shade100 : null,
-                  child: ListTile(
-                    title: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            item.name,
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: item.discontinued ? Colors.grey : null,
-                              decoration: item.discontinued
-                                  ? TextDecoration.lineThrough
-                                  : null,
-                            ),
-                          ),
-                        ),
-                        if (item.discontinued)
-                          Container(
-                            margin: const EdgeInsets.only(left: 6),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.grey.shade300,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: const Text(
-                              '販売終了',
-                              style: TextStyle(
-                                fontSize: 10,
-                                color: Colors.grey,
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                    subtitle: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text('コード: ${item.code}'),
-                        if ((_localOrderedStocks[item.id] ?? 0) > 0)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 3),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 6,
-                                    vertical: 2,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.orange.shade100,
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: Text(
-                                    _localOrderMetas[item.id]?.orderedAt == null
-                                        ? '納品予定: ${_localOrderedStocks[item.id]}'
-                                        : '納品予定: ${_localOrderedStocks[item.id]} / ${_formatDateTime(_localOrderMetas[item.id]!.orderedAt!)}',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: Colors.orange.shade800,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                      ],
-                    ),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        GestureDetector(
-                          onTap: () => _showBaseStockInput(context, item),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: item.discontinued
-                                  ? Colors.grey.shade100
-                                  : Colors.blue.shade50,
-                              border: Border.all(
-                                color: item.discontinued
-                                    ? Colors.grey.shade300
-                                    : Colors.blue.shade200,
-                              ),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  '基準',
-                                  style: TextStyle(
-                                    fontSize: 9,
-                                    color: item.discontinued
-                                        ? Colors.grey
-                                        : Colors.blue.shade600,
-                                  ),
-                                ),
-                                Text(
-                                  '${_localBaseStocks[item.id] ?? 0}',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
-                                    color: item.discontinued
-                                        ? Colors.grey
-                                        : Colors.blue.shade700,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        IconButton(
-                          icon: const Icon(Icons.remove_circle_outline),
-                          color: item.discontinued
-                              ? Colors.grey
-                              : Colors.redAccent,
-                          onPressed: () => _decrement(item.id),
-                        ),
-                        GestureDetector(
-                          onLongPress: () => _showDirectInput(context, item),
-                          child: Container(
-                            constraints: const BoxConstraints(minWidth: 48),
-                            alignment: Alignment.center,
-                            child: Text(
-                              '${_localStocks[item.id] ?? 0}',
-                              style: TextStyle(
-                                fontSize: 24,
-                                fontWeight: FontWeight.bold,
-                                color: () {
-                                  if (item.discontinued) return Colors.grey;
-                                  final cur = _localStocks[item.id] ?? 0;
-                                  final base = _localBaseStocks[item.id] ?? 0;
-                                  if (base > 0 && cur < base) return Colors.red;
-                                  if (_changedIds.contains(item.id))
-                                    return Colors.orange;
-                                  return null;
-                                }(),
-                              ),
-                            ),
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.add_circle_outline),
-                          color: item.discontinued ? Colors.grey : Colors.green,
-                          onPressed: () => _increment(item.id),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-            ],
+            itemCount: headerWidgets.length + filtered.length,
+            itemBuilder: (context, index) {
+              if (index < headerWidgets.length) {
+                return headerWidgets[index];
+              }
+              final item = filtered[index - headerWidgets.length];
+              return _buildInventoryItemCard(context, item);
+            },
           ),
         ),
         if (_changedIds.isNotEmpty)
@@ -1038,6 +876,158 @@ class _InventoryListState extends State<_InventoryList> {
             ),
           ),
       ],
+    );
+  }
+
+  Widget _buildInventoryItemCard(BuildContext context, LegacyItem item) {
+    return Card(
+      color: item.discontinued ? Colors.grey.shade100 : null,
+      child: ListTile(
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                item.name,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: item.discontinued ? Colors.grey : null,
+                  decoration: item.discontinued
+                      ? TextDecoration.lineThrough
+                      : null,
+                ),
+              ),
+            ),
+            if (item.discontinued)
+              Container(
+                margin: const EdgeInsets.only(left: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Text(
+                  '販売終了',
+                  style: TextStyle(fontSize: 10, color: Colors.grey),
+                ),
+              ),
+          ],
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('コード: ${item.code}'),
+            if ((_localOrderedStocks[item.id] ?? 0) > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.shade100,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        _localOrderMetas[item.id]?.orderedAt == null
+                            ? '納品予定: ${_localOrderedStocks[item.id]}'
+                            : '納品予定: ${_localOrderedStocks[item.id]} / ${_formatDateTime(_localOrderMetas[item.id]!.orderedAt!)}',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.orange.shade800,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            GestureDetector(
+              onTap: () => _showBaseStockInput(context, item),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: item.discontinued
+                      ? Colors.grey.shade100
+                      : Colors.blue.shade50,
+                  border: Border.all(
+                    color: item.discontinued
+                        ? Colors.grey.shade300
+                        : Colors.blue.shade200,
+                  ),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '基準',
+                      style: TextStyle(
+                        fontSize: 9,
+                        color: item.discontinued
+                            ? Colors.grey
+                            : Colors.blue.shade600,
+                      ),
+                    ),
+                    Text(
+                      '${_localBaseStocks[item.id] ?? 0}',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: item.discontinued
+                            ? Colors.grey
+                            : Colors.blue.shade700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            IconButton(
+              icon: const Icon(Icons.remove_circle_outline),
+              color: item.discontinued ? Colors.grey : Colors.redAccent,
+              onPressed: () => _decrement(item.id),
+            ),
+            GestureDetector(
+              onLongPress: () => _showDirectInput(context, item),
+              child: Container(
+                constraints: const BoxConstraints(minWidth: 48),
+                alignment: Alignment.center,
+                child: Text(
+                  '${_localStocks[item.id] ?? 0}',
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                    color: () {
+                      if (item.discontinued) return Colors.grey;
+                      final cur = _localStocks[item.id] ?? 0;
+                      final base = _localBaseStocks[item.id] ?? 0;
+                      if (base > 0 && cur < base) return Colors.red;
+                      if (_changedIds.contains(item.id)) return Colors.orange;
+                      return null;
+                    }(),
+                  ),
+                ),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.add_circle_outline),
+              color: item.discontinued ? Colors.grey : Colors.green,
+              onPressed: () => _increment(item.id),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
