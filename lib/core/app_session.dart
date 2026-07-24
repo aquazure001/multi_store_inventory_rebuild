@@ -134,27 +134,20 @@ Future<void> _loadAllAdsImpl(
     addFromDoc(AppSession.orgId, ownOrgData);
   }
 
-  // ② 他組織の広告を取得（全件スキャン → 権限なければ配信許可済みのみ）
+  // ② 他組織の広告を取得。
+  // 全組織を読むと起動やトップ画面が重くなるため、配信ONの広告だけ読む。
   try {
-    final snap = await fs.collection('orgs').get();
+    final snap = await fs
+        .collection('orgs')
+        .where('adDistribEnabled', isEqualTo: true)
+        .limit(50)
+        .get();
     for (final doc in snap.docs) {
       if (doc.id == AppSession.orgId) continue;
       if (entries.any((e) => e.orgId == doc.id)) continue;
       addFromDoc(doc.id, doc.data());
     }
-  } catch (_) {
-    try {
-      final snap = await fs
-          .collection('orgs')
-          .where('adDistribEnabled', isEqualTo: true)
-          .get();
-      for (final doc in snap.docs) {
-        if (doc.id == AppSession.orgId) continue;
-        if (entries.any((e) => e.orgId == doc.id)) continue;
-        addFromDoc(doc.id, doc.data());
-      }
-    } catch (_) {}
-  }
+  } catch (_) {}
 
   entries.sort((a, b) => a.slotNumber.compareTo(b.slotNumber));
   AppSession.distributedAds = entries;
