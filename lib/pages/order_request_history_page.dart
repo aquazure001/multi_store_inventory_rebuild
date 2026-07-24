@@ -192,28 +192,32 @@ class _OrderRequestHistoryPageState extends State<OrderRequestHistoryPage> {
                 padding: const EdgeInsets.all(24),
                 child: SelectableText('読み取りエラー\n\n$_error'),
               )
-            : ListView(
+            : ListView.builder(
                 padding: const EdgeInsets.all(16),
-                children: [
-                  const Card(
-                    child: Padding(
-                      padding: EdgeInsets.all(12),
-                      child: Text(
-                        '発注ボタンを押した履歴です。今後の発注は1回ごとに保存されます。旧形式・残存データは、以前から残っている現在の発注予定情報です。',
+                itemCount: 2 + (_entries.isEmpty ? 1 : _entries.length),
+                itemBuilder: (context, index) {
+                  if (index == 0) {
+                    return const Card(
+                      child: Padding(
+                        padding: EdgeInsets.all(12),
+                        child: Text(
+                          '発注ボタンを押した履歴です。今後の発注は1回ごとに保存されます。旧形式・残存データは、以前から残っている現在の発注予定情報です。',
+                        ),
                       ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  if (_entries.isEmpty)
-                    const Padding(
+                    );
+                  }
+                  if (index == 1) return const SizedBox(height: 12);
+                  if (_entries.isEmpty) {
+                    return const Padding(
                       padding: EdgeInsets.all(24),
                       child: Text(
                         '発注ボタン履歴はまだありません',
                         textAlign: TextAlign.center,
                       ),
-                    ),
-                  for (final entry in _entries) _buildEntry(entry),
-                ],
+                    );
+                  }
+                  return _buildEntry(_entries[index - 2]);
+                },
               ),
       ),
     );
