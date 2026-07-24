@@ -141,32 +141,8 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         }
       }
 
-      // 以前の修正で作った別ドキュメント側も、読める場合だけ併用する。
-      // 読めなくても納品画面は止めない。
-      for (final batch in visibleBatches) {
-        try {
-          final deliveryDoc = await AppSession.doc('order_delivery_status')
-              .collection('entries')
-              .doc(batch.id)
-              .get()
-              .timeout(const Duration(seconds: 4));
-          final deliveryData = deliveryDoc.data();
-          final rawDeliveredMap = deliveryData == null
-              ? null
-              : deliveryData['deliveredMap'];
-          if (rawDeliveredMap is Map) {
-            externalDeliveredMaps
-                .putIfAbsent(batch.id, () => <String, dynamic>{})
-                .addAll(
-                  Map<String, dynamic>.from(
-                    rawDeliveredMap.map((k, v) => MapEntry(k.toString(), v)),
-                  ),
-                );
-          }
-        } catch (_) {
-          // 新規保存先が読めない場合でも、納品画面自体は表示する。
-        }
-      }
+      // 旧互換用の order_delivery_status は個別読み込みが多く重いため、
+      // 画面表示時には読まない。現在の正しい納品記録は orders._deliveredBatches。
 
       setState(() {
         _batches = visibleBatches;
