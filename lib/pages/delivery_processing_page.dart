@@ -588,11 +588,13 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
                             style: TextStyle(fontSize: 16),
                           ),
                         )
-                      : ListView(
+                      : ListView.builder(
                           padding: const EdgeInsets.all(16),
-                          children: [
-                            for (final b in _batches) _buildBatchCard(b),
-                          ],
+                          itemCount: _batches.length,
+                          itemBuilder: (context, index) => _buildBatchCard(
+                            _batches[index],
+                            initiallyExpanded: index == 0,
+                          ),
                         ),
                 ),
               ],
@@ -600,7 +602,10 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
     );
   }
 
-  Widget _buildBatchCard(QueryDocumentSnapshot<Map<String, dynamic>> batch) {
+  Widget _buildBatchCard(
+    QueryDocumentSnapshot<Map<String, dynamic>> batch, {
+    bool initiallyExpanded = false,
+  }) {
     final data = batch.data();
     final rawItems = data['items'];
     final items = rawItems is List
@@ -626,7 +631,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       child: ExpansionTile(
-        initiallyExpanded: pending > 0,
+        initiallyExpanded: initiallyExpanded && pending > 0,
         title: Text(
           _batchTitle(data),
           style: const TextStyle(fontWeight: FontWeight.bold),
