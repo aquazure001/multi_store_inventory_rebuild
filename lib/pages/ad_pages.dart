@@ -59,7 +59,7 @@ class _FullScreenAdDialogState extends State<_FullScreenAdDialog> {
                           child: Image.memory(
                             base64Decode(ad.image),
                             fit: BoxFit.contain,
-                            errorBuilder: (_, __, ___) =>
+                            errorBuilder: (context, error, stackTrace) =>
                                 const SizedBox.shrink(),
                           ),
                         ),
@@ -92,7 +92,7 @@ class _FullScreenAdDialogState extends State<_FullScreenAdDialog> {
                           Text(
                             'タップして詳細を見る',
                             style: TextStyle(
-                              color: Colors.white.withOpacity(0.6),
+                              color: Colors.white.withValues(alpha: 0.6),
                               fontSize: 12,
                             ),
                           ),
@@ -173,7 +173,8 @@ class AdInlineCardWidget extends StatelessWidget {
                     width: compact ? 56 : 72,
                     height: compact ? 56 : 72,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                    errorBuilder: (context, error, stackTrace) =>
+                        const SizedBox.shrink(),
                   ),
                 ),
               if (ad.image.isNotEmpty) const SizedBox(width: 10),
@@ -308,7 +309,7 @@ class _AdBannerWidgetState extends State<AdBannerWidget> {
                             height: 100,
                             width: 100,
                             fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) =>
+                            errorBuilder: (context, error, stackTrace) =>
                                 const SizedBox.shrink(),
                           ),
                         ),
@@ -401,8 +402,12 @@ class _AdManagementPageState extends State<AdManagementPage> {
 
   @override
   void dispose() {
-    for (final c in _msgCtrls) c.dispose();
-    for (final c in _urlCtrls) c.dispose();
+    for (final c in _msgCtrls) {
+      c.dispose();
+    }
+    for (final c in _urlCtrls) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -589,7 +594,7 @@ class _AdManagementPageState extends State<AdManagementPage> {
                   Padding(
                     padding: const EdgeInsets.only(bottom: 12),
                     child: Text(
-                      '割り当てスロット番号: ${base}〜${base + _maxSlots - 1}',
+                      '割り当てスロット番号: $base〜${base + _maxSlots - 1}',
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors.grey.shade600,
