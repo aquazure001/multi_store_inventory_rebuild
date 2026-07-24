@@ -133,6 +133,87 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
         (data['pdfBase64'] ?? '').toString().isNotEmpty;
   }
 
+  bool _hasEmbeddedPdf(Map<String, dynamic> data) {
+    return (data['pdfBase64'] ?? '').toString().isNotEmpty;
+  }
+
+  Future<void> _separateEmbeddedPdf(
+    QueryDocumentSnapshot<Map<String, dynamic>> batch,
+  ) async {
+    final data = batch.data();
+    final raw = (data['pdfBase64'] ?? '').toString();
+    if (raw.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('この発注表には分離対象の内蔵PDFがありません'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('保存PDFを軽量化しますか？'),
+        content: const Text(
+          'この発注表の中に入っているPDF本体を別の保存場所へ移します。\n\n'
+          '発注表の内容やPDFは消えません。\n'
+          '一覧表示を軽くするための処理です。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('軽量化する'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      final savedName = (data['pdfFileName'] ?? '').toString();
+      await AppSession.doc(
+        'order_saved_pdfs',
+      ).collection('entries').doc(batch.id).set({
+        'batchId': batch.id,
+        'pdfBase64': raw,
+        'pdfFileName': savedName,
+        'pdfKind': (data['pdfKind'] ?? '').toString(),
+        'createdAt': data['createdAt'],
+        'createdAtLocal': data['createdAtLocal'],
+        'separatedAt': FieldValue.serverTimestamp(),
+        'separatedAtLocal': DateTime.now().toIso8601String(),
+        'separatedBy': AppSession.nickname,
+      }, SetOptions(merge: true));
+      await batch.reference.update({
+        'hasSavedPdf': true,
+        'pdfBase64': FieldValue.delete(),
+        'pdfSeparatedAt': FieldValue.serverTimestamp(),
+        'pdfSeparatedAtLocal': DateTime.now().toIso8601String(),
+      });
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('保存PDFを分離して、発注表一覧を軽量化しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('PDF分離失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
   Future<void> _openSavedPdf(
     QueryDocumentSnapshot<Map<String, dynamic>> batch,
   ) async {
@@ -579,6 +660,19 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
                   label: Text('保存PDFを開く（$pdfKindLabel）'),
                 ),
               ),
+              if (_hasEmbeddedPdf(data)) ...[
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: canceled
+                        ? null
+                        : () => _separateEmbeddedPdf(batch),
+                    icon: const Icon(Icons.compress, size: 18),
+                    label: const Text('保存PDFを分離して軽量化'),
+                  ),
+                ),
+              ],
               const SizedBox(height: 8),
             ],
             Row(
