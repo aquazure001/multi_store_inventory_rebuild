@@ -24,28 +24,18 @@ class AllStoresInventoryPage extends StatelessWidget {
   const AllStoresInventoryPage({super.key});
 
   Future<_AllStoresData> _load() async {
+    final masterDataFuture = _loadMasterData();
     final results = await Future.wait([
-      AppSession.doc('stores').get(),
-      AppSession.doc('products').get(),
-      AppSession.doc('testers').get(),
-      AppSession.doc('equipments').get(),
       AppSession.doc('stocks').get(),
       AppSession.doc('stocks_v2').get(),
     ]);
+    final masterData = await masterDataFuture;
 
     // Firestore配列順のまま（ソートなし）
-    final storesRaw = results[0].data()?['items'];
-    final stores = <LegacyStore>[];
-    if (storesRaw is List) {
-      for (final item in storesRaw.whereType<Map>()) {
-        final map = item.map((k, v) => MapEntry(k.toString(), v));
-        final store = LegacyStore.fromMap(map);
-        if (store.id.isNotEmpty) stores.add(store);
-      }
-    }
+    final stores = List<LegacyStore>.from(masterData.stores);
 
-    final stocksData = results[4].data() ?? {};
-    final v2Raw = results[5].data() ?? {};
+    final stocksData = results[0].data() ?? {};
+    final v2Raw = results[1].data() ?? {};
     final v2TMap = (v2Raw['testers'] is Map) ? v2Raw['testers'] as Map : {};
     final v2EMap = (v2Raw['equipments'] is Map)
         ? v2Raw['equipments'] as Map
@@ -63,9 +53,9 @@ class AllStoresInventoryPage extends StatelessWidget {
 
     return _AllStoresData(
       stores: stores,
-      products: _parseItemsFromDoc(results[1]),
-      testers: _parseItemsFromDoc(results[2]),
-      equipments: _parseItemsFromDoc(results[3]),
+      products: masterData.products,
+      testers: masterData.testers,
+      equipments: masterData.equipments,
       stocksByStore: stocksByStore,
     );
   }
@@ -160,30 +150,37 @@ class _AllStoresItemListState extends State<_AllStoresItemList> {
           item.code.toLowerCase().contains(q);
     }).toList();
 
-    return ListView(
+    return ListView.builder(
       padding: const EdgeInsets.all(16),
-      children: [
-        TextField(
-          decoration: const InputDecoration(
-            prefixIcon: Icon(Icons.search),
-            hintText: '検索...',
-            border: OutlineInputBorder(),
-          ),
-          onChanged: (v) => setState(() => _query = v),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: ListTile(
-            title: const Text('件数'),
-            trailing: Text(
-              '${filtered.length} 件',
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+      itemCount: 3 + filtered.length,
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          return TextField(
+            decoration: const InputDecoration(
+              prefixIcon: Icon(Icons.search),
+              hintText: '検索...',
+              border: OutlineInputBorder(),
             ),
-          ),
-        ),
-        const SizedBox(height: 8),
-        for (final item in filtered) _buildItemCard(item),
-      ],
+            onChanged: (v) => setState(() => _query = v),
+          );
+        }
+        if (index == 1) return const SizedBox(height: 12);
+        if (index == 2) {
+          return Card(
+            child: ListTile(
+              title: const Text('件数'),
+              trailing: Text(
+                '${filtered.length} 件',
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          );
+        }
+        return _buildItemCard(filtered[index - 3]);
+      },
     );
   }
 
