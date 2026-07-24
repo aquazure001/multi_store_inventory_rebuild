@@ -115,19 +115,13 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
       }
     }
 
-    // 納品処理の軽量化後、納品済み情報は orders/batches/* の deliveredMap に残る。
-    // 店舗在庫一覧では orders の未納品数から deliveredMap 分を差し引き、
-    // 過去に納品済みなのに「納品予定」が残る表示を防ぐ。
-    try {
-      final deliveredSnap = await AppSession.doc('orders')
-          .collection('batches')
-          .orderBy('createdAt', descending: true)
-          .limit(30)
-          .get();
-      for (final doc in deliveredSnap.docs) {
-        final deliveredMap = doc.data()['deliveredMap'];
-        if (deliveredMap is! Map) continue;
-        for (final raw in deliveredMap.values) {
+    // 納品済み情報は、すでに読み込んでいる orders._deliveredBatches から補正する。
+    // 以前のように orders/batches を追加で最大30件読む処理は重いため行わない。
+    final rawDeliveredBatches = ordersRaw['_deliveredBatches'];
+    if (rawDeliveredBatches is Map) {
+      for (final rawBatch in rawDeliveredBatches.values) {
+        if (rawBatch is! Map) continue;
+        for (final raw in rawBatch.values) {
           if (raw is! Map) continue;
           final delivered = Map<String, dynamic>.from(
             raw.map((k, v) => MapEntry(k.toString(), v)),
@@ -148,8 +142,6 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
           }
         }
       }
-    } catch (_) {
-      // 納品済み補正の読み取りに失敗しても、在庫一覧自体は表示する。
     }
 
     return _InventoryData(
