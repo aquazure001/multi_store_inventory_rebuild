@@ -240,6 +240,49 @@ class _OrderListPageState extends State<OrderListPage> {
         .add(_orderRequestLogData(entry, qty, totalQty, source));
   }
 
+  void _applyOrderRequestLocally(_OrderEntry entry, int qty, int totalQty) {
+    final now = DateTime.now();
+    final key = _orderKey(entry);
+    final currentMeta = _latestOrderMeta(entry);
+    setState(() {
+      _orderedQtys[key] = totalQty;
+      _orderMetas[key] = _OrderMeta(
+        requestedAt: now,
+        orderedAt: currentMeta.orderedAt,
+        acknowledgedAt: currentMeta.acknowledgedAt,
+        requestedBy: AppSession.nickname,
+        orderedBy: currentMeta.orderedBy,
+        acknowledgedBy: currentMeta.acknowledgedBy,
+        lastRequestedQty: qty,
+      );
+    });
+  }
+
+  void _applyOrderCorrectionLocally(_OrderEntry entry, int newQty) {
+    final key = _orderKey(entry);
+    final currentMeta = _latestOrderMeta(entry);
+    setState(() {
+      _orderedQtys[key] = newQty;
+      _orderMetas[key] = _OrderMeta(
+        requestedAt: currentMeta.requestedAt,
+        orderedAt: currentMeta.orderedAt,
+        acknowledgedAt: null,
+        requestedBy: currentMeta.requestedBy,
+        orderedBy: currentMeta.orderedBy,
+        acknowledgedBy: '',
+        lastRequestedQty: currentMeta.lastRequestedQty,
+      );
+    });
+  }
+
+  void _applyOrderCancelLocally(_OrderEntry entry) {
+    final key = _orderKey(entry);
+    setState(() {
+      _orderedQtys.remove(key);
+      _orderMetas.remove(key);
+    });
+  }
+
   Future<void> _placeOrder(
     BuildContext context,
     _OrderEntry entry,
@@ -325,7 +368,7 @@ class _OrderListPageState extends State<OrderListPage> {
 
       await _recordOrderRequestLog(entry, qty, totalQty, 'single');
 
-      setState(() => _orderedQtys[_orderKey(entry)] = totalQty);
+      _applyOrderRequestLocally(entry, qty, totalQty);
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -337,7 +380,6 @@ class _OrderListPageState extends State<OrderListPage> {
           ),
         );
       }
-      await _load();
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -482,12 +524,14 @@ class _OrderListPageState extends State<OrderListPage> {
       }
       await historyBatch.commit();
 
-      setState(() {
-        for (final e in targetEntries) {
-          final existing = _orderedQtys[_orderKey(e)] ?? 0;
-          _orderedQtys[_orderKey(e)] = existing + e.effectiveShortage;
-        }
-      });
+      for (final e in targetEntries) {
+        final existing = _orderedQtys[_orderKey(e)] ?? 0;
+        _applyOrderRequestLocally(
+          e,
+          e.effectiveShortage,
+          existing + e.effectiveShortage,
+        );
+      }
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -499,7 +543,6 @@ class _OrderListPageState extends State<OrderListPage> {
           ),
         );
       }
-      await _load();
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -604,7 +647,7 @@ class _OrderListPageState extends State<OrderListPage> {
         '${_orderMetaField(entry)}.acknowledgedAt': FieldValue.delete(),
         '${_orderMetaField(entry)}.acknowledgedBy': FieldValue.delete(),
       });
-      setState(() => _orderedQtys[key] = newQty);
+      _applyOrderCorrectionLocally(entry, newQty);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -613,7 +656,6 @@ class _OrderListPageState extends State<OrderListPage> {
           ),
         );
       }
-      await _load();
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -662,7 +704,7 @@ class _OrderListPageState extends State<OrderListPage> {
         '$typeKey.${entry.store.id}.${entry.item.id}': FieldValue.delete(),
         '${_orderMetaField(entry)}': FieldValue.delete(),
       });
-      setState(() => _orderedQtys.remove(key));
+      _applyOrderCancelLocally(entry);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -671,7 +713,6 @@ class _OrderListPageState extends State<OrderListPage> {
           ),
         );
       }
-      await _load();
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
