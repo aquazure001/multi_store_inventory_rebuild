@@ -714,12 +714,13 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
             );
             if (picked == null) return;
             setS(() {
-              if (field == 'start')
+              if (field == 'start') {
                 salesStart = picked;
-              else if (field == 'end')
+              } else if (field == 'end') {
                 salesEnd = picked;
-              else
+              } else {
                 arrival = picked;
+              }
             });
           }
 

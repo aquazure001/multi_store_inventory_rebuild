@@ -108,8 +108,9 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
         .where((i) => i.id.isNotEmpty)
         .toList();
     items.sort((a, b) {
-      if (a.code.isEmpty && b.code.isEmpty)
+      if (a.code.isEmpty && b.code.isEmpty) {
         return _naturalCompare(a.name, b.name);
+      }
       if (a.code.isEmpty) return 1;
       if (b.code.isEmpty) return -1;
       final c = _naturalCompare(a.code, b.code);

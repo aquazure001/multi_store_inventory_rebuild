@@ -100,13 +100,16 @@ class _UserLoaderState extends State<_UserLoader> {
         // 広告は店舗一覧側で背景読み込みする。
       }
 
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() => _loading = false);
+      }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _error = e.toString();
           _loading = false;
         });
+      }
     }
   }
 
