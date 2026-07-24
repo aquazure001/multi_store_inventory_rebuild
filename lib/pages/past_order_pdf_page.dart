@@ -15,6 +15,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
   bool _loading = true;
   String? _error;
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _batches = [];
+  int _visibleCount = 20;
 
   bool get _canViewPastOrders => AppSession.isAdmin || AppSession.isSuperAdmin;
 
@@ -98,6 +99,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
         _batches = snap.docs
             .where((doc) => (doc.data()['status'] ?? '') != 'canceled')
             .toList();
+        _visibleCount = 20;
         _loading = false;
       });
     } catch (e) {
@@ -738,22 +740,48 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
               )
             : _batches.isEmpty
             ? const Center(child: Text('過去の発注表はありません'))
-            : ListView.builder(
-                padding: const EdgeInsets.all(16),
-                itemCount: _batches.length + 2,
-                itemBuilder: (context, index) {
-                  if (index == 0) {
-                    return const Card(
-                      child: Padding(
-                        padding: EdgeInsets.all(12),
-                        child: Text(
-                          '発注確定PDFを出した時点の発注表を再出力できます。ここでは在庫や発注数は変更しません。',
+            : Builder(
+                builder: (context) {
+                  final visibleBatches = _batches.take(_visibleCount).toList();
+                  final hasMore = visibleBatches.length < _batches.length;
+                  return ListView.builder(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: 2 + visibleBatches.length + (hasMore ? 1 : 0),
+                    itemBuilder: (context, index) {
+                      if (index == 0) {
+                        return const Card(
+                          child: Padding(
+                            padding: EdgeInsets.all(12),
+                            child: Text(
+                              '発注確定PDFを出した時点の発注表を再出力できます。ここでは在庫や発注数は変更しません。',
+                            ),
+                          ),
+                        );
+                      }
+                      if (index == 1) return const SizedBox(height: 12);
+                      final batchIndex = index - 2;
+                      if (batchIndex < visibleBatches.length) {
+                        return _buildBatchCard(visibleBatches[batchIndex]);
+                      }
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        child: OutlinedButton.icon(
+                          onPressed: () {
+                            setState(() {
+                              _visibleCount = min(
+                                _visibleCount + 20,
+                                _batches.length,
+                              );
+                            });
+                          },
+                          icon: const Icon(Icons.expand_more),
+                          label: Text(
+                            'もっと見る（${visibleBatches.length}/${_batches.length}件）',
+                          ),
                         ),
-                      ),
-                    );
-                  }
-                  if (index == 1) return const SizedBox(height: 12);
-                  return _buildBatchCard(_batches[index - 2]);
+                      );
+                    },
+                  );
                 },
               ),
       ),
