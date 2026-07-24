@@ -251,7 +251,7 @@ class _AdBannerWidgetState extends State<AdBannerWidget> {
     final initAds = AppSession.distributedAds;
     if (initAds.isNotEmpty) _index = Random().nextInt(initAds.length);
     // 広告がなくてもタイマーは常に起動（後からロードされた場合も対応）
-    _timer = Timer.periodic(const Duration(seconds: 5), (_) {
+    _timer = Timer.periodic(const Duration(seconds: 20), (_) {
       if (!mounted) return;
       final ads = AppSession.distributedAds;
       if (ads.isEmpty) return;
@@ -283,7 +283,7 @@ class _AdBannerWidgetState extends State<AdBannerWidget> {
     if (ads.isNotEmpty) {
       final ad = ads[_index % ads.length];
       return AnimatedSwitcher(
-        duration: const Duration(milliseconds: 600),
+        duration: const Duration(milliseconds: 250),
         child: GestureDetector(
           key: ValueKey(_tick),
           onTap: ad.url.isNotEmpty ? () => _openLink(ad.url) : null,
