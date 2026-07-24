@@ -140,7 +140,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     final data = batch.data();
     final raw = (data['pdfBase64'] ?? '').toString();
     if (raw.isEmpty) {
-      if (!context.mounted) return;
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('この発注表には分離対象の内蔵PDFがありません'),
@@ -231,7 +231,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     }
 
     if (raw.isEmpty) {
-      if (!context.mounted) return;
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('この発注表には保存済みPDFがありません'),
@@ -251,7 +251,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
         filename: savedName.isEmpty ? fallbackName : savedName,
       );
     } catch (e) {
-      if (!context.mounted) return;
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('保存PDFを開けません: $e'), backgroundColor: Colors.red),
       );

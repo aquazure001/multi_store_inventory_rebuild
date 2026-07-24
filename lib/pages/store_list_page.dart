@@ -97,7 +97,7 @@ class _StoreListPageState extends State<StoreListPage> {
     final codeCtrl = TextEditingController();
     final idCtrl = TextEditingController();
 
-    if (!context.mounted) return;
+    if (!mounted) return;
 
     final result = await showDialog<bool>(
       context: context,
@@ -704,7 +704,7 @@ class _StoreListPageState extends State<StoreListPage> {
                 );
               } else if (value == 'order') {
                 await _showFullScreenAd(context);
-                if (!context.mounted) return;
+                if (!mounted) return;
                 Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const OrderListPage()),
                 );
@@ -1143,7 +1143,7 @@ class _StoreListPageState extends State<StoreListPage> {
                             trailing: const Icon(Icons.chevron_right),
                             onTap: () async {
                               await _showFullScreenAd(context);
-                              if (!context.mounted) return;
+                              if (!mounted) return;
                               Navigator.of(context).push(
                                 MaterialPageRoute(
                                   builder: (_) =>
