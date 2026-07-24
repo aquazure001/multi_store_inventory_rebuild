@@ -779,6 +779,26 @@ class _OrderListPageState extends State<OrderListPage> {
     });
   }
 
+  void _applyPdfIssuedLocally(List<_OrderEntry> entries) {
+    final issuedAt = DateTime.now();
+    if (!mounted) return;
+    setState(() {
+      for (final entry in entries) {
+        final key = _orderKey(entry);
+        final meta = _latestOrderMeta(entry);
+        _orderMetas[key] = _OrderMeta(
+          requestedAt: meta.requestedAt,
+          orderedAt: issuedAt,
+          acknowledgedAt: null,
+          requestedBy: meta.requestedBy,
+          orderedBy: AppSession.nickname,
+          acknowledgedBy: '',
+          lastRequestedQty: meta.lastRequestedQty,
+        );
+      }
+    });
+  }
+
   Future<void> _exportPdfByStore(
     BuildContext context,
     List<_OrderEntry> entries,
@@ -892,7 +912,7 @@ class _OrderListPageState extends State<OrderListPage> {
         pdfKind: 'store',
         pdfFileName: fileName,
       );
-      await _load();
+      _applyPdfIssuedLocally(pdfEntries);
     } finally {
       if (mounted) setState(() => _creatingPdf = false);
     }
@@ -1037,7 +1057,7 @@ class _OrderListPageState extends State<OrderListPage> {
         pdfKind: 'item',
         pdfFileName: fileName,
       );
-      await _load();
+      _applyPdfIssuedLocally(pdfEntries);
     } finally {
       if (mounted) setState(() => _creatingPdf = false);
     }
