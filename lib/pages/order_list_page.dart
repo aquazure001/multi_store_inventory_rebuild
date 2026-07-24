@@ -1483,61 +1483,69 @@ class _OrderListPageState extends State<OrderListPage> {
     for (final e in filtered) {
       byStore.putIfAbsent(e.store, () => []).add(e);
     }
+    final storeSections = byStore.entries.toList();
 
-    return ListView(
+    return ListView.builder(
       padding: const EdgeInsets.all(16),
-      children: [
-        Row(
-          children: [
-            if (_canConfirmOrders) ...[
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: _creatingPdf
-                      ? null
-                      : () => _exportPdfByStore(context, filtered),
-                  icon: const Icon(Icons.picture_as_pdf, size: 18),
-                  label: const Text('店舗別 発注確定PDF'),
+      itemCount: 5 + (filtered.isEmpty ? 1 : storeSections.length),
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          return Row(
+            children: [
+              if (_canConfirmOrders) ...[
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _creatingPdf
+                        ? null
+                        : () => _exportPdfByStore(context, filtered),
+                    icon: const Icon(Icons.picture_as_pdf, size: 18),
+                    label: const Text('店舗別 発注確定PDF'),
+                  ),
                 ),
+                const SizedBox(width: 8),
+              ],
+              OutlinedButton.icon(
+                onPressed: () => Navigator.of(context).pop(),
+                icon: const Icon(Icons.arrow_back, size: 18),
+                label: const Text('戻る'),
               ),
-              const SizedBox(width: 8),
             ],
-            OutlinedButton.icon(
-              onPressed: () => Navigator.of(context).pop(),
-              icon: const Icon(Icons.arrow_back, size: 18),
-              label: const Text('戻る'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        const AdInlineCardWidget(compact: true),
-        _buildFilterChips(),
-        const SizedBox(height: 8),
-        if (filtered.isEmpty)
-          const Padding(
+          );
+        }
+        if (index == 1) return const SizedBox(height: 8);
+        if (index == 2) return const AdInlineCardWidget(compact: true);
+        if (index == 3) return _buildFilterChips();
+        if (index == 4) return const SizedBox(height: 8);
+        if (filtered.isEmpty) {
+          return const Padding(
             padding: EdgeInsets.all(24),
             child: Text(
               '選択された種別の発注品はありません',
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.grey),
             ),
-          ),
-        for (final store in byStore.keys)
-          Card(
-            margin: const EdgeInsets.only(bottom: 8),
-            child: ExpansionTile(
-              initiallyExpanded: true,
-              title: Text(
-                store.name,
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-              subtitle: Text('${byStore[store]!.length}品目'),
-              children: [
-                _buildBulkOrderBar(context, store, byStore[store]!),
-                for (final e in byStore[store]!) _buildOrderItemRow(context, e),
-              ],
+          );
+        }
+
+        final section = storeSections[index - 5];
+        final store = section.key;
+        final entries = section.value;
+        return Card(
+          margin: const EdgeInsets.only(bottom: 8),
+          child: ExpansionTile(
+            initiallyExpanded: true,
+            title: Text(
+              store.name,
+              style: const TextStyle(fontWeight: FontWeight.bold),
             ),
+            subtitle: Text('${entries.length}品目'),
+            children: [
+              _buildBulkOrderBar(context, store, entries),
+              for (final e in entries) _buildOrderItemRow(context, e),
+            ],
           ),
-      ],
+        );
+      },
     );
   }
 
@@ -1551,50 +1559,62 @@ class _OrderListPageState extends State<OrderListPage> {
       byTypeByItem[e.itemType]!.putIfAbsent(e.item.id, () => []).add(e);
     }
 
-    return ListView(
+    final sections = <Object>[];
+    for (final type in _types) {
+      final itemMap = byTypeByItem[type];
+      if (itemMap == null || itemMap.isEmpty) continue;
+      sections.add(type);
+      sections.addAll(itemMap.values);
+    }
+
+    return ListView.builder(
       padding: const EdgeInsets.all(16),
-      children: [
-        Row(
-          children: [
-            if (_canConfirmOrders) ...[
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: _creatingPdf
-                      ? null
-                      : () => _exportPdfByItem(context, filtered),
-                  icon: const Icon(Icons.picture_as_pdf, size: 18),
-                  label: const Text('商品別 発注確定PDF'),
+      itemCount: 5 + (filtered.isEmpty ? 1 : sections.length),
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          return Row(
+            children: [
+              if (_canConfirmOrders) ...[
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _creatingPdf
+                        ? null
+                        : () => _exportPdfByItem(context, filtered),
+                    icon: const Icon(Icons.picture_as_pdf, size: 18),
+                    label: const Text('商品別 発注確定PDF'),
+                  ),
                 ),
+                const SizedBox(width: 8),
+              ],
+              OutlinedButton.icon(
+                onPressed: () => Navigator.of(context).pop(),
+                icon: const Icon(Icons.arrow_back, size: 18),
+                label: const Text('戻る'),
               ),
-              const SizedBox(width: 8),
             ],
-            OutlinedButton.icon(
-              onPressed: () => Navigator.of(context).pop(),
-              icon: const Icon(Icons.arrow_back, size: 18),
-              label: const Text('戻る'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        const AdInlineCardWidget(compact: true),
-        _buildFilterChips(),
-        const SizedBox(height: 8),
-        if (filtered.isEmpty)
-          const Padding(
+          );
+        }
+        if (index == 1) return const SizedBox(height: 8);
+        if (index == 2) return const AdInlineCardWidget(compact: true);
+        if (index == 3) return _buildFilterChips();
+        if (index == 4) return const SizedBox(height: 8);
+        if (filtered.isEmpty) {
+          return const Padding(
             padding: EdgeInsets.all(24),
             child: Text(
               '選択された種別の発注品はありません',
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.grey),
             ),
-          ),
-        for (final type in _types)
-          if (byTypeByItem.containsKey(type)) ...[
-            _sectionHeader('■ $type', color: Colors.teal.shade700),
-            for (final itemId in byTypeByItem[type]!.keys)
-              _buildItemStoreCard(context, byTypeByItem[type]![itemId]!),
-          ],
-      ],
+          );
+        }
+
+        final section = sections[index - 5];
+        if (section is String) {
+          return _sectionHeader('■ $section', color: Colors.teal.shade700);
+        }
+        return _buildItemStoreCard(context, section as List<_OrderEntry>);
+      },
     );
   }
 
