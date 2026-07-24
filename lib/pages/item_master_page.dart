@@ -374,114 +374,116 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
     return Column(
       children: [
         Expanded(
-          child: ListView(
+          child: ListView.builder(
             padding: const EdgeInsets.all(16),
-            children: [
-              TextField(
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.search),
-                  hintText: '検索...',
-                  border: OutlineInputBorder(),
-                ),
-                onChanged: (v) => setState(() => _query = v),
-              ),
-              const SizedBox(height: 12),
-              Card(
-                child: ListTile(
-                  title: Text('${widget.label}数'),
-                  trailing: Text(
-                    '${_items.length} 件',
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
+            itemCount: 3 + filtered.length,
+            itemBuilder: (context, index) {
+              if (index == 0) {
+                return TextField(
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.search),
+                    hintText: '検索...',
+                    border: OutlineInputBorder(),
                   ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              for (final item in filtered)
-                Card(
-                  color: item.discontinued ? Colors.grey.shade100 : null,
+                  onChanged: (v) => setState(() => _query = v),
+                );
+              }
+              if (index == 1) return const SizedBox(height: 12);
+              if (index == 2) {
+                return Card(
                   child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: item.discontinued
-                          ? Colors.grey.shade300
-                          : null,
-                      child: Text(
-                        item.code.isEmpty ? '-' : item.code,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: item.discontinued ? Colors.grey : null,
-                        ),
+                    title: Text('${widget.label}数'),
+                    trailing: Text(
+                      '${_items.length} 件',
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
-                    title: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            item.name,
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: item.discontinued ? Colors.grey : null,
-                              decoration: item.discontinued
-                                  ? TextDecoration.lineThrough
-                                  : null,
-                            ),
-                          ),
-                        ),
-                        if (item.discontinued)
-                          Container(
-                            margin: const EdgeInsets.only(left: 4),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.grey.shade400,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: const Text(
-                              '販売終了',
-                              style: TextStyle(
-                                fontSize: 10,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                    subtitle: Text('コード: ${item.code}'),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          tooltip: item.discontinued ? '販売終了を解除' : '販売終了にする',
-                          icon: Icon(
-                            item.discontinued ? Icons.replay : Icons.block,
-                            color: item.discontinued
-                                ? Colors.green
-                                : Colors.orange,
-                          ),
-                          onPressed: () => _toggleDiscontinued(item),
-                        ),
-                        if (AppSession.isAdmin) ...[
-                          IconButton(
-                            icon: const Icon(Icons.edit),
-                            onPressed: () => _editItem(item),
-                          ),
-                          IconButton(
-                            icon: const Icon(
-                              Icons.delete_outline,
-                              color: Colors.red,
-                            ),
-                            onPressed: () => _deleteItem(item),
-                          ),
-                        ],
-                      ],
+                  ),
+                );
+              }
+
+              final item = filtered[index - 3];
+              return Card(
+                color: item.discontinued ? Colors.grey.shade100 : null,
+                child: ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: item.discontinued
+                        ? Colors.grey.shade300
+                        : null,
+                    child: Text(
+                      item.code.isEmpty ? '-' : item.code,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: item.discontinued ? Colors.grey : null,
+                      ),
                     ),
                   ),
+                  title: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          item.name,
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: item.discontinued ? Colors.grey : null,
+                            decoration: item.discontinued
+                                ? TextDecoration.lineThrough
+                                : null,
+                          ),
+                        ),
+                      ),
+                      if (item.discontinued)
+                        Container(
+                          margin: const EdgeInsets.only(left: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade400,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Text(
+                            '販売終了',
+                            style: TextStyle(fontSize: 10, color: Colors.white),
+                          ),
+                        ),
+                    ],
+                  ),
+                  subtitle: Text('コード: ${item.code}'),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: item.discontinued ? '販売終了を解除' : '販売終了にする',
+                        icon: Icon(
+                          item.discontinued ? Icons.replay : Icons.block,
+                          color: item.discontinued
+                              ? Colors.green
+                              : Colors.orange,
+                        ),
+                        onPressed: () => _toggleDiscontinued(item),
+                      ),
+                      if (AppSession.isAdmin) ...[
+                        IconButton(
+                          icon: const Icon(Icons.edit),
+                          onPressed: () => _editItem(item),
+                        ),
+                        IconButton(
+                          icon: const Icon(
+                            Icons.delete_outline,
+                            color: Colors.red,
+                          ),
+                          onPressed: () => _deleteItem(item),
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
-            ],
+              );
+            },
           ),
         ),
         Padding(
