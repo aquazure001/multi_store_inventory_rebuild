@@ -3493,51 +3493,90 @@ class _BillingPageState extends State<BillingPage> {
         subtitle: Text('${_invoices.length}件'),
         children: [
           for (final invoice in _invoices)
-            ListTile(
-              title: Text(
-                '${invoice.invoiceNo} / ${invoice.storeName} / ￥${_yen(invoice.total)}',
-              ),
-              subtitle: Text(
-                '${invoice.billingMonthLabel} / ${invoice.billingItemTypesText} / 締切 ${invoice.paymentDueText} / ${invoice.itemCount}明細',
-              ),
-              trailing: Wrap(
-                spacing: 6,
-                children: [
-                  if (invoice.billingMode != 'manual_receipt_only') ...[
-                    OutlinedButton(
-                      onPressed: _saving
-                          ? null
-                          : () => _openInvoicePdf(invoice),
-                      child: const Text('請求書'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF7FF),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFFE6D9EA)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${invoice.invoiceNo} / ${invoice.storeName}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                    OutlinedButton(
-                      onPressed: _saving
-                          ? null
-                          : () => _editInvoicePdf(invoice),
-                      child: const Text('請求編集'),
+                    const SizedBox(height: 4),
+                    Text(
+                      '￥${_yen(invoice.total)}',
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${invoice.billingMonthLabel} / ${invoice.billingItemTypesText} / 締切 ${invoice.paymentDueText} / ${invoice.itemCount}明細',
+                      softWrap: true,
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        if (invoice.billingMode != 'manual_receipt_only') ...[
+                          OutlinedButton(
+                            onPressed: _saving
+                                ? null
+                                : () => _openInvoicePdf(invoice),
+                            child: const Text('請求書'),
+                          ),
+                          OutlinedButton(
+                            onPressed: _saving
+                                ? null
+                                : () => _editInvoicePdf(invoice),
+                            child: const Text('請求編集'),
+                          ),
+                        ],
+                        ElevatedButton(
+                          onPressed: _saving
+                              ? null
+                              : () => _createReceipt(invoice),
+                          child: Text(
+                            invoice.receiptId.isEmpty ? '受領書作成' : '受領書',
+                          ),
+                        ),
+                        if (invoice.receiptId.isNotEmpty)
+                          OutlinedButton(
+                            onPressed: _saving
+                                ? null
+                                : () => _editReceiptPdf(invoice),
+                            child: const Text('受領編集'),
+                          ),
+                        TextButton(
+                          onPressed: _saving
+                              ? null
+                              : () => _cancelInvoice(invoice),
+                          child: Text(
+                            invoice.billingMode == 'manual' ||
+                                    invoice.billingMode == 'manual_receipt_only'
+                                ? '削除'
+                                : '取消',
+                          ),
+                        ),
+                      ],
                     ),
                   ],
-                  ElevatedButton(
-                    onPressed: _saving ? null : () => _createReceipt(invoice),
-                    child: Text(invoice.receiptId.isEmpty ? '受領書作成' : '受領書'),
-                  ),
-                  if (invoice.receiptId.isNotEmpty)
-                    OutlinedButton(
-                      onPressed: _saving
-                          ? null
-                          : () => _editReceiptPdf(invoice),
-                      child: const Text('受領編集'),
-                    ),
-                  TextButton(
-                    onPressed: _saving ? null : () => _cancelInvoice(invoice),
-                    child: Text(
-                      invoice.billingMode == 'manual' ||
-                              invoice.billingMode == 'manual_receipt_only'
-                          ? '削除'
-                          : '取消',
-                    ),
-                  ),
-                ],
+                ),
               ),
             ),
         ],
