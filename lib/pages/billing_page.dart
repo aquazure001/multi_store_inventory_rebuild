@@ -22,7 +22,16 @@ class _BillingPageState extends State<BillingPage> {
   final List<_BillingInvoiceSummary> _invoices = [];
   final Set<String> _billedKeys = <String>{};
   final Set<String> _issuedMonthStoreKeys = <String>{};
+  final Map<String, _BillingPrice> _billingPrices = {};
   final Map<String, TextEditingController> _priceControllers = {};
+  final Map<String, TextEditingController> _purchaseRateControllers = {};
+  final TextEditingController _repaymentCurrentController =
+      TextEditingController();
+  final TextEditingController _repaymentTotalController =
+      TextEditingController();
+  final TextEditingController _repaymentAmountController =
+      TextEditingController();
+  bool _repaymentEnabled = false;
 
   @override
   void initState() {
@@ -35,6 +44,12 @@ class _BillingPageState extends State<BillingPage> {
     for (final controller in _priceControllers.values) {
       controller.dispose();
     }
+    for (final controller in _purchaseRateControllers.values) {
+      controller.dispose();
+    }
+    _repaymentCurrentController.dispose();
+    _repaymentTotalController.dispose();
+    _repaymentAmountController.dispose();
     super.dispose();
   }
 
@@ -75,6 +90,40 @@ class _BillingPageState extends State<BillingPage> {
           issuedMonthStoreKeys.add(summary.monthStoreKey);
         }
       }
+
+      final priceDoc = await AppSession.doc('billing_prices').get();
+      final priceData = priceDoc.data() ?? <String, dynamic>{};
+      final billingPrices = <String, _BillingPrice>{};
+      final rawEntries = priceData['entries'];
+      if (rawEntries is Map) {
+        for (final entry in rawEntries.entries) {
+          final value = entry.value;
+          if (value is! Map) continue;
+          final map = Map<String, dynamic>.from(
+            value.map((k, v) => MapEntry(k.toString(), v)),
+          );
+          billingPrices[entry.key.toString()] = _BillingPrice.fromMap(map);
+        }
+      }
+      final rawRepayment = priceData['repayment'];
+      final repayment = rawRepayment is Map
+          ? Map<String, dynamic>.from(
+              rawRepayment.map((k, v) => MapEntry(k.toString(), v)),
+            )
+          : <String, dynamic>{};
+      final repaymentEnabled = repayment['enabled'] == true;
+      final repaymentCurrent = inventoryIntValue(repayment['current']);
+      final repaymentTotal = inventoryIntValue(repayment['total']);
+      final repaymentAmount = inventoryIntValue(repayment['monthlyAmount']);
+      _repaymentCurrentController.text = repaymentCurrent > 0
+          ? repaymentCurrent.toString()
+          : '';
+      _repaymentTotalController.text = repaymentTotal > 0
+          ? repaymentTotal.toString()
+          : '';
+      _repaymentAmountController.text = repaymentAmount > 0
+          ? repaymentAmount.toString()
+          : '';
 
       final batchSnap = await AppSession.orderBatches
           .orderBy('createdAt', descending: true)
@@ -126,13 +175,34 @@ class _BillingPageState extends State<BillingPage> {
       });
 
       for (final line in lines) {
-        _priceControllers.putIfAbsent(line.key, () {
+        final master = billingPrices[_priceKeyFor(line)];
+        final priceController = _priceControllers.putIfAbsent(line.key, () {
           final controller = TextEditingController();
           controller.addListener(() {
             if (mounted) setState(() {});
           });
           return controller;
         });
+        if ((priceController.text.trim().isEmpty || line.billed) &&
+            master != null &&
+            master.unitPrice > 0) {
+          priceController.text = master.unitPrice.toString();
+        }
+        final rateController = _purchaseRateControllers.putIfAbsent(
+          line.key,
+          () {
+            final controller = TextEditingController();
+            controller.addListener(() {
+              if (mounted) setState(() {});
+            });
+            return controller;
+          },
+        );
+        if ((rateController.text.trim().isEmpty || line.billed) &&
+            master != null &&
+            master.purchaseRate > 0) {
+          rateController.text = master.purchaseRate.toString();
+        }
       }
 
       setState(() {
@@ -145,6 +215,10 @@ class _BillingPageState extends State<BillingPage> {
         _issuedMonthStoreKeys
           ..clear()
           ..addAll(issuedMonthStoreKeys);
+        _billingPrices
+          ..clear()
+          ..addAll(billingPrices);
+        _repaymentEnabled = repaymentEnabled;
         _lines
           ..clear()
           ..addAll(lines);
@@ -248,8 +322,122 @@ class _BillingPageState extends State<BillingPage> {
 
   List<_BillingLine> _withPrices(List<_BillingLine> lines) {
     return lines
-        .map((line) => line.copyWith(unitPrice: _priceFor(line)))
+        .map(
+          (line) => line.copyWith(
+            unitPrice: _priceFor(line),
+            purchaseRate: _purchaseRateFor(line),
+            taxRate: _taxRateFor(line),
+          ),
+        )
         .toList();
+  }
+
+  String _priceKeyFor(_BillingLine line) {
+    final codeOrName = line.itemCode.trim().isEmpty
+        ? line.itemName.trim()
+        : line.itemCode.trim();
+    return '${line.itemType}__$codeOrName';
+  }
+
+  int _purchaseRateFor(_BillingLine line) {
+    final raw = _purchaseRateControllers[line.key]?.text ?? '';
+    return int.tryParse(raw.replaceAll('%', '').trim()) ??
+        (_billingPrices[_priceKeyFor(line)]?.purchaseRate ?? 0);
+  }
+
+  int _taxRateFor(_BillingLine line) {
+    return _billingPrices[_priceKeyFor(line)]?.taxRate ?? 10;
+  }
+
+  int _subtotalForRate(List<_BillingLine> lines, int taxRate) {
+    return lines
+        .where((line) => line.taxRate == taxRate)
+        .fold<int>(0, (total, line) => total + line.amount);
+  }
+
+  int _taxFor(int subtotal, int taxRate) => (subtotal * taxRate / 100).round();
+
+  Future<void> _saveBillingPriceForLine(_BillingLine line) async {
+    final key = _priceKeyFor(line);
+    final entry = _BillingPrice(
+      itemType: line.itemType,
+      itemCode: line.itemCode,
+      itemName: line.itemName,
+      unitPrice: _priceFor(line),
+      purchaseRate: _purchaseRateFor(line),
+      taxRate: _taxRateFor(line),
+    );
+    if (entry.unitPrice <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('単価を入力してください'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      await AppSession.doc('billing_prices').set({
+        'entries': {key: entry.toMap()},
+        'updatedAt': FieldValue.serverTimestamp(),
+        'updatedAtLocal': DateTime.now().toIso8601String(),
+        'updatedBy': AppSession.nickname,
+      }, SetOptions(merge: true));
+      setState(() => _billingPrices[key] = entry);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('単価マスタを保存しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('単価マスタ保存失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _saveRepaymentSettings() async {
+    setState(() => _saving = true);
+    try {
+      await AppSession.doc('billing_prices').set({
+        'repayment': {
+          'enabled': _repaymentEnabled,
+          'current': inventoryIntValue(_repaymentCurrentController.text),
+          'total': inventoryIntValue(_repaymentTotalController.text),
+          'monthlyAmount': inventoryIntValue(_repaymentAmountController.text),
+        },
+        'updatedAt': FieldValue.serverTimestamp(),
+        'updatedAtLocal': DateTime.now().toIso8601String(),
+        'updatedBy': AppSession.nickname,
+      }, SetOptions(merge: true));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('定期返済設定を保存しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('定期返済設定保存失敗: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   String _yen(int value) {
@@ -282,16 +470,16 @@ class _BillingPageState extends State<BillingPage> {
       .where((line) => !line.billed && line.storeId == _selectedStoreId)
       .toList();
 
-  int get _targetSubtotal {
-    var total = 0;
-    for (final line in _invoiceTargetLines) {
-      total += line.qty * _priceFor(line);
-    }
-    return total;
-  }
+  List<_BillingLine> get _targetPricedLines => _withPrices(_invoiceTargetLines);
 
-  int get _targetTax => (_targetSubtotal * 0.1).round();
-  int get _targetTotal => _targetSubtotal + _targetTax;
+  int get _targetSubtotal =>
+      _targetPricedLines.fold<int>(0, (total, line) => total + line.amount);
+
+  int get _targetSubtotal10 => _subtotalForRate(_targetPricedLines, 10);
+  int get _targetSubtotal8 => _subtotalForRate(_targetPricedLines, 8);
+  int get _targetTax10 => _taxFor(_targetSubtotal10, 10);
+  int get _targetTax8 => _taxFor(_targetSubtotal8, 8);
+  int get _targetTotal => _targetSubtotal + _targetTax10 + _targetTax8;
 
   bool get _alreadyIssuedForSelectedMonthStore =>
       _selectedStoreId.isNotEmpty &&
@@ -372,11 +560,13 @@ class _BillingPageState extends State<BillingPage> {
     final periodText = _periodText(_selectedMonth);
     final dueText = _paymentDueTextForMonth(_selectedMonth);
     final pricedLines = _withPrices(lines);
-    final total = pricedLines.fold<int>(
-      0,
-      (total, line) => total + line.amount,
-    );
-    final totalWithTax = total + (total * 0.1).round();
+    final subtotal10 = _subtotalForRate(pricedLines, 10);
+    final subtotal8 = _subtotalForRate(pricedLines, 8);
+    final totalWithTax =
+        subtotal10 +
+        _taxFor(subtotal10, 10) +
+        subtotal8 +
+        _taxFor(subtotal8, 8);
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -414,6 +604,12 @@ class _BillingPageState extends State<BillingPage> {
         date: issuedAt,
         billingMonth: _selectedMonth,
         storeName: storeName,
+        repaymentEnabled: _repaymentEnabled,
+        repaymentCurrent: inventoryIntValue(_repaymentCurrentController.text),
+        repaymentTotal: inventoryIntValue(_repaymentTotalController.text),
+        repaymentMonthlyAmount: inventoryIntValue(
+          _repaymentAmountController.text,
+        ),
         lines: pricedLines,
       );
       final invoiceRef = AppSession.billingInvoices.doc();
@@ -477,7 +673,10 @@ class _BillingPageState extends State<BillingPage> {
     List<_BillingLine> lines,
   ) {
     final subtotal = lines.fold<int>(0, (total, line) => total + line.amount);
-    final tax = (subtotal * 0.1).round();
+    final subtotal10 = _subtotalForRate(lines, 10);
+    final subtotal8 = _subtotalForRate(lines, 8);
+    final tax10 = _taxFor(subtotal10, 10);
+    final tax8 = _taxFor(subtotal8, 8);
     final dueDate = _paymentDueDateForMonth(billingMonth);
     return {
       'id': id,
@@ -500,9 +699,17 @@ class _BillingPageState extends State<BillingPage> {
       'monthStoreKey': _monthStoreKey(billingMonth, storeId),
       'lineKeys': lines.map((line) => line.key).toList(),
       'subtotal': subtotal,
-      'tax10': tax,
-      'tax8': 0,
-      'total': subtotal + tax,
+      'subtotal10': subtotal10,
+      'subtotal8': subtotal8,
+      'tax10': tax10,
+      'tax8': tax8,
+      'total': subtotal + tax10 + tax8,
+      'repaymentEnabled': _repaymentEnabled,
+      'repaymentCurrent': inventoryIntValue(_repaymentCurrentController.text),
+      'repaymentTotal': inventoryIntValue(_repaymentTotalController.text),
+      'repaymentMonthlyAmount': inventoryIntValue(
+        _repaymentAmountController.text,
+      ),
       'items': lines.map((line) => line.toInvoiceMap(line.unitPrice)).toList(),
       'hasSavedPdf': true,
     };
@@ -597,6 +804,10 @@ class _BillingPageState extends State<BillingPage> {
         date: issuedAt,
         billingMonth: invoice.billingMonthDate,
         storeName: invoice.storeName,
+        repaymentEnabled: invoice.repaymentEnabled,
+        repaymentCurrent: invoice.repaymentCurrent,
+        repaymentTotal: invoice.repaymentTotal,
+        repaymentMonthlyAmount: invoice.repaymentMonthlyAmount,
         lines: lines,
       );
       final receiptRef = AppSession.billingReceipts.doc();
@@ -615,8 +826,12 @@ class _BillingPageState extends State<BillingPage> {
         'status': 'issued',
         'subtotal': invoice.subtotal,
         'tax10': invoice.tax10,
-        'tax8': 0,
+        'tax8': invoice.tax8,
         'total': invoice.total,
+        'repaymentEnabled': invoice.repaymentEnabled,
+        'repaymentCurrent': invoice.repaymentCurrent,
+        'repaymentTotal': invoice.repaymentTotal,
+        'repaymentMonthlyAmount': invoice.repaymentMonthlyAmount,
         'items': invoiceData['items'],
         'hasSavedPdf': true,
       });
@@ -671,16 +886,20 @@ class _BillingPageState extends State<BillingPage> {
     required DateTime date,
     required DateTime billingMonth,
     required String storeName,
+    required bool repaymentEnabled,
+    required int repaymentCurrent,
+    required int repaymentTotal,
+    required int repaymentMonthlyAmount,
     required List<_BillingLine> lines,
   }) async {
     final pdf = pw.Document();
     final isInvoice = kind == _BillingPdfKind.invoice;
-    final subtotal = lines.fold<int>(
-      0,
-      (total, line) => total + line.qty * line.unitPrice,
-    );
-    final tax = (subtotal * 0.1).round();
-    final total = subtotal + tax;
+    final subtotal = lines.fold<int>(0, (total, line) => total + line.amount);
+    final subtotal10 = _subtotalForRate(lines, 10);
+    final subtotal8 = _subtotalForRate(lines, 8);
+    final tax10 = _taxFor(subtotal10, 10);
+    final tax8 = _taxFor(subtotal8, 8);
+    final total = subtotal + tax10 + tax8;
     final title = isInvoice ? 'ご請求書' : '受領書';
     final mascot = isInvoice ? assets.mascotInvoice : assets.mascotReceipt;
 
@@ -843,8 +1062,10 @@ class _BillingPageState extends State<BillingPage> {
                   pw.Container(
                     padding: const pw.EdgeInsets.symmetric(horizontal: 8),
                     child: pw.Text(
-                      '対象店舗：$storeName　対象期間：${_periodText(billingMonth)}',
-                      style: pw.TextStyle(font: assets.boldFont, fontSize: 9.5),
+                      repaymentEnabled
+                          ? '対象店舗：$storeName　対象期間：${_periodText(billingMonth)}　定期返済：第$repaymentCurrent回 / 全$repaymentTotal回　毎月 ￥${_yen(repaymentMonthlyAmount)}'
+                          : '対象店舗：$storeName　対象期間：${_periodText(billingMonth)}',
+                      style: pw.TextStyle(font: assets.boldFont, fontSize: 9.0),
                     ),
                   ),
                   pw.SizedBox(height: 6),
@@ -853,7 +1074,13 @@ class _BillingPageState extends State<BillingPage> {
                   pw.Row(
                     mainAxisAlignment: pw.MainAxisAlignment.end,
                     children: [
-                      _billingTotalsBox(subtotal, tax, total, assets.boldFont),
+                      _billingTotalsBox(
+                        subtotal,
+                        tax10,
+                        tax8,
+                        total,
+                        assets.boldFont,
+                      ),
                     ],
                   ),
                   pw.SizedBox(height: 12),
@@ -1148,16 +1375,17 @@ class _BillingPageState extends State<BillingPage> {
         outside: pw.BorderSide.none,
       ),
       columnWidths: const {
-        0: pw.FlexColumnWidth(2.7),
-        1: pw.FlexColumnWidth(.8),
-        2: pw.FlexColumnWidth(.8),
-        3: pw.FlexColumnWidth(1.1),
-        4: pw.FlexColumnWidth(1.8),
+        0: pw.FlexColumnWidth(2.5),
+        1: pw.FlexColumnWidth(.7),
+        2: pw.FlexColumnWidth(.7),
+        3: pw.FlexColumnWidth(.8),
+        4: pw.FlexColumnWidth(1.0),
+        5: pw.FlexColumnWidth(1.6),
       },
       children: [
         pw.TableRow(
           decoration: pw.BoxDecoration(color: PdfColor.fromHex('#F9C5C8')),
-          children: ['商品名', '数量', '単位', '単価', '金額']
+          children: ['商品名', '数量', '単位', '税率', '単価', '金額']
               .map(
                 (e) => pw.Padding(
                   padding: const pw.EdgeInsets.all(5),
@@ -1182,6 +1410,7 @@ class _BillingPageState extends State<BillingPage> {
                     ),
                     _billingPdfCell('${visibleRows[i].qty}', right: true),
                     _billingPdfCell('個', center: true),
+                    _billingPdfCell('${visibleRows[i].taxRate}%', center: true),
                     _billingPdfCell(
                       '￥${_yen(visibleRows[i].unitPrice)}',
                       right: true,
@@ -1192,6 +1421,7 @@ class _BillingPageState extends State<BillingPage> {
                     ),
                   ]
                 : [
+                    _billingPdfCell(''),
                     _billingPdfCell(''),
                     _billingPdfCell(''),
                     _billingPdfCell(''),
@@ -1222,7 +1452,8 @@ class _BillingPageState extends State<BillingPage> {
 
   pw.Widget _billingTotalsBox(
     int subtotal,
-    int tax,
+    int tax10,
+    int tax8,
     int total,
     pw.Font fontBold,
   ) {
@@ -1259,8 +1490,8 @@ class _BillingPageState extends State<BillingPage> {
       child: pw.Column(
         children: [
           row('小計', subtotal),
-          row('消費税(10%)', tax),
-          row('消費税(8%)', 0),
+          row('消費税(10%)', tax10),
+          row('消費税(8%)', tax8),
           row('合計', total, bold: true, fill: true),
         ],
       ),
@@ -1387,6 +1618,62 @@ class _BillingPageState extends State<BillingPage> {
               title: const Text('請求済みも表示する'),
               onChanged: (value) => setState(() => _showBilled = value),
             ),
+
+            const Divider(height: 20),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _repaymentEnabled,
+              title: const Text('定期返済あり'),
+              onChanged: (value) => setState(() => _repaymentEnabled = value),
+            ),
+            if (_repaymentEnabled)
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _repaymentCurrentController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        labelText: '何回目',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: _repaymentTotalController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        labelText: '全何回',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: _repaymentAmountController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        labelText: '毎月返済額',
+                        prefixText: '￥',
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerRight,
+              child: OutlinedButton.icon(
+                onPressed: _saving ? null : _saveRepaymentSettings,
+                icon: const Icon(Icons.save),
+                label: const Text('返済設定を保存'),
+              ),
+            ),
+            const SizedBox(height: 8),
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(10),
@@ -1396,7 +1683,7 @@ class _BillingPageState extends State<BillingPage> {
               ),
               child: Text(
                 '対象: ${_selectedStoreName().isEmpty ? '店舗未選択' : _selectedStoreName()} / ${_periodText(_selectedMonth)}\n'
-                '締切: ${_paymentDueTextForMonth(_selectedMonth)} / 未請求 ${_invoiceTargetLines.length}件 / 合計 ￥${_yen(_targetTotal)}',
+                '締切: ${_paymentDueTextForMonth(_selectedMonth)} / 未請求 ${_invoiceTargetLines.length}件 / 合計 ￥${_yen(_targetTotal)}\n税10% ￥${_yen(_targetTax10)} / 軽減8% ￥${_yen(_targetTax8)}',
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
             ),
@@ -1455,7 +1742,7 @@ class _BillingPageState extends State<BillingPage> {
             Row(
               children: [
                 SizedBox(
-                  width: 130,
+                  width: 120,
                   child: TextField(
                     controller: _priceControllers[line.key],
                     enabled:
@@ -1468,7 +1755,22 @@ class _BillingPageState extends State<BillingPage> {
                     ),
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 100,
+                  child: TextField(
+                    controller: _purchaseRateControllers[line.key],
+                    enabled:
+                        !line.billed && !_alreadyIssuedForSelectedMonthStore,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: '仕入率',
+                      suffixText: '%',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     '金額 ￥${_yen(amount)}',
@@ -1477,6 +1779,38 @@ class _BillingPageState extends State<BillingPage> {
                       fontWeight: FontWeight.bold,
                     ),
                   ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                FilterChip(
+                  label: const Text('軽減税率8%'),
+                  selected: _taxRateFor(line) == 8,
+                  onSelected: line.billed || _alreadyIssuedForSelectedMonthStore
+                      ? null
+                      : (selected) {
+                          final key = _priceKeyFor(line);
+                          final current =
+                              _billingPrices[key] ??
+                              _BillingPrice.fromLine(line);
+                          setState(() {
+                            _billingPrices[key] = current.copyWith(
+                              taxRate: selected ? 8 : 10,
+                              unitPrice: _priceFor(line),
+                              purchaseRate: _purchaseRateFor(line),
+                            );
+                          });
+                        },
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: _saving || line.billed
+                      ? null
+                      : () => _saveBillingPriceForLine(line),
+                  icon: const Icon(Icons.save),
+                  label: const Text('単価マスタ保存'),
                 ),
               ],
             ),
@@ -1605,6 +1939,8 @@ class _BillingLine {
     required this.itemName,
     required this.qty,
     this.unitPrice = 0,
+    this.purchaseRate = 0,
+    this.taxRate = 10,
     this.billed = false,
   });
 
@@ -1619,11 +1955,18 @@ class _BillingLine {
   final String itemName;
   final int qty;
   final int unitPrice;
+  final int purchaseRate;
+  final int taxRate;
   final bool billed;
 
   int get amount => qty * unitPrice;
 
-  _BillingLine copyWith({int? unitPrice, bool? billed}) {
+  _BillingLine copyWith({
+    int? unitPrice,
+    int? purchaseRate,
+    int? taxRate,
+    bool? billed,
+  }) {
     return _BillingLine(
       key: key,
       batchId: batchId,
@@ -1636,6 +1979,8 @@ class _BillingLine {
       itemName: itemName,
       qty: qty,
       unitPrice: unitPrice ?? this.unitPrice,
+      purchaseRate: purchaseRate ?? this.purchaseRate,
+      taxRate: taxRate ?? this.taxRate,
       billed: billed ?? this.billed,
     );
   }
@@ -1653,6 +1998,8 @@ class _BillingLine {
       'itemName': itemName,
       'qty': qty,
       'unitPrice': price,
+      'purchaseRate': purchaseRate,
+      'taxRate': taxRate,
       'amount': qty * price,
     };
   }
@@ -1679,9 +2026,67 @@ class _BillingLine {
         itemName: (map['itemName'] ?? '').toString(),
         qty: qty,
         unitPrice: price,
+        purchaseRate: inventoryIntValue(map['purchaseRate']),
+        taxRate: inventoryIntValue(map['taxRate']) == 8 ? 8 : 10,
       );
     }).toList();
   }
+}
+
+class _BillingPrice {
+  const _BillingPrice({
+    required this.itemType,
+    required this.itemCode,
+    required this.itemName,
+    required this.unitPrice,
+    required this.purchaseRate,
+    required this.taxRate,
+  });
+
+  final String itemType;
+  final String itemCode;
+  final String itemName;
+  final int unitPrice;
+  final int purchaseRate;
+  final int taxRate;
+
+  factory _BillingPrice.fromLine(_BillingLine line) => _BillingPrice(
+    itemType: line.itemType,
+    itemCode: line.itemCode,
+    itemName: line.itemName,
+    unitPrice: line.unitPrice,
+    purchaseRate: line.purchaseRate,
+    taxRate: line.taxRate,
+  );
+
+  factory _BillingPrice.fromMap(Map<String, dynamic> map) => _BillingPrice(
+    itemType: (map['itemType'] ?? '').toString(),
+    itemCode: (map['itemCode'] ?? '').toString(),
+    itemName: (map['itemName'] ?? '').toString(),
+    unitPrice: inventoryIntValue(map['unitPrice']),
+    purchaseRate: inventoryIntValue(map['purchaseRate']),
+    taxRate: inventoryIntValue(map['taxRate']) == 8 ? 8 : 10,
+  );
+
+  _BillingPrice copyWith({int? unitPrice, int? purchaseRate, int? taxRate}) {
+    return _BillingPrice(
+      itemType: itemType,
+      itemCode: itemCode,
+      itemName: itemName,
+      unitPrice: unitPrice ?? this.unitPrice,
+      purchaseRate: purchaseRate ?? this.purchaseRate,
+      taxRate: taxRate ?? this.taxRate,
+    );
+  }
+
+  Map<String, dynamic> toMap() => {
+    'itemType': itemType,
+    'itemCode': itemCode,
+    'itemName': itemName,
+    'unitPrice': unitPrice,
+    'purchaseRate': purchaseRate,
+    'taxRate': taxRate,
+  };
 }
 
 class _BillingInvoiceSummary {
@@ -1697,7 +2102,12 @@ class _BillingInvoiceSummary {
     required this.paymentDueText,
     required this.subtotal,
     required this.tax10,
+    required this.tax8,
     required this.total,
+    required this.repaymentEnabled,
+    required this.repaymentCurrent,
+    required this.repaymentTotal,
+    required this.repaymentMonthlyAmount,
     required this.itemCount,
     required this.receiptId,
   });
@@ -1713,7 +2123,12 @@ class _BillingInvoiceSummary {
   final String paymentDueText;
   final int subtotal;
   final int tax10;
+  final int tax8;
   final int total;
+  final bool repaymentEnabled;
+  final int repaymentCurrent;
+  final int repaymentTotal;
+  final int repaymentMonthlyAmount;
   final int itemCount;
   final String receiptId;
 
@@ -1758,7 +2173,12 @@ class _BillingInvoiceSummary {
       paymentDueText: dueText.isEmpty ? '-' : dueText,
       subtotal: inventoryIntValue(data['subtotal']),
       tax10: inventoryIntValue(data['tax10']),
+      tax8: inventoryIntValue(data['tax8']),
       total: inventoryIntValue(data['total']),
+      repaymentEnabled: data['repaymentEnabled'] == true,
+      repaymentCurrent: inventoryIntValue(data['repaymentCurrent']),
+      repaymentTotal: inventoryIntValue(data['repaymentTotal']),
+      repaymentMonthlyAmount: inventoryIntValue(data['repaymentMonthlyAmount']),
       itemCount: rawItems is List ? rawItems.length : 0,
       receiptId: (data['receiptId'] ?? '').toString(),
     );
