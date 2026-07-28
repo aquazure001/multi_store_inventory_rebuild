@@ -349,20 +349,45 @@ class _BillingPageState extends State<BillingPage> {
     return Map<String, String>.fromEntries(entries);
   }
 
+  Map<String, String> _allBillingStores() {
+    final map = <String, String>{};
+    for (final line in _lines) {
+      if (line.storeId.isNotEmpty && line.storeName.isNotEmpty) {
+        map[line.storeId] = line.storeName;
+      }
+    }
+    for (final invoice in _invoices) {
+      if (invoice.storeId.isNotEmpty && invoice.storeName.isNotEmpty) {
+        map[invoice.storeId] = invoice.storeName;
+      }
+    }
+    final entries = map.entries.toList()
+      ..sort((a, b) => a.value.compareTo(b.value));
+    return Map<String, String>.fromEntries(entries);
+  }
+
+  _BillingRecipient _recipientForStoreWithName(
+    String storeId,
+    String storeName,
+  ) {
+    final saved = _storeRecipients[storeId];
+    if (saved != null && saved.name.trim().isNotEmpty) return saved;
+    final fallbackName = storeName.trim().isEmpty ? '店舗名未設定' : storeName.trim();
+    return _BillingRecipient(
+      name: '$fallbackName 様',
+      postal: '',
+      address1: '',
+      address2: '',
+    );
+  }
+
   String _selectedStoreName() {
     return _storesForMonth(_selectedMonth)[_selectedStoreId] ?? '';
   }
 
   _BillingRecipient _recipientForStore(String storeId) {
-    final saved = _storeRecipients[storeId];
-    if (saved != null && saved.name.trim().isNotEmpty) return saved;
     final storeName = _storesForMonth(_selectedMonth)[storeId] ?? '店舗名未設定';
-    return _BillingRecipient(
-      name: '$storeName 様',
-      postal: '',
-      address1: '',
-      address2: '',
-    );
+    return _recipientForStoreWithName(storeId, storeName);
   }
 
   _BillingRecipient _currentRecipientFromControllers() => _BillingRecipient(
@@ -2276,25 +2301,22 @@ class _BillingPageState extends State<BillingPage> {
     required DateTime initialDate,
     required bool showDueDate,
     String initialDueText = '',
-    required _BillingRecipient initialRecipient,
+    required String initialRecipientStoreId,
+    required String initialRecipientStoreName,
     required List<_BillingLine> initialLines,
   }) async {
     final dateController = TextEditingController(
       text: _dateInputText(initialDate),
     );
     final dueController = TextEditingController(text: initialDueText);
-    final recipientNameController = TextEditingController(
-      text: initialRecipient.name,
-    );
-    final recipientPostalController = TextEditingController(
-      text: initialRecipient.postal,
-    );
-    final recipientAddress1Controller = TextEditingController(
-      text: initialRecipient.address1,
-    );
-    final recipientAddress2Controller = TextEditingController(
-      text: initialRecipient.address2,
-    );
+    final recipientStores = _allBillingStores();
+    if (initialRecipientStoreId.isNotEmpty &&
+        initialRecipientStoreName.isNotEmpty) {
+      recipientStores[initialRecipientStoreId] = initialRecipientStoreName;
+    }
+    String selectedRecipientStoreId = initialRecipientStoreId.isNotEmpty
+        ? initialRecipientStoreId
+        : (recipientStores.isEmpty ? '' : recipientStores.keys.first);
     final rows = initialLines.isEmpty
         ? <_ManualBillingLineControllers>[_ManualBillingLineControllers()]
         : initialLines
@@ -2334,44 +2356,73 @@ class _BillingPageState extends State<BillingPage> {
                   Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      '宛先',
+                      '宛先の差し替え',
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.bold,
                       ),
                     ),
                   ),
                   const SizedBox(height: 6),
-                  TextField(
-                    controller: recipientNameController,
+                  DropdownButtonFormField<String>(
+                    initialValue: selectedRecipientStoreId.isEmpty
+                        ? null
+                        : selectedRecipientStoreId,
                     decoration: const InputDecoration(
                       border: OutlineInputBorder(),
-                      labelText: '宛名',
-                      hintText: '例：〇〇店 様',
+                      labelText: '保存済み宛先を使う店舗',
                     ),
+                    items: [
+                      for (final entry in recipientStores.entries)
+                        DropdownMenuItem(
+                          value: entry.key,
+                          child: Text(entry.value),
+                        ),
+                    ],
+                    onChanged: (value) => dialogSetState(() {
+                      selectedRecipientStoreId =
+                          value ?? selectedRecipientStoreId;
+                    }),
                   ),
                   const SizedBox(height: 8),
-                  TextField(
-                    controller: recipientPostalController,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      labelText: '郵便番号',
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: recipientAddress1Controller,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      labelText: '住所1',
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: recipientAddress2Controller,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      labelText: '住所2・建物名など',
-                    ),
+                  Builder(
+                    builder: (_) {
+                      final selectedStoreName =
+                          recipientStores[selectedRecipientStoreId] ??
+                          initialRecipientStoreName;
+                      final selectedRecipient = _recipientForStoreWithName(
+                        selectedRecipientStoreId,
+                        selectedStoreName,
+                      );
+                      final hasSaved =
+                          _storeRecipients[selectedRecipientStoreId] != null &&
+                          (_storeRecipients[selectedRecipientStoreId]?.name
+                                  .trim()
+                                  .isNotEmpty ??
+                              false);
+                      return Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: hasSaved
+                              ? const Color(0xFFEAF6FF)
+                              : const Color(0xFFFFF8E1),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: hasSaved
+                                ? const Color(0xFF64B5F6)
+                                : Colors.orange,
+                          ),
+                        ),
+                        child: Text(
+                          [
+                            selectedRecipient.name,
+                            ...selectedRecipient.pdfLines,
+                            if (!hasSaved) '※この店舗の保存済み宛先がないため、店舗名のみを使います',
+                          ].where((line) => line.trim().isNotEmpty).join('\n'),
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      );
+                    },
                   ),
                   const SizedBox(height: 12),
                   for (int i = 0; i < rows.length; i++)
@@ -2414,83 +2465,59 @@ class _BillingPageState extends State<BillingPage> {
                               ),
                             ),
                             const SizedBox(height: 8),
-                            Row(
-                              children: [
-                                Expanded(
-                                  flex: 2,
-                                  child: TextField(
-                                    controller: rows[i].code,
-                                    decoration: const InputDecoration(
-                                      border: OutlineInputBorder(),
-                                      labelText: '商品コード',
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                Expanded(
-                                  child: TextField(
-                                    controller: rows[i].qty,
-                                    keyboardType: TextInputType.number,
-                                    onChanged: (_) => dialogSetState(() {}),
-                                    decoration: const InputDecoration(
-                                      border: OutlineInputBorder(),
-                                      labelText: '数量',
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                Expanded(
-                                  flex: 2,
-                                  child: TextField(
-                                    controller: rows[i].unitPrice,
-                                    keyboardType: TextInputType.number,
-                                    onChanged: (_) => dialogSetState(() {}),
-                                    decoration: const InputDecoration(
-                                      border: OutlineInputBorder(),
-                                      labelText: '単価',
-                                    ),
-                                  ),
-                                ),
-                              ],
+                            TextField(
+                              controller: rows[i].code,
+                              decoration: const InputDecoration(
+                                border: OutlineInputBorder(),
+                                labelText: '商品コード',
+                              ),
                             ),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: DropdownButtonFormField<int>(
-                                    initialValue: rows[i].taxRate,
-                                    decoration: const InputDecoration(
-                                      labelText: '税率',
-                                    ),
-                                    items: const [
-                                      DropdownMenuItem(
-                                        value: 10,
-                                        child: Text('10%'),
-                                      ),
-                                      DropdownMenuItem(
-                                        value: 8,
-                                        child: Text('8%'),
-                                      ),
-                                    ],
-                                    onChanged: (value) => dialogSetState(() {
-                                      rows[i].taxRate = value ?? 10;
-                                    }),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: CheckboxListTile(
-                                    contentPadding: EdgeInsets.zero,
-                                    controlAffinity:
-                                        ListTileControlAffinity.leading,
-                                    dense: true,
-                                    title: const Text('税込単価'),
-                                    value: rows[i].taxIncluded,
-                                    onChanged: (value) => dialogSetState(() {
-                                      rows[i].taxIncluded = value == true;
-                                    }),
-                                  ),
-                                ),
+                            const SizedBox(height: 8),
+                            TextField(
+                              controller: rows[i].qty,
+                              keyboardType: TextInputType.number,
+                              onChanged: (_) => dialogSetState(() {}),
+                              decoration: const InputDecoration(
+                                border: OutlineInputBorder(),
+                                labelText: '数量',
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            TextField(
+                              controller: rows[i].unitPrice,
+                              keyboardType: TextInputType.number,
+                              onChanged: (_) => dialogSetState(() {}),
+                              decoration: const InputDecoration(
+                                border: OutlineInputBorder(),
+                                labelText: '単価',
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            DropdownButtonFormField<int>(
+                              initialValue: rows[i].taxRate,
+                              isExpanded: true,
+                              decoration: const InputDecoration(
+                                border: OutlineInputBorder(),
+                                labelText: '税率',
+                              ),
+                              items: const [
+                                DropdownMenuItem(value: 10, child: Text('10%')),
+                                DropdownMenuItem(value: 8, child: Text('8%')),
                               ],
+                              onChanged: (value) => dialogSetState(() {
+                                rows[i].taxRate = value ?? 10;
+                              }),
+                            ),
+                            const SizedBox(height: 4),
+                            CheckboxListTile(
+                              contentPadding: EdgeInsets.zero,
+                              controlAffinity: ListTileControlAffinity.leading,
+                              dense: true,
+                              title: const Text('税込単価'),
+                              value: rows[i].taxIncluded,
+                              onChanged: (value) => dialogSetState(() {
+                                rows[i].taxIncluded = value == true;
+                              }),
                             ),
                             Align(
                               alignment: Alignment.centerRight,
@@ -2545,11 +2572,10 @@ class _BillingPageState extends State<BillingPage> {
                 _ManualEditInput(
                   dateText: dateController.text,
                   dueText: dueController.text,
-                  recipient: _BillingRecipient(
-                    name: recipientNameController.text,
-                    postal: recipientPostalController.text,
-                    address1: recipientAddress1Controller.text,
-                    address2: recipientAddress2Controller.text,
+                  recipient: _recipientForStoreWithName(
+                    selectedRecipientStoreId,
+                    recipientStores[selectedRecipientStoreId] ??
+                        initialRecipientStoreName,
                   ),
                   rows: rows,
                 ),
@@ -2598,22 +2624,14 @@ class _BillingPageState extends State<BillingPage> {
       );
       final currentDue = (data['paymentDueText'] ?? invoice.paymentDueText)
           .toString();
-      final currentRecipient = _BillingRecipient.fromMap(
-        data['recipient'] is Map
-            ? Map<String, dynamic>.from(
-                (data['recipient'] as Map).map(
-                  (k, v) => MapEntry(k.toString(), v),
-                ),
-              )
-            : <String, dynamic>{},
-      );
       if (mounted) setState(() => _saving = false);
       final input = await _showEditBillingDialog(
         title: '請求書を編集: ${invoice.invoiceNo}',
         initialDate: currentDate,
         showDueDate: true,
         initialDueText: currentDue == '-' ? '' : currentDue,
-        initialRecipient: currentRecipient,
+        initialRecipientStoreId: invoice.storeId,
+        initialRecipientStoreName: invoice.storeName,
         initialLines: lines,
       );
       if (input == null) return;
@@ -2735,21 +2753,13 @@ class _BillingPageState extends State<BillingPage> {
         'pdfDateLocal',
         _dateFromLocalField(data, 'createdAtLocal', invoice.createdAt),
       );
-      final currentRecipient = _BillingRecipient.fromMap(
-        data['recipient'] is Map
-            ? Map<String, dynamic>.from(
-                (data['recipient'] as Map).map(
-                  (k, v) => MapEntry(k.toString(), v),
-                ),
-              )
-            : <String, dynamic>{},
-      );
       if (mounted) setState(() => _saving = false);
       final input = await _showEditBillingDialog(
         title: '受領書を編集: ${invoice.invoiceNo}',
         initialDate: currentDate,
         showDueDate: false,
-        initialRecipient: currentRecipient,
+        initialRecipientStoreId: invoice.storeId,
+        initialRecipientStoreName: invoice.storeName,
         initialLines: lines,
       );
       if (input == null) return;
