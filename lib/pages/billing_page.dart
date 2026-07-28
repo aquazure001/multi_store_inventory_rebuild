@@ -2276,12 +2276,25 @@ class _BillingPageState extends State<BillingPage> {
     required DateTime initialDate,
     required bool showDueDate,
     String initialDueText = '',
+    required _BillingRecipient initialRecipient,
     required List<_BillingLine> initialLines,
   }) async {
     final dateController = TextEditingController(
       text: _dateInputText(initialDate),
     );
     final dueController = TextEditingController(text: initialDueText);
+    final recipientNameController = TextEditingController(
+      text: initialRecipient.name,
+    );
+    final recipientPostalController = TextEditingController(
+      text: initialRecipient.postal,
+    );
+    final recipientAddress1Controller = TextEditingController(
+      text: initialRecipient.address1,
+    );
+    final recipientAddress2Controller = TextEditingController(
+      text: initialRecipient.address2,
+    );
     final rows = initialLines.isEmpty
         ? <_ManualBillingLineControllers>[_ManualBillingLineControllers()]
         : initialLines
@@ -2317,6 +2330,49 @@ class _BillingPageState extends State<BillingPage> {
                       ),
                     ),
                   ],
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      '宛先',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: recipientNameController,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: '宛名',
+                      hintText: '例：〇〇店 様',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: recipientPostalController,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: '郵便番号',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: recipientAddress1Controller,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: '住所1',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: recipientAddress2Controller,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: '住所2・建物名など',
+                    ),
+                  ),
                   const SizedBox(height: 12),
                   for (int i = 0; i < rows.length; i++)
                     Card(
@@ -2489,6 +2545,12 @@ class _BillingPageState extends State<BillingPage> {
                 _ManualEditInput(
                   dateText: dateController.text,
                   dueText: dueController.text,
+                  recipient: _BillingRecipient(
+                    name: recipientNameController.text,
+                    postal: recipientPostalController.text,
+                    address1: recipientAddress1Controller.text,
+                    address2: recipientAddress2Controller.text,
+                  ),
                   rows: rows,
                 ),
               ),
@@ -2536,12 +2598,22 @@ class _BillingPageState extends State<BillingPage> {
       );
       final currentDue = (data['paymentDueText'] ?? invoice.paymentDueText)
           .toString();
+      final currentRecipient = _BillingRecipient.fromMap(
+        data['recipient'] is Map
+            ? Map<String, dynamic>.from(
+                (data['recipient'] as Map).map(
+                  (k, v) => MapEntry(k.toString(), v),
+                ),
+              )
+            : <String, dynamic>{},
+      );
       if (mounted) setState(() => _saving = false);
       final input = await _showEditBillingDialog(
         title: '請求書を編集: ${invoice.invoiceNo}',
         initialDate: currentDate,
         showDueDate: true,
         initialDueText: currentDue == '-' ? '' : currentDue,
+        initialRecipient: currentRecipient,
         initialLines: lines,
       );
       if (input == null) return;
@@ -2566,15 +2638,7 @@ class _BillingPageState extends State<BillingPage> {
         _billingMonthFromData(data, invoice),
         input.dueText,
       );
-      final recipient = _BillingRecipient.fromMap(
-        data['recipient'] is Map
-            ? Map<String, dynamic>.from(
-                (data['recipient'] as Map).map(
-                  (k, v) => MapEntry(k.toString(), v),
-                ),
-              )
-            : <String, dynamic>{},
-      );
+      final recipient = input.recipient;
       final assets = await _loadPdfAssets();
       final pdfBytes = await _buildBillingPdf(
         kind: _BillingPdfKind.invoice,
@@ -2605,6 +2669,7 @@ class _BillingPageState extends State<BillingPage> {
         'total': totals['total'],
         'paymentDueDateLocal': dueDate.toIso8601String(),
         'paymentDueText': _dateText(dueDate),
+        'recipient': recipient.toMap(),
         'pdfDateLocal': issuedAt.toIso8601String(),
         'editedAt': FieldValue.serverTimestamp(),
         'editedAtLocal': DateTime.now().toIso8601String(),
@@ -2616,6 +2681,7 @@ class _BillingPageState extends State<BillingPage> {
         'billingMonth': invoice.billingMonth,
         'storeId': invoice.storeId,
         'storeName': invoice.storeName,
+        'recipient': recipient.toMap(),
         'updatedAt': FieldValue.serverTimestamp(),
         'updatedAtLocal': DateTime.now().toIso8601String(),
         'updatedBy': AppSession.nickname,
@@ -2669,11 +2735,21 @@ class _BillingPageState extends State<BillingPage> {
         'pdfDateLocal',
         _dateFromLocalField(data, 'createdAtLocal', invoice.createdAt),
       );
+      final currentRecipient = _BillingRecipient.fromMap(
+        data['recipient'] is Map
+            ? Map<String, dynamic>.from(
+                (data['recipient'] as Map).map(
+                  (k, v) => MapEntry(k.toString(), v),
+                ),
+              )
+            : <String, dynamic>{},
+      );
       if (mounted) setState(() => _saving = false);
       final input = await _showEditBillingDialog(
         title: '受領書を編集: ${invoice.invoiceNo}',
         initialDate: currentDate,
         showDueDate: false,
+        initialRecipient: currentRecipient,
         initialLines: lines,
       );
       if (input == null) return;
@@ -2694,15 +2770,7 @@ class _BillingPageState extends State<BillingPage> {
       }
       if (mounted) setState(() => _saving = true);
       final issuedAt = _manualIssueDate(input.dateText);
-      final recipient = _BillingRecipient.fromMap(
-        data['recipient'] is Map
-            ? Map<String, dynamic>.from(
-                (data['recipient'] as Map).map(
-                  (k, v) => MapEntry(k.toString(), v),
-                ),
-              )
-            : <String, dynamic>{},
-      );
+      final recipient = input.recipient;
       final billingMonth = _billingMonthFromData(data, invoice);
       final assets = await _loadPdfAssets();
       final pdfBytes = await _buildBillingPdf(
@@ -2732,6 +2800,7 @@ class _BillingPageState extends State<BillingPage> {
         'tax10': totals['tax10'],
         'tax8': totals['tax8'],
         'total': totals['total'],
+        'recipient': recipient.toMap(),
         'pdfDateLocal': issuedAt.toIso8601String(),
         'editedAt': FieldValue.serverTimestamp(),
         'editedAtLocal': DateTime.now().toIso8601String(),
@@ -2747,6 +2816,7 @@ class _BillingPageState extends State<BillingPage> {
         'billingMonth': invoice.billingMonth,
         'storeId': invoice.storeId,
         'storeName': invoice.storeName,
+        'recipient': recipient.toMap(),
         'updatedAt': FieldValue.serverTimestamp(),
         'updatedAtLocal': DateTime.now().toIso8601String(),
         'updatedBy': AppSession.nickname,
@@ -3784,11 +3854,13 @@ class _ManualEditInput {
   const _ManualEditInput({
     required this.dateText,
     required this.dueText,
+    required this.recipient,
     required this.rows,
   });
 
   final String dateText;
   final String dueText;
+  final _BillingRecipient recipient;
   final List<_ManualBillingLineControllers> rows;
 }
 
