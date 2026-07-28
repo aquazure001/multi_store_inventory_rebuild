@@ -1538,12 +1538,12 @@ class _BillingPageState extends State<BillingPage> {
         outside: pw.BorderSide.none,
       ),
       columnWidths: const {
-        0: pw.FlexColumnWidth(2.5),
-        1: pw.FlexColumnWidth(.7),
-        2: pw.FlexColumnWidth(.7),
-        3: pw.FlexColumnWidth(.8),
-        4: pw.FlexColumnWidth(1.0),
-        5: pw.FlexColumnWidth(1.6),
+        0: pw.FlexColumnWidth(2.2),
+        1: pw.FlexColumnWidth(.65),
+        2: pw.FlexColumnWidth(.6),
+        3: pw.FlexColumnWidth(.7),
+        4: pw.FlexColumnWidth(1.35),
+        5: pw.FlexColumnWidth(1.9),
       },
       children: [
         pw.TableRow(
@@ -2193,6 +2193,17 @@ class _BillingPageState extends State<BillingPage> {
     return lines;
   }
 
+  int _manualPreviewAmount(_ManualBillingLineControllers row) {
+    final qty = inventoryIntValue(row.qty.text);
+    final inputUnit = inventoryIntValue(row.unitPrice.text);
+    if (qty <= 0 || inputUnit <= 0) return 0;
+    final taxRate = row.taxRate == 8 ? 8 : 10;
+    final unitPrice = row.taxIncluded
+        ? (inputUnit / (1 + taxRate / 100)).round()
+        : inputUnit;
+    return unitPrice * qty;
+  }
+
   Future<void> _createManualInvoice() async {
     if (_selectedStoreId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2207,125 +2218,163 @@ class _BillingPageState extends State<BillingPage> {
     final rows = List.generate(8, (_) => _ManualBillingLineControllers());
     final result = await showDialog<_ManualInvoiceInput>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('任意請求書を作成'),
-        content: SizedBox(
-          width: 720,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '店舗: ${_selectedStoreName()} / 宛名: ${_recipientNameController.text}',
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: dueController,
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                    labelText: '支払い期限（未入力なら同月末日）',
-                    hintText: '例：2026-08-31',
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, dialogSetState) => AlertDialog(
+          title: const Text('任意請求書を作成'),
+          content: SizedBox(
+            width: 720,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '店舗: ${_selectedStoreName()} / 宛名: ${_recipientNameController.text}',
                   ),
-                ),
-                const SizedBox(height: 8),
-                for (int i = 0; i < rows.length; i++)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '${i + 1}行目',
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        Row(
-                          children: [
-                            Expanded(
-                              flex: 3,
-                              child: TextField(
-                                controller: rows[i].name,
-                                decoration: const InputDecoration(
-                                  border: OutlineInputBorder(),
-                                  labelText: '商品名欄',
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: TextField(
-                                controller: rows[i].qty,
-                                keyboardType: TextInputType.number,
-                                decoration: const InputDecoration(
-                                  border: OutlineInputBorder(),
-                                  labelText: '数量',
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: TextField(
-                                controller: rows[i].unitPrice,
-                                keyboardType: TextInputType.number,
-                                decoration: const InputDecoration(
-                                  border: OutlineInputBorder(),
-                                  labelText: '単価',
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: DropdownButtonFormField<int>(
-                                initialValue: rows[i].taxRate,
-                                decoration: const InputDecoration(
-                                  labelText: '税率',
-                                ),
-                                items: const [
-                                  DropdownMenuItem(
-                                    value: 10,
-                                    child: Text('10%'),
-                                  ),
-                                  DropdownMenuItem(value: 8, child: Text('8%')),
-                                ],
-                                onChanged: (value) =>
-                                    rows[i].taxRate = value ?? 10,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: CheckboxListTile(
-                                contentPadding: EdgeInsets.zero,
-                                title: const Text('税込単価'),
-                                value: rows[i].taxIncluded,
-                                onChanged: (value) =>
-                                    rows[i].taxIncluded = value == true,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: dueController,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: '支払い期限（未入力なら同月末日）',
+                      hintText: '例：2026-08-31',
                     ),
                   ),
-              ],
+                  const SizedBox(height: 8),
+                  for (int i = 0; i < rows.length; i++)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${i + 1}行目',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          Row(
+                            children: [
+                              Expanded(
+                                flex: 3,
+                                child: TextField(
+                                  controller: rows[i].name,
+                                  decoration: const InputDecoration(
+                                    border: OutlineInputBorder(),
+                                    labelText: '商品名欄',
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: TextField(
+                                  controller: rows[i].qty,
+                                  keyboardType: TextInputType.number,
+                                  onChanged: (_) => dialogSetState(() {}),
+                                  decoration: const InputDecoration(
+                                    border: OutlineInputBorder(),
+                                    labelText: '数量',
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                flex: 2,
+                                child: TextField(
+                                  controller: rows[i].unitPrice,
+                                  keyboardType: TextInputType.number,
+                                  onChanged: (_) => dialogSetState(() {}),
+                                  decoration: const InputDecoration(
+                                    border: OutlineInputBorder(),
+                                    labelText: '単価',
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: DropdownButtonFormField<int>(
+                                  initialValue: rows[i].taxRate,
+                                  decoration: const InputDecoration(
+                                    labelText: '税率',
+                                  ),
+                                  items: const [
+                                    DropdownMenuItem(
+                                      value: 10,
+                                      child: Text('10%'),
+                                    ),
+                                    DropdownMenuItem(
+                                      value: 8,
+                                      child: Text('8%'),
+                                    ),
+                                  ],
+                                  onChanged: (value) => dialogSetState(() {
+                                    rows[i].taxRate = value ?? 10;
+                                  }),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: CheckboxListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  controlAffinity:
+                                      ListTileControlAffinity.leading,
+                                  dense: true,
+                                  title: const Text('税込単価'),
+                                  value: rows[i].taxIncluded,
+                                  onChanged: (value) => dialogSetState(() {
+                                    rows[i].taxIncluded = value == true;
+                                  }),
+                                ),
+                              ),
+                            ],
+                          ),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: Container(
+                              width: 240,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFEAF6FF),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: const Color(0xFF64B5F6),
+                                ),
+                              ),
+                              child: Text(
+                                '金額（税抜） ￥${_yen(_manualPreviewAmount(rows[i]))}',
+                                textAlign: TextAlign.right,
+                                style: const TextStyle(
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('キャンセル'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(ctx).pop(
+                  _ManualInvoiceInput(dueText: dueController.text, rows: rows),
+                );
+              },
+              child: const Text('作成する'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('キャンセル'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.of(ctx).pop(
-                _ManualInvoiceInput(dueText: dueController.text, rows: rows),
-              );
-            },
-            child: const Text('作成する'),
-          ),
-        ],
       ),
     );
     if (result == null) return;
@@ -2476,128 +2525,166 @@ class _BillingPageState extends State<BillingPage> {
     final rows = List.generate(8, (_) => _ManualBillingLineControllers());
     final result = await showDialog<_ManualReceiptInput>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('任意受領書を作成'),
-        content: SizedBox(
-          width: 720,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '店舗: ${_selectedStoreName()} / 宛名: ${_recipientNameController.text}',
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: issueDateController,
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                    labelText: '発行日・受領日（未入力なら当日）',
-                    hintText: '例：2026-07-29',
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, dialogSetState) => AlertDialog(
+          title: const Text('任意受領書を作成'),
+          content: SizedBox(
+            width: 720,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '店舗: ${_selectedStoreName()} / 宛名: ${_recipientNameController.text}',
                   ),
-                ),
-                const SizedBox(height: 8),
-                for (int i = 0; i < rows.length; i++)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '${i + 1}行目',
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        Row(
-                          children: [
-                            Expanded(
-                              flex: 3,
-                              child: TextField(
-                                controller: rows[i].name,
-                                decoration: const InputDecoration(
-                                  border: OutlineInputBorder(),
-                                  labelText: '商品名欄',
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: TextField(
-                                controller: rows[i].qty,
-                                keyboardType: TextInputType.number,
-                                decoration: const InputDecoration(
-                                  border: OutlineInputBorder(),
-                                  labelText: '数量',
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: TextField(
-                                controller: rows[i].unitPrice,
-                                keyboardType: TextInputType.number,
-                                decoration: const InputDecoration(
-                                  border: OutlineInputBorder(),
-                                  labelText: '単価',
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: DropdownButtonFormField<int>(
-                                initialValue: rows[i].taxRate,
-                                decoration: const InputDecoration(
-                                  labelText: '税率',
-                                ),
-                                items: const [
-                                  DropdownMenuItem(
-                                    value: 10,
-                                    child: Text('10%'),
-                                  ),
-                                  DropdownMenuItem(value: 8, child: Text('8%')),
-                                ],
-                                onChanged: (value) =>
-                                    rows[i].taxRate = value ?? 10,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: CheckboxListTile(
-                                contentPadding: EdgeInsets.zero,
-                                title: const Text('税込単価'),
-                                value: rows[i].taxIncluded,
-                                onChanged: (value) =>
-                                    rows[i].taxIncluded = value == true,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: issueDateController,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: '発行日・受領日（未入力なら当日）',
+                      hintText: '例：2026-07-29',
                     ),
                   ),
-              ],
+                  const SizedBox(height: 8),
+                  for (int i = 0; i < rows.length; i++)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${i + 1}行目',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          Row(
+                            children: [
+                              Expanded(
+                                flex: 3,
+                                child: TextField(
+                                  controller: rows[i].name,
+                                  decoration: const InputDecoration(
+                                    border: OutlineInputBorder(),
+                                    labelText: '商品名欄',
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: TextField(
+                                  controller: rows[i].qty,
+                                  keyboardType: TextInputType.number,
+                                  onChanged: (_) => dialogSetState(() {}),
+                                  decoration: const InputDecoration(
+                                    border: OutlineInputBorder(),
+                                    labelText: '数量',
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                flex: 2,
+                                child: TextField(
+                                  controller: rows[i].unitPrice,
+                                  keyboardType: TextInputType.number,
+                                  onChanged: (_) => dialogSetState(() {}),
+                                  decoration: const InputDecoration(
+                                    border: OutlineInputBorder(),
+                                    labelText: '単価',
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: DropdownButtonFormField<int>(
+                                  initialValue: rows[i].taxRate,
+                                  decoration: const InputDecoration(
+                                    labelText: '税率',
+                                  ),
+                                  items: const [
+                                    DropdownMenuItem(
+                                      value: 10,
+                                      child: Text('10%'),
+                                    ),
+                                    DropdownMenuItem(
+                                      value: 8,
+                                      child: Text('8%'),
+                                    ),
+                                  ],
+                                  onChanged: (value) => dialogSetState(() {
+                                    rows[i].taxRate = value ?? 10;
+                                  }),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: CheckboxListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  controlAffinity:
+                                      ListTileControlAffinity.leading,
+                                  dense: true,
+                                  title: const Text('税込単価'),
+                                  value: rows[i].taxIncluded,
+                                  onChanged: (value) => dialogSetState(() {
+                                    rows[i].taxIncluded = value == true;
+                                  }),
+                                ),
+                              ),
+                            ],
+                          ),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: Container(
+                              width: 240,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFEAF6FF),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: const Color(0xFF64B5F6),
+                                ),
+                              ),
+                              child: Text(
+                                '金額（税抜） ￥${_yen(_manualPreviewAmount(rows[i]))}',
+                                textAlign: TextAlign.right,
+                                style: const TextStyle(
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('キャンセル'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(ctx).pop(
+                  _ManualReceiptInput(
+                    issueDateText: issueDateController.text,
+                    rows: rows,
+                  ),
+                );
+              },
+              child: const Text('作成する'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('キャンセル'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.of(ctx).pop(
-                _ManualReceiptInput(
-                  issueDateText: issueDateController.text,
-                  rows: rows,
-                ),
-              );
-            },
-            child: const Text('作成する'),
-          ),
-        ],
       ),
     );
     if (result == null) return;
