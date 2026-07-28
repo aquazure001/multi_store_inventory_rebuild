@@ -1137,8 +1137,10 @@ class _BillingPageState extends State<BillingPage> {
                     children: [
                       pw.Expanded(
                         child: _billingAddressBlock(
-                          title: '金只 歩 様',
-                          lines: const ['〒278-0022', '千葉県野田市山崎2267-50'],
+                          title: recipient.name.isEmpty
+                              ? '$storeName 様'
+                              : recipient.name,
+                          lines: recipient.pdfLines,
                           dotColor: PdfColor.fromHex('#2B9BDA'),
                           fontBold: assets.boldFont,
                         ),
@@ -1948,6 +1950,15 @@ class _BillingPageState extends State<BillingPage> {
                 label: const Text('任意項目の請求書を作成'),
               ),
             ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _saving ? null : _createManualReceiptOnly,
+                icon: const Icon(Icons.fact_check),
+                label: const Text('任意項目の受領書だけ作成'),
+              ),
+            ),
           ],
         ),
       ),
@@ -2067,7 +2078,9 @@ class _BillingPageState extends State<BillingPage> {
   }
 
   Future<void> _cancelInvoice(_BillingInvoiceSummary invoice) async {
-    final isManual = invoice.billingMode == 'manual';
+    final isManual =
+        invoice.billingMode == 'manual' ||
+        invoice.billingMode == 'manual_receipt_only';
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -2133,6 +2146,51 @@ class _BillingPageState extends State<BillingPage> {
     final normalized = text.replaceAll('/', '-').replaceAll('.', '-');
     return DateTime.tryParse(normalized) ??
         DateTime(baseMonth.year, baseMonth.month + 1, 0);
+  }
+
+  DateTime _manualIssueDate(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty) return DateTime.now();
+    final normalized = text.replaceAll('/', '-').replaceAll('.', '-');
+    return DateTime.tryParse(normalized) ?? DateTime.now();
+  }
+
+  List<_BillingLine> _manualLinesFromRows(
+    List<_ManualBillingLineControllers> rows,
+    String storeName,
+  ) {
+    final nowMicros = DateTime.now().microsecondsSinceEpoch;
+    final lines = <_BillingLine>[];
+    for (int i = 0; i < rows.length; i++) {
+      final row = rows[i];
+      final name = row.name.text.trim();
+      if (name.isEmpty) continue;
+      final qty = inventoryIntValue(row.qty.text);
+      final inputUnit = inventoryIntValue(row.unitPrice.text);
+      if (qty <= 0 || inputUnit <= 0) continue;
+      final taxRate = row.taxRate == 8 ? 8 : 10;
+      final unitPrice = row.taxIncluded
+          ? (inputUnit / (1 + taxRate / 100)).round()
+          : inputUnit;
+      lines.add(
+        _BillingLine(
+          key: 'manual_${nowMicros}_$i',
+          batchId: 'manual',
+          batchTitle: '任意項目',
+          orderDate: DateTime.now(),
+          storeId: _selectedStoreId,
+          storeName: storeName,
+          itemType: '任意',
+          itemCode: '',
+          itemName: name,
+          qty: qty,
+          unitPrice: unitPrice,
+          listPrice: inputUnit,
+          taxRate: taxRate,
+        ),
+      );
+    }
+    return lines;
   }
 
   Future<void> _createManualInvoice() async {
@@ -2404,6 +2462,279 @@ class _BillingPageState extends State<BillingPage> {
     }
   }
 
+  Future<void> _createManualReceiptOnly() async {
+    if (_selectedStoreId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('先に店舗を選択してください'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    final issueDateController = TextEditingController();
+    final rows = List.generate(8, (_) => _ManualBillingLineControllers());
+    final result = await showDialog<_ManualReceiptInput>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('任意受領書を作成'),
+        content: SizedBox(
+          width: 720,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '店舗: ${_selectedStoreName()} / 宛名: ${_recipientNameController.text}',
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: issueDateController,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    labelText: '発行日・受領日（未入力なら当日）',
+                    hintText: '例：2026-07-29',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                for (int i = 0; i < rows.length; i++)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${i + 1}行目',
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        Row(
+                          children: [
+                            Expanded(
+                              flex: 3,
+                              child: TextField(
+                                controller: rows[i].name,
+                                decoration: const InputDecoration(
+                                  border: OutlineInputBorder(),
+                                  labelText: '商品名欄',
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: TextField(
+                                controller: rows[i].qty,
+                                keyboardType: TextInputType.number,
+                                decoration: const InputDecoration(
+                                  border: OutlineInputBorder(),
+                                  labelText: '数量',
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: TextField(
+                                controller: rows[i].unitPrice,
+                                keyboardType: TextInputType.number,
+                                decoration: const InputDecoration(
+                                  border: OutlineInputBorder(),
+                                  labelText: '単価',
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: DropdownButtonFormField<int>(
+                                initialValue: rows[i].taxRate,
+                                decoration: const InputDecoration(
+                                  labelText: '税率',
+                                ),
+                                items: const [
+                                  DropdownMenuItem(
+                                    value: 10,
+                                    child: Text('10%'),
+                                  ),
+                                  DropdownMenuItem(value: 8, child: Text('8%')),
+                                ],
+                                onChanged: (value) =>
+                                    rows[i].taxRate = value ?? 10,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: CheckboxListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('税込単価'),
+                                value: rows[i].taxIncluded,
+                                onChanged: (value) =>
+                                    rows[i].taxIncluded = value == true,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(ctx).pop(
+                _ManualReceiptInput(
+                  issueDateText: issueDateController.text,
+                  rows: rows,
+                ),
+              );
+            },
+            child: const Text('作成する'),
+          ),
+        ],
+      ),
+    );
+    if (result == null) return;
+
+    final storeName = _selectedStoreName();
+    final recipient = _currentRecipientFromControllers();
+    final issuedAt = _manualIssueDate(result.issueDateText);
+    final lines = _manualLinesFromRows(result.rows, storeName);
+    if (lines.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('受領項目を1つ以上入力してください'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      final invoiceSeq = _nextInvoiceSequence();
+      final receiptNo = _invoiceNo(invoiceSeq);
+      final assets = await _loadPdfAssets();
+      final pdfBytes = await _buildBillingPdf(
+        kind: _BillingPdfKind.receipt,
+        assets: assets,
+        no: receiptNo,
+        date: issuedAt,
+        billingMonth: _selectedMonth,
+        storeName: storeName,
+        billingTypeText: '任意受領',
+        recipient: recipient,
+        paymentDueTextOverride: null,
+        repaymentEnabled: false,
+        repaymentCurrent: 0,
+        repaymentTotal: 0,
+        repaymentMonthlyAmount: 0,
+        lines: lines,
+      );
+      final subtotal = lines.fold<int>(0, (total, line) => total + line.amount);
+      final subtotal10 = _subtotalForRate(lines, 10);
+      final subtotal8 = _subtotalForRate(lines, 8);
+      final tax10 = _taxFor(subtotal10, 10);
+      final tax8 = _taxFor(subtotal8, 8);
+      final total = subtotal + tax10 + tax8;
+      final receiptRef = AppSession.billingReceipts.doc();
+      await receiptRef.set({
+        'id': receiptRef.id,
+        'invoiceId': '',
+        'invoiceNo': receiptNo,
+        'invoiceSeq': invoiceSeq,
+        'billingMode': 'manual_receipt_only',
+        'billingItemTypes': ['任意受領'],
+        'billingMonth': _monthKey(_selectedMonth),
+        'storeId': _selectedStoreId,
+        'storeName': storeName,
+        'recipient': recipient.toMap(),
+        'createdAt': FieldValue.serverTimestamp(),
+        'createdAtLocal': issuedAt.toIso8601String(),
+        'createdBy': AppSession.nickname,
+        'status': 'issued',
+        'subtotal': subtotal,
+        'subtotal10': subtotal10,
+        'subtotal8': subtotal8,
+        'tax10': tax10,
+        'tax8': tax8,
+        'total': total,
+        'items': lines
+            .map((line) => line.toInvoiceMap(line.unitPrice))
+            .toList(),
+        'hasSavedPdf': true,
+      });
+      await AppSession.billingReceiptPdfs.doc(receiptRef.id).set({
+        'receiptId': receiptRef.id,
+        'invoiceId': '',
+        'invoiceNo': receiptNo,
+        'invoiceSeq': invoiceSeq,
+        'billingMode': 'manual_receipt_only',
+        'billingMonth': _monthKey(_selectedMonth),
+        'storeId': _selectedStoreId,
+        'storeName': storeName,
+        'recipient': recipient.toMap(),
+        'createdAt': FieldValue.serverTimestamp(),
+        'createdAtLocal': issuedAt.toIso8601String(),
+        'createdBy': AppSession.nickname,
+        'pdfBase64': base64Encode(pdfBytes),
+        'pdfFileName': '任意受領書_${storeName}_$receiptNo.pdf',
+      });
+      final summaryRef = AppSession.billingInvoices.doc();
+      await summaryRef.set({
+        'id': summaryRef.id,
+        'invoiceNo': receiptNo,
+        'invoiceSeq': invoiceSeq,
+        'createdAt': FieldValue.serverTimestamp(),
+        'createdAtLocal': issuedAt.toIso8601String(),
+        'createdBy': AppSession.nickname,
+        'status': 'issued',
+        'billingMode': 'manual_receipt_only',
+        'billingItemTypes': ['任意受領'],
+        'billingMonth': _monthKey(_selectedMonth),
+        'storeId': _selectedStoreId,
+        'storeName': storeName,
+        'recipient': recipient.toMap(),
+        'lineKeys': <String>[],
+        'subtotal': subtotal,
+        'subtotal10': subtotal10,
+        'subtotal8': subtotal8,
+        'tax10': tax10,
+        'tax8': tax8,
+        'total': total,
+        'items': lines
+            .map((line) => line.toInvoiceMap(line.unitPrice))
+            .toList(),
+        'receiptId': receiptRef.id,
+        'hasSavedPdf': true,
+      });
+      await Printing.sharePdf(
+        bytes: pdfBytes,
+        filename: '任意受領書_${storeName}_$receiptNo.pdf',
+      );
+      await _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('任意受領書作成失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      for (final row in rows) {
+        row.dispose();
+      }
+      issueDateController.dispose();
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   Widget _buildInvoices() {
     if (_invoices.isEmpty) {
       return const Card(child: ListTile(title: Text('発行済みの請求書はまだありません')));
@@ -2426,17 +2757,25 @@ class _BillingPageState extends State<BillingPage> {
               trailing: Wrap(
                 spacing: 6,
                 children: [
-                  OutlinedButton(
-                    onPressed: _saving ? null : () => _openInvoicePdf(invoice),
-                    child: const Text('請求書'),
-                  ),
+                  if (invoice.billingMode != 'manual_receipt_only')
+                    OutlinedButton(
+                      onPressed: _saving
+                          ? null
+                          : () => _openInvoicePdf(invoice),
+                      child: const Text('請求書'),
+                    ),
                   ElevatedButton(
                     onPressed: _saving ? null : () => _createReceipt(invoice),
                     child: Text(invoice.receiptId.isEmpty ? '受領書作成' : '受領書'),
                   ),
                   TextButton(
                     onPressed: _saving ? null : () => _cancelInvoice(invoice),
-                    child: Text(invoice.billingMode == 'manual' ? '削除' : '取消'),
+                    child: Text(
+                      invoice.billingMode == 'manual' ||
+                              invoice.billingMode == 'manual_receipt_only'
+                          ? '削除'
+                          : '取消',
+                    ),
                   ),
                 ],
               ),
@@ -2736,6 +3075,13 @@ class _ManualInvoiceInput {
   const _ManualInvoiceInput({required this.dueText, required this.rows});
 
   final String dueText;
+  final List<_ManualBillingLineControllers> rows;
+}
+
+class _ManualReceiptInput {
+  const _ManualReceiptInput({required this.issueDateText, required this.rows});
+
+  final String issueDateText;
   final List<_ManualBillingLineControllers> rows;
 }
 
