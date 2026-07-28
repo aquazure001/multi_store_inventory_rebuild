@@ -43,6 +43,18 @@ class AppSession {
 
   static CollectionReference<Map<String, dynamic>> get orderBatches =>
       ordersDoc.collection('batches');
+
+  static CollectionReference<Map<String, dynamic>> get billingInvoices =>
+      doc('billing_invoices').collection('entries');
+
+  static CollectionReference<Map<String, dynamic>> get billingInvoicePdfs =>
+      doc('billing_invoice_pdfs').collection('entries');
+
+  static CollectionReference<Map<String, dynamic>> get billingReceipts =>
+      doc('billing_receipts').collection('entries');
+
+  static CollectionReference<Map<String, dynamic>> get billingReceiptPdfs =>
+      doc('billing_receipt_pdfs').collection('entries');
 }
 
 // 広告エントリ（スロット番号付き）

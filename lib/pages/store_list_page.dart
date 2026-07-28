@@ -719,6 +719,10 @@ class _StoreListPageState extends State<StoreListPage> {
                 Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const PastOrderPdfPage()),
                 );
+              } else if (value == 'billing') {
+                Navigator.of(
+                  context,
+                ).push(MaterialPageRoute(builder: (_) => const BillingPage()));
               } else if (value == 'order_request_history') {
                 Navigator.of(context).push(
                   MaterialPageRoute(
@@ -877,6 +881,17 @@ class _StoreListPageState extends State<StoreListPage> {
                   ],
                 ),
               ),
+              if (AppSession.isSuperAdmin)
+                const PopupMenuItem(
+                  value: 'billing',
+                  child: Row(
+                    children: [
+                      Icon(Icons.request_quote, color: Colors.deepPurple),
+                      SizedBox(width: 12),
+                      Text('請求・受領管理'),
+                    ],
+                  ),
+                ),
               const PopupMenuItem(
                 value: 'order_request_history',
                 child: Row(
