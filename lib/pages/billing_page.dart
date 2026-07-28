@@ -17,11 +17,12 @@ class _BillingPageState extends State<BillingPage> {
   bool _showBilled = false;
   String? _error;
   String _selectedStoreId = '';
+  DateTime _selectedMonth = DateTime(DateTime.now().year, DateTime.now().month);
   final List<_BillingLine> _lines = [];
   final List<_BillingInvoiceSummary> _invoices = [];
   final Set<String> _billedKeys = <String>{};
+  final Set<String> _issuedMonthStoreKeys = <String>{};
   final Map<String, TextEditingController> _priceControllers = {};
-  final Set<String> _selectedKeys = <String>{};
 
   @override
   void initState() {
@@ -59,6 +60,7 @@ class _BillingPageState extends State<BillingPage> {
           .limit(100)
           .get();
       final billedKeys = <String>{};
+      final issuedMonthStoreKeys = <String>{};
       final invoices = <_BillingInvoiceSummary>[];
       for (final doc in invoiceSnap.docs) {
         final data = doc.data();
@@ -67,7 +69,11 @@ class _BillingPageState extends State<BillingPage> {
         if (rawKeys is List) {
           billedKeys.addAll(rawKeys.map((e) => e.toString()));
         }
-        invoices.add(_BillingInvoiceSummary.fromDoc(doc.id, data));
+        final summary = _BillingInvoiceSummary.fromDoc(doc.id, data);
+        invoices.add(summary);
+        if (summary.monthStoreKey.isNotEmpty) {
+          issuedMonthStoreKeys.add(summary.monthStoreKey);
+        }
       }
 
       final batchSnap = await AppSession.orderBatches
@@ -136,12 +142,16 @@ class _BillingPageState extends State<BillingPage> {
         _invoices
           ..clear()
           ..addAll(invoices);
+        _issuedMonthStoreKeys
+          ..clear()
+          ..addAll(issuedMonthStoreKeys);
         _lines
           ..clear()
           ..addAll(lines);
-        _selectedKeys.removeWhere(
-          (key) => !_lines.any((line) => line.key == key),
-        );
+        if (_selectedStoreId.isEmpty) {
+          final stores = _storesForMonth(_selectedMonth);
+          if (stores.isNotEmpty) _selectedStoreId = stores.keys.first;
+        }
         _loading = false;
       });
     } catch (e) {
@@ -166,14 +176,80 @@ class _BillingPageState extends State<BillingPage> {
 
   String _dateText(DateTime dt) => '${dt.year}年${dt.month}月${dt.day}日';
 
-  String _invoiceNo(DateTime now) {
-    final y = now.year.toString();
-    final m = now.month.toString().padLeft(2, '0');
-    final d = now.day.toString().padLeft(2, '0');
-    final h = now.hour.toString().padLeft(2, '0');
-    final mi = now.minute.toString().padLeft(2, '0');
-    final s = now.second.toString().padLeft(2, '0');
-    return 'AQU-$y$m$d$h$mi$s';
+  String _invoiceNo(int sequence) {
+    return 'AQU-${sequence.toString().padLeft(5, '0')}';
+  }
+
+  int _nextInvoiceSequence() {
+    var maxSeq = 0;
+    for (final invoice in _invoices) {
+      if (invoice.invoiceSeq > maxSeq) maxSeq = invoice.invoiceSeq;
+    }
+    if (maxSeq <= 0) maxSeq = _invoices.length;
+    return maxSeq + 1;
+  }
+
+  String _monthKey(DateTime month) {
+    return '${month.year}${month.month.toString().padLeft(2, '0')}';
+  }
+
+  DateTime _monthStart(DateTime month) => DateTime(month.year, month.month, 1);
+
+  DateTime _monthEnd(DateTime month) =>
+      DateTime(month.year, month.month + 1, 0, 23, 59, 59, 999);
+
+  bool _isSameMonth(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month;
+
+  bool _inSelectedMonth(_BillingLine line) =>
+      _isSameMonth(line.orderDate, _selectedMonth);
+
+  String _periodText(DateTime month) {
+    final end = _monthEnd(month);
+    return '${month.year}年${month.month}月1日〜${end.month}月${end.day}日';
+  }
+
+  String _monthStoreKey(DateTime month, String storeId) =>
+      '${_monthKey(month)}__$storeId';
+
+  DateTime _paymentDueDateForMonth(DateTime month) =>
+      DateTime(month.year, month.month + 1, 25);
+
+  String _paymentDueTextForMonth(DateTime month) =>
+      _dateText(_paymentDueDateForMonth(month));
+
+  List<DateTime> _availableMonths() {
+    final keys = <String, DateTime>{};
+    for (final line in _lines) {
+      final month = DateTime(line.orderDate.year, line.orderDate.month);
+      keys[_monthKey(month)] = month;
+    }
+    keys[_monthKey(_selectedMonth)] = _selectedMonth;
+    final months = keys.values.toList()..sort((a, b) => b.compareTo(a));
+    return months;
+  }
+
+  Map<String, String> _storesForMonth(DateTime month) {
+    final map = <String, String>{};
+    for (final line in _lines) {
+      if (!_isSameMonth(line.orderDate, month)) continue;
+      if (line.storeId.isNotEmpty && line.storeName.isNotEmpty) {
+        map[line.storeId] = line.storeName;
+      }
+    }
+    final entries = map.entries.toList()
+      ..sort((a, b) => a.value.compareTo(b.value));
+    return Map<String, String>.fromEntries(entries);
+  }
+
+  String _selectedStoreName() {
+    return _storesForMonth(_selectedMonth)[_selectedStoreId] ?? '';
+  }
+
+  List<_BillingLine> _withPrices(List<_BillingLine> lines) {
+    return lines
+        .map((line) => line.copyWith(unitPrice: _priceFor(line)))
+        .toList();
   }
 
   String _yen(int value) {
@@ -194,6 +270,7 @@ class _BillingPageState extends State<BillingPage> {
   List<_BillingLine> get _visibleLines {
     return _lines.where((line) {
       if (!_showBilled && line.billed) return false;
+      if (!_inSelectedMonth(line)) return false;
       if (_selectedStoreId.isNotEmpty && line.storeId != _selectedStoreId) {
         return false;
       }
@@ -201,32 +278,26 @@ class _BillingPageState extends State<BillingPage> {
     }).toList();
   }
 
-  List<_BillingLine> get _selectedLines => _lines
-      .where((line) => _selectedKeys.contains(line.key) && !line.billed)
+  List<_BillingLine> get _invoiceTargetLines => _visibleLines
+      .where((line) => !line.billed && line.storeId == _selectedStoreId)
       .toList();
 
-  int get _selectedSubtotal {
+  int get _targetSubtotal {
     var total = 0;
-    for (final line in _selectedLines) {
+    for (final line in _invoiceTargetLines) {
       total += line.qty * _priceFor(line);
     }
     return total;
   }
 
-  int get _selectedTax => (_selectedSubtotal * 0.1).round();
-  int get _selectedTotal => _selectedSubtotal + _selectedTax;
+  int get _targetTax => (_targetSubtotal * 0.1).round();
+  int get _targetTotal => _targetSubtotal + _targetTax;
 
-  Map<String, String> _stores() {
-    final map = <String, String>{};
-    for (final line in _lines) {
-      if (line.storeId.isNotEmpty && line.storeName.isNotEmpty) {
-        map[line.storeId] = line.storeName;
-      }
-    }
-    final entries = map.entries.toList()
-      ..sort((a, b) => a.value.compareTo(b.value));
-    return Map<String, String>.fromEntries(entries);
-  }
+  bool get _alreadyIssuedForSelectedMonthStore =>
+      _selectedStoreId.isNotEmpty &&
+      _issuedMonthStoreKeys.contains(
+        _monthStoreKey(_selectedMonth, _selectedStoreId),
+      );
 
   Future<pw.MemoryImage> _assetImage(String path) async {
     final data = await rootBundle.load(path);
@@ -255,11 +326,32 @@ class _BillingPageState extends State<BillingPage> {
   }
 
   Future<void> _createInvoice() async {
-    final lines = _selectedLines;
+    if (_selectedStoreId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('先に店舗を選択してください'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    if (_alreadyIssuedForSelectedMonthStore) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${_selectedStoreName()} / ${_periodText(_selectedMonth)} は請求書作成済みです',
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    final lines = _invoiceTargetLines;
     if (lines.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('請求する明細を選択してください'),
+          content: Text('この店舗・この月の未請求明細がありません'),
           backgroundColor: Colors.orange,
         ),
       );
@@ -269,19 +361,31 @@ class _BillingPageState extends State<BillingPage> {
     if (missingPrice.isNotEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('選択した明細の単価を入力してください'),
+          content: Text('対象明細すべての単価を入力してください'),
           backgroundColor: Colors.orange,
         ),
       );
       return;
     }
 
+    final storeName = _selectedStoreName();
+    final periodText = _periodText(_selectedMonth);
+    final dueText = _paymentDueTextForMonth(_selectedMonth);
+    final pricedLines = _withPrices(lines);
+    final total = pricedLines.fold<int>(
+      0,
+      (total, line) => total + line.amount,
+    );
+    final totalWithTax = total + (total * 0.1).round();
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('請求書を作成しますか？'),
+        title: const Text('月次請求書を作成しますか？'),
         content: Text(
-          '選択 ${lines.length} 明細 / 合計 ￥${_yen(_selectedTotal)} の請求書を作成し、PDFを保存します。',
+          '$storeName / $periodText の発注明細 ${lines.length} 件をまとめます。\n'
+          'お支払期限: $dueText\n'
+          '合計 ￥${_yen(totalWithTax)} の請求書PDFを作成して保存します。',
         ),
         actions: [
           TextButton(
@@ -300,38 +404,53 @@ class _BillingPageState extends State<BillingPage> {
     setState(() => _saving = true);
     try {
       final issuedAt = DateTime.now();
-      final invoiceNo = _invoiceNo(issuedAt);
+      final invoiceSeq = _nextInvoiceSequence();
+      final invoiceNo = _invoiceNo(invoiceSeq);
       final asset = await _loadPdfAssets();
       final pdfBytes = await _buildBillingPdf(
         kind: _BillingPdfKind.invoice,
         assets: asset,
         no: invoiceNo,
         date: issuedAt,
-        lines: lines,
+        billingMonth: _selectedMonth,
+        storeName: storeName,
+        lines: pricedLines,
       );
       final invoiceRef = AppSession.billingInvoices.doc();
       final invoiceData = _invoiceData(
         invoiceRef.id,
         invoiceNo,
+        invoiceSeq,
         issuedAt,
-        lines,
+        _selectedMonth,
+        _selectedStoreId,
+        storeName,
+        pricedLines,
       );
       await invoiceRef.set(invoiceData);
       await AppSession.billingInvoicePdfs.doc(invoiceRef.id).set({
         'invoiceId': invoiceRef.id,
         'invoiceNo': invoiceNo,
+        'billingMonth': _monthKey(_selectedMonth),
+        'storeId': _selectedStoreId,
+        'storeName': storeName,
         'createdAt': FieldValue.serverTimestamp(),
         'createdAtLocal': issuedAt.toIso8601String(),
         'createdBy': AppSession.nickname,
         'pdfBase64': base64Encode(pdfBytes),
-        'pdfFileName': '請求書_$invoiceNo.pdf',
+        'pdfFileName':
+            '請求書_${_monthKey(_selectedMonth)}_${storeName}_$invoiceNo.pdf',
       });
-      await Printing.sharePdf(bytes: pdfBytes, filename: '請求書_$invoiceNo.pdf');
+      await Printing.sharePdf(
+        bytes: pdfBytes,
+        filename:
+            '請求書_${_monthKey(_selectedMonth)}_${storeName}_$invoiceNo.pdf',
+      );
       await _load();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('請求書を作成して保存しました'),
+            content: Text('月次請求書を作成して保存しました'),
             backgroundColor: Colors.green,
           ),
         );
@@ -350,27 +469,41 @@ class _BillingPageState extends State<BillingPage> {
   Map<String, dynamic> _invoiceData(
     String id,
     String invoiceNo,
+    int invoiceSeq,
     DateTime issuedAt,
+    DateTime billingMonth,
+    String storeId,
+    String storeName,
     List<_BillingLine> lines,
   ) {
-    final subtotal = lines.fold<int>(
-      0,
-      (total, line) => total + line.qty * _priceFor(line),
-    );
+    final subtotal = lines.fold<int>(0, (total, line) => total + line.amount);
     final tax = (subtotal * 0.1).round();
+    final dueDate = _paymentDueDateForMonth(billingMonth);
     return {
       'id': id,
       'invoiceNo': invoiceNo,
+      'invoiceSeq': invoiceSeq,
       'createdAt': FieldValue.serverTimestamp(),
       'createdAtLocal': issuedAt.toIso8601String(),
       'createdBy': AppSession.nickname,
       'status': 'issued',
+      'billingMode': 'monthly_store',
+      'billingMonth': _monthKey(billingMonth),
+      'billingYear': billingMonth.year,
+      'billingMonthNumber': billingMonth.month,
+      'billingPeriodStartLocal': _monthStart(billingMonth).toIso8601String(),
+      'billingPeriodEndLocal': _monthEnd(billingMonth).toIso8601String(),
+      'paymentDueDateLocal': dueDate.toIso8601String(),
+      'paymentDueText': _dateText(dueDate),
+      'storeId': storeId,
+      'storeName': storeName,
+      'monthStoreKey': _monthStoreKey(billingMonth, storeId),
       'lineKeys': lines.map((line) => line.key).toList(),
       'subtotal': subtotal,
       'tax10': tax,
       'tax8': 0,
       'total': subtotal + tax,
-      'items': lines.map((line) => line.toInvoiceMap(_priceFor(line))).toList(),
+      'items': lines.map((line) => line.toInvoiceMap(line.unitPrice)).toList(),
       'hasSavedPdf': true,
     };
   }
@@ -462,6 +595,8 @@ class _BillingPageState extends State<BillingPage> {
         assets: assets,
         no: invoice.invoiceNo,
         date: issuedAt,
+        billingMonth: invoice.billingMonthDate,
+        storeName: invoice.storeName,
         lines: lines,
       );
       final receiptRef = AppSession.billingReceipts.doc();
@@ -469,6 +604,11 @@ class _BillingPageState extends State<BillingPage> {
         'id': receiptRef.id,
         'invoiceId': invoice.id,
         'invoiceNo': invoice.invoiceNo,
+        'invoiceSeq': invoice.invoiceSeq,
+        'billingMonth': invoice.billingMonth,
+        'storeId': invoice.storeId,
+        'storeName': invoice.storeName,
+        'monthStoreKey': invoice.monthStoreKey,
         'createdAt': FieldValue.serverTimestamp(),
         'createdAtLocal': issuedAt.toIso8601String(),
         'createdBy': AppSession.nickname,
@@ -484,6 +624,11 @@ class _BillingPageState extends State<BillingPage> {
         'receiptId': receiptRef.id,
         'invoiceId': invoice.id,
         'invoiceNo': invoice.invoiceNo,
+        'invoiceSeq': invoice.invoiceSeq,
+        'billingMonth': invoice.billingMonth,
+        'storeId': invoice.storeId,
+        'storeName': invoice.storeName,
+        'monthStoreKey': invoice.monthStoreKey,
         'createdAt': FieldValue.serverTimestamp(),
         'createdAtLocal': issuedAt.toIso8601String(),
         'createdBy': AppSession.nickname,
@@ -524,6 +669,8 @@ class _BillingPageState extends State<BillingPage> {
     required _BillingPdfAssets assets,
     required String no,
     required DateTime date,
+    required DateTime billingMonth,
+    required String storeName,
     required List<_BillingLine> lines,
   }) async {
     final pdf = pw.Document();
@@ -684,13 +831,23 @@ class _BillingPageState extends State<BillingPage> {
                       pw.Expanded(
                         child: _billingDateBox(
                           isInvoice ? 'お支払期限' : '受領日',
-                          isInvoice ? _paymentDueText(date) : _dateText(date),
+                          isInvoice
+                              ? _paymentDueTextForMonth(billingMonth)
+                              : _dateText(date),
                           assets.boldFont,
                         ),
                       ),
                     ],
                   ),
-                  pw.SizedBox(height: 15),
+                  pw.SizedBox(height: 9),
+                  pw.Container(
+                    padding: const pw.EdgeInsets.symmetric(horizontal: 8),
+                    child: pw.Text(
+                      '対象店舗：$storeName　対象期間：${_periodText(billingMonth)}',
+                      style: pw.TextStyle(font: assets.boldFont, fontSize: 9.5),
+                    ),
+                  ),
+                  pw.SizedBox(height: 6),
                   _billingPdfTable(lines, assets.boldFont),
                   pw.SizedBox(height: 8),
                   pw.Row(
@@ -723,14 +880,6 @@ class _BillingPageState extends State<BillingPage> {
       ),
     );
     return pdf.save();
-  }
-
-  String _paymentDueText(DateTime issuedAt) {
-    final nextMonth = issuedAt.month == 12
-        ? DateTime(issuedAt.year + 1, 1, 1)
-        : DateTime(issuedAt.year, issuedAt.month + 1, 1);
-    final lastDay = DateTime(nextMonth.year, nextMonth.month + 1, 0);
-    return _dateText(lastDay);
   }
 
   pw.Widget _billingPdfBackground(pw.MemoryImage logo, pw.MemoryImage mascot) {
@@ -1029,7 +1178,7 @@ class _BillingPageState extends State<BillingPage> {
             children: i < visibleRows.length
                 ? [
                     _billingPdfCell(
-                      '${visibleRows[i].itemName}（${visibleRows[i].storeName}）',
+                      '${visibleRows[i].itemName}（コード:${visibleRows[i].itemCode}）',
                     ),
                     _billingPdfCell('${visibleRows[i].qty}', right: true),
                     _billingPdfCell('個', center: true),
@@ -1171,7 +1320,13 @@ class _BillingPageState extends State<BillingPage> {
   );
 
   Widget _buildStoreFilter() {
-    final stores = _stores();
+    final months = _availableMonths();
+    final stores = _storesForMonth(_selectedMonth);
+    final currentStoreMissing =
+        _selectedStoreId.isNotEmpty && !stores.containsKey(_selectedStoreId);
+    if (currentStoreMissing) {
+      _selectedStoreId = stores.isEmpty ? '' : stores.keys.first;
+    }
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -1179,8 +1334,37 @@ class _BillingPageState extends State<BillingPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              '請求対象を選択',
+              '月次請求を作成',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              initialValue: _monthKey(_selectedMonth),
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                labelText: '対象月',
+                prefixIcon: Icon(Icons.calendar_month),
+              ),
+              items: [
+                for (final month in months)
+                  DropdownMenuItem(
+                    value: _monthKey(month),
+                    child: Text('${month.year}年${month.month}月'),
+                  ),
+              ],
+              onChanged: (value) {
+                if (value == null || value.length != 6) return;
+                final year = int.tryParse(value.substring(0, 4));
+                final month = int.tryParse(value.substring(4, 6));
+                if (year == null || month == null) return;
+                setState(() {
+                  _selectedMonth = DateTime(year, month);
+                  final monthStores = _storesForMonth(_selectedMonth);
+                  _selectedStoreId = monthStores.containsKey(_selectedStoreId)
+                      ? _selectedStoreId
+                      : (monthStores.isEmpty ? '' : monthStores.keys.first);
+                });
+              },
             ),
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
@@ -1191,7 +1375,6 @@ class _BillingPageState extends State<BillingPage> {
                 prefixIcon: Icon(Icons.store),
               ),
               items: [
-                const DropdownMenuItem(value: '', child: Text('全店舗')),
                 for (final entry in stores.entries)
                   DropdownMenuItem(value: entry.key, child: Text(entry.value)),
               ],
@@ -1204,20 +1387,33 @@ class _BillingPageState extends State<BillingPage> {
               title: const Text('請求済みも表示する'),
               onChanged: (value) => setState(() => _showBilled = value),
             ),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    '選択: ${_selectedLines.length}件 / 合計 ￥${_yen(_selectedTotal)}',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                '対象: ${_selectedStoreName().isEmpty ? '店舗未選択' : _selectedStoreName()} / ${_periodText(_selectedMonth)}\n'
+                '締切: ${_paymentDueTextForMonth(_selectedMonth)} / 未請求 ${_invoiceTargetLines.length}件 / 合計 ￥${_yen(_targetTotal)}',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _saving || _alreadyIssuedForSelectedMonthStore
+                    ? null
+                    : _createInvoice,
+                icon: const Icon(Icons.picture_as_pdf),
+                label: Text(
+                  _alreadyIssuedForSelectedMonthStore
+                      ? 'この月・店舗は請求書作成済み'
+                      : 'この月・店舗で請求書PDF作成',
                 ),
-                ElevatedButton.icon(
-                  onPressed: _saving ? null : _createInvoice,
-                  icon: const Icon(Icons.picture_as_pdf),
-                  label: const Text('請求書PDF作成'),
-                ),
-              ],
+              ),
             ),
           ],
         ),
@@ -1226,86 +1422,63 @@ class _BillingPageState extends State<BillingPage> {
   }
 
   Widget _buildLineCard(_BillingLine line) {
-    final selected = _selectedKeys.contains(line.key);
     final price = _priceFor(line);
     final amount = line.qty * price;
     return Card(
       color: line.billed ? Colors.grey.shade100 : null,
       child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Row(
+        padding: const EdgeInsets.all(12),
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Checkbox(
-              value: selected,
-              onChanged: line.billed
-                  ? null
-                  : (value) {
-                      setState(() {
-                        if (value == true) {
-                          _selectedKeys.add(line.key);
-                        } else {
-                          _selectedKeys.remove(line.key);
-                        }
-                      });
-                    },
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    line.itemName,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                    ),
+                  ),
+                ),
+                if (line.billed)
+                  const Chip(
+                    label: Text('請求済み'),
+                    visualDensity: VisualDensity.compact,
+                  ),
+              ],
             ),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          line.itemName,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 15,
-                          ),
-                        ),
-                      ),
-                      if (line.billed)
-                        const Chip(
-                          label: Text('請求済み'),
-                          visualDensity: VisualDensity.compact,
-                        ),
-                    ],
+            Text('${line.storeName} / ${line.itemType} / コード:${line.itemCode}'),
+            Text('${line.batchTitle} / 数量 ${line.qty}個'),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                SizedBox(
+                  width: 130,
+                  child: TextField(
+                    controller: _priceControllers[line.key],
+                    enabled:
+                        !line.billed && !_alreadyIssuedForSelectedMonthStore,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: '単価',
+                      prefixText: '￥',
+                    ),
                   ),
-                  Text(
-                    '${line.storeName} / ${line.itemType} / コード:${line.itemCode}',
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    '金額 ￥${_yen(amount)}',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
-                  Text('${line.batchTitle} / 数量 ${line.qty}個'),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      SizedBox(
-                        width: 130,
-                        child: TextField(
-                          controller: _priceControllers[line.key],
-                          enabled: !line.billed,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            border: OutlineInputBorder(),
-                            labelText: '単価',
-                            prefixText: '￥',
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          '金額 ￥${_yen(amount)}',
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ],
         ),
@@ -1326,9 +1499,11 @@ class _BillingPageState extends State<BillingPage> {
         children: [
           for (final invoice in _invoices)
             ListTile(
-              title: Text('${invoice.invoiceNo} / ￥${_yen(invoice.total)}'),
+              title: Text(
+                '${invoice.invoiceNo} / ${invoice.storeName} / ￥${_yen(invoice.total)}',
+              ),
               subtitle: Text(
-                '${_dateText(invoice.createdAt)} / ${invoice.itemCount}明細',
+                '${invoice.billingMonthLabel} / 締切 ${invoice.paymentDueText} / ${invoice.itemCount}明細',
               ),
               trailing: Wrap(
                 spacing: 6,
@@ -1448,6 +1623,23 @@ class _BillingLine {
 
   int get amount => qty * unitPrice;
 
+  _BillingLine copyWith({int? unitPrice, bool? billed}) {
+    return _BillingLine(
+      key: key,
+      batchId: batchId,
+      batchTitle: batchTitle,
+      orderDate: orderDate,
+      storeId: storeId,
+      storeName: storeName,
+      itemType: itemType,
+      itemCode: itemCode,
+      itemName: itemName,
+      qty: qty,
+      unitPrice: unitPrice ?? this.unitPrice,
+      billed: billed ?? this.billed,
+    );
+  }
+
   Map<String, dynamic> toInvoiceMap(int price) {
     return {
       'lineKey': key,
@@ -1496,7 +1688,13 @@ class _BillingInvoiceSummary {
   const _BillingInvoiceSummary({
     required this.id,
     required this.invoiceNo,
+    required this.invoiceSeq,
     required this.createdAt,
+    required this.billingMonth,
+    required this.storeId,
+    required this.storeName,
+    required this.monthStoreKey,
+    required this.paymentDueText,
     required this.subtotal,
     required this.tax10,
     required this.total,
@@ -1506,12 +1704,30 @@ class _BillingInvoiceSummary {
 
   final String id;
   final String invoiceNo;
+  final int invoiceSeq;
   final DateTime createdAt;
+  final String billingMonth;
+  final String storeId;
+  final String storeName;
+  final String monthStoreKey;
+  final String paymentDueText;
   final int subtotal;
   final int tax10;
   final int total;
   final int itemCount;
   final String receiptId;
+
+  DateTime get billingMonthDate {
+    if (billingMonth.length == 6) {
+      final year = int.tryParse(billingMonth.substring(0, 4));
+      final month = int.tryParse(billingMonth.substring(4, 6));
+      if (year != null && month != null) return DateTime(year, month);
+    }
+    return DateTime(createdAt.year, createdAt.month);
+  }
+
+  String get billingMonthLabel =>
+      '${billingMonthDate.year}年${billingMonthDate.month}月分';
 
   factory _BillingInvoiceSummary.fromDoc(String id, Map<String, dynamic> data) {
     final ts = data['createdAt'];
@@ -1520,10 +1736,26 @@ class _BillingInvoiceSummary {
         : DateTime.tryParse((data['createdAtLocal'] ?? '').toString()) ??
               DateTime.now();
     final rawItems = data['items'];
+    final invoiceNo = (data['invoiceNo'] ?? id).toString();
+    final parsedSeq = RegExp(r'AQU-(\d+)$').firstMatch(invoiceNo);
+    final invoiceSeq = inventoryIntValue(data['invoiceSeq']) > 0
+        ? inventoryIntValue(data['invoiceSeq'])
+        : (parsedSeq == null ? 0 : int.tryParse(parsedSeq.group(1)!) ?? 0);
+    final billingMonth = (data['billingMonth'] ?? '').toString();
+    final storeId = (data['storeId'] ?? '').toString();
+    final storeName = (data['storeName'] ?? '').toString();
+    final monthStoreKey = (data['monthStoreKey'] ?? '').toString();
+    final dueText = (data['paymentDueText'] ?? '').toString();
     return _BillingInvoiceSummary(
       id: id,
-      invoiceNo: (data['invoiceNo'] ?? id).toString(),
+      invoiceNo: invoiceNo,
+      invoiceSeq: invoiceSeq,
       createdAt: createdAt,
+      billingMonth: billingMonth,
+      storeId: storeId,
+      storeName: storeName.isEmpty ? '店舗未設定' : storeName,
+      monthStoreKey: monthStoreKey,
+      paymentDueText: dueText.isEmpty ? '-' : dueText,
       subtotal: inventoryIntValue(data['subtotal']),
       tax10: inventoryIntValue(data['tax10']),
       total: inventoryIntValue(data['total']),
