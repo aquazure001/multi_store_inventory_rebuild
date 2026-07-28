@@ -24,6 +24,7 @@ class _BillingPageState extends State<BillingPage> {
   final Set<String> _billedKeys = <String>{};
   final Set<String> _issuedMonthStoreKeys = <String>{};
   final Map<String, _BillingPrice> _billingPrices = {};
+  final Map<String, _BillingRecipient> _storeRecipients = {};
   final Map<String, TextEditingController> _priceControllers = {};
   final Map<String, TextEditingController> _purchaseRateControllers = {};
   final TextEditingController _repaymentCurrentController =
@@ -31,6 +32,14 @@ class _BillingPageState extends State<BillingPage> {
   final TextEditingController _repaymentTotalController =
       TextEditingController();
   final TextEditingController _repaymentAmountController =
+      TextEditingController();
+  final TextEditingController _recipientNameController =
+      TextEditingController();
+  final TextEditingController _recipientPostalController =
+      TextEditingController();
+  final TextEditingController _recipientAddress1Controller =
+      TextEditingController();
+  final TextEditingController _recipientAddress2Controller =
       TextEditingController();
   bool _repaymentEnabled = false;
 
@@ -51,6 +60,10 @@ class _BillingPageState extends State<BillingPage> {
     _repaymentCurrentController.dispose();
     _repaymentTotalController.dispose();
     _repaymentAmountController.dispose();
+    _recipientNameController.dispose();
+    _recipientPostalController.dispose();
+    _recipientAddress1Controller.dispose();
+    _recipientAddress2Controller.dispose();
     super.dispose();
   }
 
@@ -106,6 +119,21 @@ class _BillingPageState extends State<BillingPage> {
           billingPrices[entry.key.toString()] = _BillingPrice.fromMap(map);
         }
       }
+      final storeRecipients = <String, _BillingRecipient>{};
+      final rawRecipients = priceData['storeRecipients'];
+      if (rawRecipients is Map) {
+        for (final entry in rawRecipients.entries) {
+          final value = entry.value;
+          if (value is! Map) continue;
+          final map = Map<String, dynamic>.from(
+            value.map((k, v) => MapEntry(k.toString(), v)),
+          );
+          storeRecipients[entry.key.toString()] = _BillingRecipient.fromMap(
+            map,
+          );
+        }
+      }
+
       final rawRepayment = priceData['repayment'];
       final repayment = rawRepayment is Map
           ? Map<String, dynamic>.from(
@@ -219,6 +247,9 @@ class _BillingPageState extends State<BillingPage> {
         _billingPrices
           ..clear()
           ..addAll(billingPrices);
+        _storeRecipients
+          ..clear()
+          ..addAll(storeRecipients);
         _repaymentEnabled = repaymentEnabled;
         _lines
           ..clear()
@@ -227,6 +258,7 @@ class _BillingPageState extends State<BillingPage> {
           final stores = _storesForMonth(_selectedMonth);
           if (stores.isNotEmpty) _selectedStoreId = stores.keys.first;
         }
+        _applyRecipientToControllers(_selectedStoreId);
         _loading = false;
       });
     } catch (e) {
@@ -321,11 +353,87 @@ class _BillingPageState extends State<BillingPage> {
     return _storesForMonth(_selectedMonth)[_selectedStoreId] ?? '';
   }
 
+  _BillingRecipient _recipientForStore(String storeId) {
+    final saved = _storeRecipients[storeId];
+    if (saved != null && saved.name.trim().isNotEmpty) return saved;
+    final storeName = _storesForMonth(_selectedMonth)[storeId] ?? '店舗名未設定';
+    return _BillingRecipient(
+      name: '$storeName 様',
+      postal: '',
+      address1: '',
+      address2: '',
+    );
+  }
+
+  _BillingRecipient _currentRecipientFromControllers() => _BillingRecipient(
+    name: _recipientNameController.text.trim(),
+    postal: _recipientPostalController.text.trim(),
+    address1: _recipientAddress1Controller.text.trim(),
+    address2: _recipientAddress2Controller.text.trim(),
+  );
+
+  void _applyRecipientToControllers(String storeId) {
+    if (storeId.isEmpty) return;
+    final recipient = _recipientForStore(storeId);
+    _recipientNameController.text = recipient.name;
+    _recipientPostalController.text = recipient.postal;
+    _recipientAddress1Controller.text = recipient.address1;
+    _recipientAddress2Controller.text = recipient.address2;
+  }
+
+  void _selectStore(String storeId) {
+    setState(() {
+      _selectedStoreId = storeId;
+      _applyRecipientToControllers(storeId);
+    });
+  }
+
+  Future<void> _saveRecipientForSelectedStore() async {
+    if (_selectedStoreId.isEmpty) return;
+    final recipient = _currentRecipientFromControllers();
+    if (recipient.name.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('宛名を入力してください'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      await AppSession.doc('billing_prices').set({
+        'storeRecipients': {_selectedStoreId: recipient.toMap()},
+        'updatedAt': FieldValue.serverTimestamp(),
+        'updatedAtLocal': DateTime.now().toIso8601String(),
+        'updatedBy': AppSession.nickname,
+      }, SetOptions(merge: true));
+      setState(() => _storeRecipients[_selectedStoreId] = recipient);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('店舗の宛名を保存しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('宛名保存失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   List<_BillingLine> _withPrices(List<_BillingLine> lines) {
     return lines
         .map(
           (line) => line.copyWith(
-            unitPrice: _priceFor(line),
+            unitPrice: _billingUnitPriceFor(line),
+            listPrice: _priceFor(line),
             purchaseRate: _purchaseRateFor(line),
             taxRate: _taxRateFor(line),
           ),
@@ -344,6 +452,13 @@ class _BillingPageState extends State<BillingPage> {
     final raw = _purchaseRateControllers[line.key]?.text ?? '';
     return int.tryParse(raw.replaceAll('%', '').trim()) ??
         (_billingPrices[_priceKeyFor(line)]?.purchaseRate ?? 0);
+  }
+
+  int _billingUnitPriceFor(_BillingLine line) {
+    final listPrice = _priceFor(line);
+    final rate = _purchaseRateFor(line);
+    if (rate <= 0) return listPrice;
+    return (listPrice * rate / 100).round();
   }
 
   int _taxRateFor(_BillingLine line) {
@@ -554,6 +669,7 @@ class _BillingPageState extends State<BillingPage> {
 
     final lines = _invoiceTargetLines;
     if (lines.isEmpty) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('この店舗・この月の未請求明細がありません'),
@@ -574,6 +690,7 @@ class _BillingPageState extends State<BillingPage> {
     }
 
     final storeName = _selectedStoreName();
+    final recipient = _currentRecipientFromControllers();
     final periodText = _periodText(_selectedMonth);
     final dueText = _paymentDueTextForMonth(_selectedMonth);
     final pricedLines = _withPrices(lines);
@@ -622,6 +739,8 @@ class _BillingPageState extends State<BillingPage> {
         billingMonth: _selectedMonth,
         storeName: storeName,
         billingTypeText: _selectedBillingTypeText,
+        recipient: recipient,
+        paymentDueTextOverride: null,
         repaymentEnabled: _repaymentEnabled,
         repaymentCurrent: inventoryIntValue(_repaymentCurrentController.text),
         repaymentTotal: inventoryIntValue(_repaymentTotalController.text),
@@ -639,6 +758,7 @@ class _BillingPageState extends State<BillingPage> {
         _selectedMonth,
         _selectedStoreId,
         storeName,
+        recipient,
         pricedLines,
       );
       await invoiceRef.set(invoiceData);
@@ -688,6 +808,7 @@ class _BillingPageState extends State<BillingPage> {
     DateTime billingMonth,
     String storeId,
     String storeName,
+    _BillingRecipient recipient,
     List<_BillingLine> lines,
   ) {
     final subtotal = lines.fold<int>(0, (total, line) => total + line.amount);
@@ -717,6 +838,7 @@ class _BillingPageState extends State<BillingPage> {
       'paymentDueText': _dateText(dueDate),
       'storeId': storeId,
       'storeName': storeName,
+      'recipient': recipient.toMap(),
       'monthStoreKey': _monthStoreKey(billingMonth, storeId),
       'lineKeys': lines.map((line) => line.key).toList(),
       'subtotal': subtotal,
@@ -816,6 +938,15 @@ class _BillingPageState extends State<BillingPage> {
       final invoiceData = invoiceDoc.data();
       if (invoiceData == null) throw Exception('請求書データが見つかりません');
       final lines = _BillingLine.fromInvoiceItems(invoiceData['items']);
+      final recipient = _BillingRecipient.fromMap(
+        invoiceData['recipient'] is Map
+            ? Map<String, dynamic>.from(
+                (invoiceData['recipient'] as Map).map(
+                  (k, v) => MapEntry(k.toString(), v),
+                ),
+              )
+            : <String, dynamic>{},
+      );
       final issuedAt = DateTime.now();
       final assets = await _loadPdfAssets();
       final pdfBytes = await _buildBillingPdf(
@@ -826,6 +957,8 @@ class _BillingPageState extends State<BillingPage> {
         billingMonth: invoice.billingMonthDate,
         storeName: invoice.storeName,
         billingTypeText: invoice.billingItemTypesText,
+        recipient: recipient,
+        paymentDueTextOverride: null,
         repaymentEnabled: invoice.repaymentEnabled,
         repaymentCurrent: invoice.repaymentCurrent,
         repaymentTotal: invoice.repaymentTotal,
@@ -841,6 +974,7 @@ class _BillingPageState extends State<BillingPage> {
         'billingMonth': invoice.billingMonth,
         'storeId': invoice.storeId,
         'storeName': invoice.storeName,
+        'recipient': recipient.toMap(),
         'monthStoreKey': invoice.monthStoreKey,
         'createdAt': FieldValue.serverTimestamp(),
         'createdAtLocal': issuedAt.toIso8601String(),
@@ -865,6 +999,7 @@ class _BillingPageState extends State<BillingPage> {
         'billingMonth': invoice.billingMonth,
         'storeId': invoice.storeId,
         'storeName': invoice.storeName,
+        'recipient': recipient.toMap(),
         'monthStoreKey': invoice.monthStoreKey,
         'createdAt': FieldValue.serverTimestamp(),
         'createdAtLocal': issuedAt.toIso8601String(),
@@ -909,6 +1044,8 @@ class _BillingPageState extends State<BillingPage> {
     required DateTime billingMonth,
     required String storeName,
     required String billingTypeText,
+    required _BillingRecipient recipient,
+    String? paymentDueTextOverride,
     required bool repaymentEnabled,
     required int repaymentCurrent,
     required int repaymentTotal,
@@ -1074,7 +1211,8 @@ class _BillingPageState extends State<BillingPage> {
                         child: _billingDateBox(
                           isInvoice ? 'お支払期限' : '受領日',
                           isInvoice
-                              ? _paymentDueTextForMonth(billingMonth)
+                              ? (paymentDueTextOverride ??
+                                    _paymentDueTextForMonth(billingMonth))
                               : _dateText(date),
                           assets.boldFont,
                         ),
@@ -1632,8 +1770,60 @@ class _BillingPageState extends State<BillingPage> {
                 for (final entry in stores.entries)
                   DropdownMenuItem(value: entry.key, child: Text(entry.value)),
               ],
-              onChanged: (value) =>
-                  setState(() => _selectedStoreId = value ?? ''),
+              onChanged: (value) => _selectStore(value ?? ''),
+            ),
+
+            const SizedBox(height: 10),
+            const Text('請求書の宛名', style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            TextField(
+              controller: _recipientNameController,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                labelText: '宛名',
+                hintText: '例：本店 様',
+              ),
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _recipientPostalController,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: '郵便番号',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  flex: 2,
+                  child: TextField(
+                    controller: _recipientAddress1Controller,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: '住所1',
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            TextField(
+              controller: _recipientAddress2Controller,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                labelText: '住所2・建物名など',
+              ),
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: OutlinedButton.icon(
+                onPressed: _saving ? null : _saveRecipientForSelectedStore,
+                icon: const Icon(Icons.save),
+                label: const Text('宛名を保存'),
+              ),
             ),
 
             const SizedBox(height: 10),
@@ -1749,6 +1939,15 @@ class _BillingPageState extends State<BillingPage> {
                 ),
               ),
             ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _saving ? null : _createManualInvoice,
+                icon: const Icon(Icons.edit_note),
+                label: const Text('任意項目の請求書を作成'),
+              ),
+            ),
           ],
         ),
       ),
@@ -1756,8 +1955,8 @@ class _BillingPageState extends State<BillingPage> {
   }
 
   Widget _buildLineCard(_BillingLine line) {
-    final price = _priceFor(line);
-    final amount = line.qty * price;
+    final billingUnitPrice = _billingUnitPriceFor(line);
+    final amount = line.qty * billingUnitPrice;
     return Card(
       color: line.billed ? Colors.grey.shade100 : null,
       child: Padding(
@@ -1797,7 +1996,7 @@ class _BillingPageState extends State<BillingPage> {
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(
                       border: OutlineInputBorder(),
-                      labelText: '単価',
+                      labelText: '定価',
                       prefixText: '￥',
                     ),
                   ),
@@ -1820,7 +2019,7 @@ class _BillingPageState extends State<BillingPage> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    '金額 ￥${_yen(amount)}',
+                    '請求単価 ￥${_yen(billingUnitPrice)} / 金額 ￥${_yen(amount)}',
                     style: const TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
@@ -1857,7 +2056,7 @@ class _BillingPageState extends State<BillingPage> {
                       ? null
                       : () => _saveBillingPriceForLine(line),
                   icon: const Icon(Icons.save),
-                  label: const Text('単価マスタ保存'),
+                  label: const Text('単価・率保存'),
                 ),
               ],
             ),
@@ -1865,6 +2064,344 @@ class _BillingPageState extends State<BillingPage> {
         ),
       ),
     );
+  }
+
+  Future<void> _cancelInvoice(_BillingInvoiceSummary invoice) async {
+    final isManual = invoice.billingMode == 'manual';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(isManual ? '任意請求書を削除しますか？' : '請求書を取り消しますか？'),
+        content: Text(
+          isManual
+              ? '${invoice.invoiceNo} を削除扱いにします。発注明細への巻き戻しはありません。'
+              : '${invoice.invoiceNo} を取り消します。対象明細は未請求に戻ります。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: Text(isManual ? '削除する' : '取り消す'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    setState(() => _saving = true);
+    try {
+      await AppSession.billingInvoices.doc(invoice.id).set({
+        'status': 'canceled',
+        'canceledAt': FieldValue.serverTimestamp(),
+        'canceledAtLocal': DateTime.now().toIso8601String(),
+        'canceledBy': AppSession.nickname,
+      }, SetOptions(merge: true));
+      if (invoice.receiptId.isNotEmpty) {
+        await AppSession.billingReceipts.doc(invoice.receiptId).set({
+          'status': 'canceled',
+          'canceledAt': FieldValue.serverTimestamp(),
+          'canceledAtLocal': DateTime.now().toIso8601String(),
+          'canceledBy': AppSession.nickname,
+        }, SetOptions(merge: true));
+      }
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(isManual ? '任意請求書を削除しました' : '請求書を取り消しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('取消失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  DateTime _manualDueDate(DateTime baseMonth, String raw) {
+    final text = raw.trim();
+    if (text.isEmpty) return DateTime(baseMonth.year, baseMonth.month + 1, 0);
+    final normalized = text.replaceAll('/', '-').replaceAll('.', '-');
+    return DateTime.tryParse(normalized) ??
+        DateTime(baseMonth.year, baseMonth.month + 1, 0);
+  }
+
+  Future<void> _createManualInvoice() async {
+    if (_selectedStoreId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('先に店舗を選択してください'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    final dueController = TextEditingController();
+    final rows = List.generate(8, (_) => _ManualBillingLineControllers());
+    final result = await showDialog<_ManualInvoiceInput>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('任意請求書を作成'),
+        content: SizedBox(
+          width: 720,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '店舗: ${_selectedStoreName()} / 宛名: ${_recipientNameController.text}',
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: dueController,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    labelText: '支払い期限（未入力なら同月末日）',
+                    hintText: '例：2026-08-31',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                for (int i = 0; i < rows.length; i++)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${i + 1}行目',
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        Row(
+                          children: [
+                            Expanded(
+                              flex: 3,
+                              child: TextField(
+                                controller: rows[i].name,
+                                decoration: const InputDecoration(
+                                  border: OutlineInputBorder(),
+                                  labelText: '商品名欄',
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: TextField(
+                                controller: rows[i].qty,
+                                keyboardType: TextInputType.number,
+                                decoration: const InputDecoration(
+                                  border: OutlineInputBorder(),
+                                  labelText: '数量',
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: TextField(
+                                controller: rows[i].unitPrice,
+                                keyboardType: TextInputType.number,
+                                decoration: const InputDecoration(
+                                  border: OutlineInputBorder(),
+                                  labelText: '単価',
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: DropdownButtonFormField<int>(
+                                initialValue: rows[i].taxRate,
+                                decoration: const InputDecoration(
+                                  labelText: '税率',
+                                ),
+                                items: const [
+                                  DropdownMenuItem(
+                                    value: 10,
+                                    child: Text('10%'),
+                                  ),
+                                  DropdownMenuItem(value: 8, child: Text('8%')),
+                                ],
+                                onChanged: (value) =>
+                                    rows[i].taxRate = value ?? 10,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: CheckboxListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('税込単価'),
+                                value: rows[i].taxIncluded,
+                                onChanged: (value) =>
+                                    rows[i].taxIncluded = value == true,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(ctx).pop(
+                _ManualInvoiceInput(dueText: dueController.text, rows: rows),
+              );
+            },
+            child: const Text('作成する'),
+          ),
+        ],
+      ),
+    );
+    if (result == null) return;
+
+    final dueDate = _manualDueDate(_selectedMonth, result.dueText);
+    final storeName = _selectedStoreName();
+    final recipient = _currentRecipientFromControllers();
+    final lines = <_BillingLine>[];
+    for (int i = 0; i < result.rows.length; i++) {
+      final row = result.rows[i];
+      final name = row.name.text.trim();
+      if (name.isEmpty) continue;
+      final qty = inventoryIntValue(row.qty.text);
+      final inputUnit = inventoryIntValue(row.unitPrice.text);
+      if (qty <= 0 || inputUnit <= 0) continue;
+      final taxRate = row.taxRate == 8 ? 8 : 10;
+      final unitPrice = row.taxIncluded
+          ? (inputUnit / (1 + taxRate / 100)).round()
+          : inputUnit;
+      lines.add(
+        _BillingLine(
+          key: 'manual_${DateTime.now().microsecondsSinceEpoch}_$i',
+          batchId: 'manual',
+          batchTitle: '任意請求',
+          orderDate: DateTime.now(),
+          storeId: _selectedStoreId,
+          storeName: storeName,
+          itemType: '任意',
+          itemCode: '',
+          itemName: name,
+          qty: qty,
+          unitPrice: unitPrice,
+          listPrice: inputUnit,
+          taxRate: taxRate,
+        ),
+      );
+    }
+    if (lines.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('請求項目を1つ以上入力してください'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      final issuedAt = DateTime.now();
+      final invoiceSeq = _nextInvoiceSequence();
+      final invoiceNo = _invoiceNo(invoiceSeq);
+      final assets = await _loadPdfAssets();
+      final pdfBytes = await _buildBillingPdf(
+        kind: _BillingPdfKind.invoice,
+        assets: assets,
+        no: invoiceNo,
+        date: issuedAt,
+        billingMonth: _selectedMonth,
+        storeName: storeName,
+        billingTypeText: '任意',
+        recipient: recipient,
+        paymentDueTextOverride: _dateText(dueDate),
+        repaymentEnabled: false,
+        repaymentCurrent: 0,
+        repaymentTotal: 0,
+        repaymentMonthlyAmount: 0,
+        lines: lines,
+      );
+      final invoiceRef = AppSession.billingInvoices.doc();
+      final subtotal = lines.fold<int>(0, (total, line) => total + line.amount);
+      final subtotal10 = _subtotalForRate(lines, 10);
+      final subtotal8 = _subtotalForRate(lines, 8);
+      final tax10 = _taxFor(subtotal10, 10);
+      final tax8 = _taxFor(subtotal8, 8);
+      await invoiceRef.set({
+        'id': invoiceRef.id,
+        'invoiceNo': invoiceNo,
+        'invoiceSeq': invoiceSeq,
+        'createdAt': FieldValue.serverTimestamp(),
+        'createdAtLocal': issuedAt.toIso8601String(),
+        'createdBy': AppSession.nickname,
+        'status': 'issued',
+        'billingMode': 'manual',
+        'billingItemTypes': ['任意'],
+        'billingMonth': _monthKey(_selectedMonth),
+        'paymentDueDateLocal': dueDate.toIso8601String(),
+        'paymentDueText': _dateText(dueDate),
+        'storeId': _selectedStoreId,
+        'storeName': storeName,
+        'recipient': recipient.toMap(),
+        'lineKeys': <String>[],
+        'subtotal': subtotal,
+        'subtotal10': subtotal10,
+        'subtotal8': subtotal8,
+        'tax10': tax10,
+        'tax8': tax8,
+        'total': subtotal + tax10 + tax8,
+        'items': lines
+            .map((line) => line.toInvoiceMap(line.unitPrice))
+            .toList(),
+        'hasSavedPdf': true,
+      });
+      await AppSession.billingInvoicePdfs.doc(invoiceRef.id).set({
+        'invoiceId': invoiceRef.id,
+        'invoiceNo': invoiceNo,
+        'billingMonth': _monthKey(_selectedMonth),
+        'storeId': _selectedStoreId,
+        'storeName': storeName,
+        'createdAt': FieldValue.serverTimestamp(),
+        'createdAtLocal': issuedAt.toIso8601String(),
+        'createdBy': AppSession.nickname,
+        'pdfBase64': base64Encode(pdfBytes),
+        'pdfFileName': '任意請求書_${storeName}_$invoiceNo.pdf',
+      });
+      await Printing.sharePdf(
+        bytes: pdfBytes,
+        filename: '任意請求書_${storeName}_$invoiceNo.pdf',
+      );
+      await _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('任意請求書作成失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      for (final row in rows) {
+        row.dispose();
+      }
+      dueController.dispose();
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   Widget _buildInvoices() {
@@ -1896,6 +2433,10 @@ class _BillingPageState extends State<BillingPage> {
                   ElevatedButton(
                     onPressed: _saving ? null : () => _createReceipt(invoice),
                     child: Text(invoice.receiptId.isEmpty ? '受領書作成' : '受領書'),
+                  ),
+                  TextButton(
+                    onPressed: _saving ? null : () => _cancelInvoice(invoice),
+                    child: Text(invoice.billingMode == 'manual' ? '削除' : '取消'),
                   ),
                 ],
               ),
@@ -1986,6 +2527,7 @@ class _BillingLine {
     required this.itemName,
     required this.qty,
     this.unitPrice = 0,
+    this.listPrice = 0,
     this.purchaseRate = 0,
     this.taxRate = 10,
     this.billed = false,
@@ -2002,6 +2544,7 @@ class _BillingLine {
   final String itemName;
   final int qty;
   final int unitPrice;
+  final int listPrice;
   final int purchaseRate;
   final int taxRate;
   final bool billed;
@@ -2010,6 +2553,7 @@ class _BillingLine {
 
   _BillingLine copyWith({
     int? unitPrice,
+    int? listPrice,
     int? purchaseRate,
     int? taxRate,
     bool? billed,
@@ -2026,6 +2570,7 @@ class _BillingLine {
       itemName: itemName,
       qty: qty,
       unitPrice: unitPrice ?? this.unitPrice,
+      listPrice: listPrice ?? this.listPrice,
       purchaseRate: purchaseRate ?? this.purchaseRate,
       taxRate: taxRate ?? this.taxRate,
       billed: billed ?? this.billed,
@@ -2045,6 +2590,7 @@ class _BillingLine {
       'itemName': itemName,
       'qty': qty,
       'unitPrice': price,
+      'listPrice': listPrice,
       'purchaseRate': purchaseRate,
       'taxRate': taxRate,
       'amount': qty * price,
@@ -2073,6 +2619,7 @@ class _BillingLine {
         itemName: (map['itemName'] ?? '').toString(),
         qty: qty,
         unitPrice: price,
+        listPrice: inventoryIntValue(map['listPrice']),
         purchaseRate: inventoryIntValue(map['purchaseRate']),
         taxRate: inventoryIntValue(map['taxRate']) == 8 ? 8 : 10,
       );
@@ -2136,6 +2683,62 @@ class _BillingPrice {
   };
 }
 
+class _BillingRecipient {
+  const _BillingRecipient({
+    required this.name,
+    required this.postal,
+    required this.address1,
+    required this.address2,
+  });
+
+  final String name;
+  final String postal;
+  final String address1;
+  final String address2;
+
+  List<String> get pdfLines => [
+    if (postal.trim().isNotEmpty) postal.trim(),
+    if (address1.trim().isNotEmpty) address1.trim(),
+    if (address2.trim().isNotEmpty) address2.trim(),
+  ];
+
+  factory _BillingRecipient.fromMap(Map<String, dynamic> map) =>
+      _BillingRecipient(
+        name: (map['name'] ?? '').toString(),
+        postal: (map['postal'] ?? '').toString(),
+        address1: (map['address1'] ?? '').toString(),
+        address2: (map['address2'] ?? '').toString(),
+      );
+
+  Map<String, dynamic> toMap() => {
+    'name': name,
+    'postal': postal,
+    'address1': address1,
+    'address2': address2,
+  };
+}
+
+class _ManualBillingLineControllers {
+  final TextEditingController name = TextEditingController();
+  final TextEditingController qty = TextEditingController(text: '1');
+  final TextEditingController unitPrice = TextEditingController();
+  int taxRate = 10;
+  bool taxIncluded = false;
+
+  void dispose() {
+    name.dispose();
+    qty.dispose();
+    unitPrice.dispose();
+  }
+}
+
+class _ManualInvoiceInput {
+  const _ManualInvoiceInput({required this.dueText, required this.rows});
+
+  final String dueText;
+  final List<_ManualBillingLineControllers> rows;
+}
+
 class _BillingInvoiceSummary {
   const _BillingInvoiceSummary({
     required this.id,
@@ -2148,6 +2751,7 @@ class _BillingInvoiceSummary {
     required this.monthStoreKey,
     required this.paymentDueText,
     required this.billingItemTypes,
+    required this.billingMode,
     required this.subtotal,
     required this.tax10,
     required this.tax8,
@@ -2170,6 +2774,7 @@ class _BillingInvoiceSummary {
   final String monthStoreKey;
   final String paymentDueText;
   final List<String> billingItemTypes;
+  final String billingMode;
   final int subtotal;
   final int tax10;
   final int tax8;
@@ -2228,6 +2833,7 @@ class _BillingInvoiceSummary {
       monthStoreKey: monthStoreKey,
       paymentDueText: dueText.isEmpty ? '-' : dueText,
       billingItemTypes: billingItemTypes,
+      billingMode: (data['billingMode'] ?? '').toString(),
       subtotal: inventoryIntValue(data['subtotal']),
       tax10: inventoryIntValue(data['tax10']),
       tax8: inventoryIntValue(data['tax8']),
