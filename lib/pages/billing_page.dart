@@ -491,9 +491,47 @@ class _BillingPageState extends State<BillingPage> {
   }
 
   int _subtotalForRate(List<_BillingLine> lines, int taxRate) {
+    var taxExcludedSubtotal = 0;
+    var taxIncludedGrossTotal = 0;
+    for (final line in lines.where((line) => line.taxRate == taxRate)) {
+      if (line.taxIncluded && line.listPrice > 0) {
+        taxIncludedGrossTotal += line.listPrice * line.qty;
+      } else {
+        taxExcludedSubtotal += line.qty * line.unitPrice;
+      }
+    }
+    if (taxIncludedGrossTotal > 0) {
+      taxExcludedSubtotal += (taxIncludedGrossTotal / (1 + taxRate / 100))
+          .round();
+    }
+    return taxExcludedSubtotal;
+  }
+
+  int _taxIncludedGrossForRate(List<_BillingLine> lines, int taxRate) {
     return lines
-        .where((line) => line.taxRate == taxRate)
-        .fold<int>(0, (total, line) => total + line.amount);
+        .where(
+          (line) =>
+              line.taxRate == taxRate && line.taxIncluded && line.listPrice > 0,
+        )
+        .fold<int>(0, (total, line) => total + line.listPrice * line.qty);
+  }
+
+  int _taxForLines(List<_BillingLine> lines, int taxRate) {
+    final subtotal = _subtotalForRate(lines, taxRate);
+    final includedGross = _taxIncludedGrossForRate(lines, taxRate);
+    if (includedGross > 0) {
+      final excludedTax = lines
+          .where(
+            (line) =>
+                line.taxRate == taxRate &&
+                (!line.taxIncluded || line.listPrice <= 0),
+          )
+          .fold<int>(0, (total, line) => total + line.qty * line.unitPrice);
+      final grossTax =
+          includedGross - (includedGross / (1 + taxRate / 100)).round();
+      return grossTax + (excludedTax * taxRate / 100).round();
+    }
+    return (subtotal * taxRate / 100).round();
   }
 
   int _taxFor(int subtotal, int taxRate) => (subtotal * taxRate / 100).round();
@@ -643,13 +681,12 @@ class _BillingPageState extends State<BillingPage> {
 
   List<_BillingLine> get _targetPricedLines => _withPrices(_invoiceTargetLines);
 
-  int get _targetSubtotal =>
-      _targetPricedLines.fold<int>(0, (total, line) => total + line.amount);
+  int get _targetSubtotal => _targetSubtotal10 + _targetSubtotal8;
 
   int get _targetSubtotal10 => _subtotalForRate(_targetPricedLines, 10);
   int get _targetSubtotal8 => _subtotalForRate(_targetPricedLines, 8);
-  int get _targetTax10 => _taxFor(_targetSubtotal10, 10);
-  int get _targetTax8 => _taxFor(_targetSubtotal8, 8);
+  int get _targetTax10 => _taxForLines(_targetPricedLines, 10);
+  int get _targetTax8 => _taxForLines(_targetPricedLines, 8);
   int get _targetTotal => _targetSubtotal + _targetTax10 + _targetTax8;
 
   bool get _alreadyIssuedForSelectedMonthStore => false;
@@ -743,9 +780,9 @@ class _BillingPageState extends State<BillingPage> {
     final subtotal8 = _subtotalForRate(pricedLines, 8);
     final totalWithTax =
         subtotal10 +
-        _taxFor(subtotal10, 10) +
+        _taxForLines(pricedLines, 10) +
         subtotal8 +
-        _taxFor(subtotal8, 8);
+        _taxForLines(pricedLines, 8);
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -856,11 +893,11 @@ class _BillingPageState extends State<BillingPage> {
     _BillingRecipient recipient,
     List<_BillingLine> lines,
   ) {
-    final subtotal = lines.fold<int>(0, (total, line) => total + line.amount);
     final subtotal10 = _subtotalForRate(lines, 10);
     final subtotal8 = _subtotalForRate(lines, 8);
-    final tax10 = _taxFor(subtotal10, 10);
-    final tax8 = _taxFor(subtotal8, 8);
+    final subtotal = subtotal10 + subtotal8;
+    final tax10 = _taxForLines(lines, 10);
+    final tax8 = _taxForLines(lines, 8);
     final dueDate = _paymentDueDateForMonth(billingMonth);
     return {
       'id': id,
@@ -1099,11 +1136,11 @@ class _BillingPageState extends State<BillingPage> {
   }) async {
     final pdf = pw.Document();
     final isInvoice = kind == _BillingPdfKind.invoice;
-    final subtotal = lines.fold<int>(0, (total, line) => total + line.amount);
     final subtotal10 = _subtotalForRate(lines, 10);
     final subtotal8 = _subtotalForRate(lines, 8);
-    final tax10 = _taxFor(subtotal10, 10);
-    final tax8 = _taxFor(subtotal8, 8);
+    final subtotal = subtotal10 + subtotal8;
+    final tax10 = _taxForLines(lines, 10);
+    final tax8 = _taxForLines(lines, 8);
     final total = subtotal + tax10 + tax8;
     final title = isInvoice ? 'ご請求書' : '受領書';
     final mascot = isInvoice ? assets.mascotInvoice : assets.mascotReceipt;
@@ -2267,11 +2304,11 @@ class _BillingPageState extends State<BillingPage> {
   }
 
   Map<String, int> _totalsForLines(List<_BillingLine> lines) {
-    final subtotal = lines.fold<int>(0, (total, line) => total + line.amount);
     final subtotal10 = _subtotalForRate(lines, 10);
     final subtotal8 = _subtotalForRate(lines, 8);
-    final tax10 = _taxFor(subtotal10, 10);
-    final tax8 = _taxFor(subtotal8, 8);
+    final subtotal = subtotal10 + subtotal8;
+    final tax10 = _taxForLines(lines, 10);
+    final tax8 = _taxForLines(lines, 8);
     return {
       'subtotal': subtotal,
       'subtotal10': subtotal10,
