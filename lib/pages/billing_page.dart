@@ -84,10 +84,20 @@ class _BillingPageState extends State<BillingPage> {
     });
 
     try {
-      final invoiceSnap = await AppSession.billingInvoices
-          .orderBy('createdAt', descending: true)
-          .limit(100)
-          .get();
+      final loadResults = await Future.wait([
+        AppSession.billingInvoices
+            .orderBy('createdAt', descending: true)
+            .limit(30)
+            .get(),
+        AppSession.doc('billing_prices').get(),
+        AppSession.orderBatches
+            .orderBy('createdAt', descending: true)
+            .limit(60)
+            .get(),
+      ]);
+      final invoiceSnap = loadResults[0] as QuerySnapshot<Map<String, dynamic>>;
+      final priceDoc = loadResults[1] as DocumentSnapshot<Map<String, dynamic>>;
+      final batchSnap = loadResults[2] as QuerySnapshot<Map<String, dynamic>>;
       final billedKeys = <String>{};
       final issuedMonthStoreKeys = <String>{};
       final invoices = <_BillingInvoiceSummary>[];
@@ -105,7 +115,6 @@ class _BillingPageState extends State<BillingPage> {
         }
       }
 
-      final priceDoc = await AppSession.doc('billing_prices').get();
       final priceData = priceDoc.data() ?? <String, dynamic>{};
       final billingPrices = <String, _BillingPrice>{};
       final rawEntries = priceData['entries'];
@@ -154,10 +163,6 @@ class _BillingPageState extends State<BillingPage> {
           ? repaymentAmount.toString()
           : '';
 
-      final batchSnap = await AppSession.orderBatches
-          .orderBy('createdAt', descending: true)
-          .limit(200)
-          .get();
       final lines = <_BillingLine>[];
       for (final batch in batchSnap.docs) {
         final data = batch.data();
@@ -204,6 +209,8 @@ class _BillingPageState extends State<BillingPage> {
       });
 
       for (final line in lines) {
+        if (!_isSameMonth(line.orderDate, _selectedMonth)) continue;
+        if (!_showBilled && line.billed) continue;
         final master = billingPrices[_priceKeyFor(line)];
         final priceController = _priceControllers.putIfAbsent(line.key, () {
           final controller = TextEditingController();
