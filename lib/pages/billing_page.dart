@@ -498,6 +498,26 @@ class _BillingPageState extends State<BillingPage> {
 
   int _taxFor(int subtotal, int taxRate) => (subtotal * taxRate / 100).round();
 
+  int _taxExcludedAmountFromInput({
+    required int inputUnit,
+    required int qty,
+    required int taxRate,
+    required bool taxIncluded,
+  }) {
+    if (!taxIncluded) return inputUnit * qty;
+    final grossTotal = inputUnit * qty;
+    return (grossTotal / (1 + taxRate / 100)).round();
+  }
+
+  int _taxExcludedUnitFromInput({
+    required int inputUnit,
+    required int taxRate,
+    required bool taxIncluded,
+  }) {
+    if (!taxIncluded) return inputUnit;
+    return (inputUnit / (1 + taxRate / 100)).round();
+  }
+
   Future<void> _saveBillingPriceForLine(_BillingLine line) async {
     final key = _priceKeyFor(line);
     final entry = _BillingPrice(
@@ -2194,9 +2214,11 @@ class _BillingPageState extends State<BillingPage> {
       final inputUnit = inventoryIntValue(row.unitPrice.text);
       if (qty <= 0 || inputUnit <= 0) continue;
       final taxRate = row.taxRate == 8 ? 8 : 10;
-      final unitPrice = row.taxIncluded
-          ? (inputUnit / (1 + taxRate / 100)).round()
-          : inputUnit;
+      final unitPrice = _taxExcludedUnitFromInput(
+        inputUnit: inputUnit,
+        taxRate: taxRate,
+        taxIncluded: row.taxIncluded,
+      );
       lines.add(
         _BillingLine(
           key: 'manual_${nowMicros}_$i',
@@ -2212,6 +2234,7 @@ class _BillingPageState extends State<BillingPage> {
           unitPrice: unitPrice,
           listPrice: inputUnit,
           taxRate: taxRate,
+          taxIncluded: row.taxIncluded,
         ),
       );
     }
@@ -2223,10 +2246,12 @@ class _BillingPageState extends State<BillingPage> {
     final inputUnit = inventoryIntValue(row.unitPrice.text);
     if (qty <= 0 || inputUnit <= 0) return 0;
     final taxRate = row.taxRate == 8 ? 8 : 10;
-    final unitPrice = row.taxIncluded
-        ? (inputUnit / (1 + taxRate / 100)).round()
-        : inputUnit;
-    return unitPrice * qty;
+    return _taxExcludedAmountFromInput(
+      inputUnit: inputUnit,
+      qty: qty,
+      taxRate: taxRate,
+      taxIncluded: row.taxIncluded,
+    );
   }
 
   String _dateInputText(DateTime date) {
@@ -2271,9 +2296,11 @@ class _BillingPageState extends State<BillingPage> {
       final inputUnit = inventoryIntValue(row.unitPrice.text);
       if (qty <= 0 || inputUnit <= 0) continue;
       final taxRate = row.taxRate == 8 ? 8 : 10;
-      final unitPrice = row.taxIncluded
-          ? (inputUnit / (1 + taxRate / 100)).round()
-          : inputUnit;
+      final unitPrice = _taxExcludedUnitFromInput(
+        inputUnit: inputUnit,
+        taxRate: taxRate,
+        taxIncluded: row.taxIncluded,
+      );
       lines.add(
         _BillingLine(
           key: row.sourceKey.isEmpty ? 'edited_${nowMicros}_$i' : row.sourceKey,
@@ -2290,6 +2317,7 @@ class _BillingPageState extends State<BillingPage> {
           listPrice: inputUnit,
           purchaseRate: row.purchaseRate,
           taxRate: taxRate,
+          taxIncluded: row.taxIncluded,
         ),
       );
     }
@@ -3050,9 +3078,11 @@ class _BillingPageState extends State<BillingPage> {
       final inputUnit = inventoryIntValue(row.unitPrice.text);
       if (qty <= 0 || inputUnit <= 0) continue;
       final taxRate = row.taxRate == 8 ? 8 : 10;
-      final unitPrice = row.taxIncluded
-          ? (inputUnit / (1 + taxRate / 100)).round()
-          : inputUnit;
+      final unitPrice = _taxExcludedUnitFromInput(
+        inputUnit: inputUnit,
+        taxRate: taxRate,
+        taxIncluded: row.taxIncluded,
+      );
       lines.add(
         _BillingLine(
           key: 'manual_${DateTime.now().microsecondsSinceEpoch}_$i',
@@ -3068,6 +3098,7 @@ class _BillingPageState extends State<BillingPage> {
           unitPrice: unitPrice,
           listPrice: inputUnit,
           taxRate: taxRate,
+          taxIncluded: row.taxIncluded,
         ),
       );
     }
@@ -3668,6 +3699,7 @@ class _BillingLine {
     this.listPrice = 0,
     this.purchaseRate = 0,
     this.taxRate = 10,
+    this.taxIncluded = false,
     this.billed = false,
   });
 
@@ -3685,15 +3717,22 @@ class _BillingLine {
   final int listPrice;
   final int purchaseRate;
   final int taxRate;
+  final bool taxIncluded;
   final bool billed;
 
-  int get amount => qty * unitPrice;
+  int get amount {
+    if (!taxIncluded) return qty * unitPrice;
+    if (listPrice <= 0 || qty <= 0) return qty * unitPrice;
+    final grossTotal = listPrice * qty;
+    return (grossTotal / (1 + taxRate / 100)).round();
+  }
 
   _BillingLine copyWith({
     int? unitPrice,
     int? listPrice,
     int? purchaseRate,
     int? taxRate,
+    bool? taxIncluded,
     bool? billed,
   }) {
     return _BillingLine(
@@ -3711,6 +3750,7 @@ class _BillingLine {
       listPrice: listPrice ?? this.listPrice,
       purchaseRate: purchaseRate ?? this.purchaseRate,
       taxRate: taxRate ?? this.taxRate,
+      taxIncluded: taxIncluded ?? this.taxIncluded,
       billed: billed ?? this.billed,
     );
   }
@@ -3731,7 +3771,9 @@ class _BillingLine {
       'listPrice': listPrice,
       'purchaseRate': purchaseRate,
       'taxRate': taxRate,
-      'amount': qty * price,
+      'taxIncluded': taxIncluded,
+      'inputUnitPrice': listPrice,
+      'amount': amount,
     };
   }
 
@@ -3743,6 +3785,10 @@ class _BillingLine {
       );
       final price = inventoryIntValue(map['unitPrice']);
       final qty = inventoryIntValue(map['qty']);
+      final taxIncluded = map['taxIncluded'] == true;
+      final listPrice = inventoryIntValue(map['listPrice']) > 0
+          ? inventoryIntValue(map['listPrice'])
+          : inventoryIntValue(map['inputUnitPrice']);
       return _BillingLine(
         key: (map['lineKey'] ?? '').toString(),
         batchId: (map['batchId'] ?? '').toString(),
@@ -3757,9 +3803,10 @@ class _BillingLine {
         itemName: (map['itemName'] ?? '').toString(),
         qty: qty,
         unitPrice: price,
-        listPrice: inventoryIntValue(map['listPrice']),
+        listPrice: listPrice,
         purchaseRate: inventoryIntValue(map['purchaseRate']),
         taxRate: inventoryIntValue(map['taxRate']) == 8 ? 8 : 10,
+        taxIncluded: taxIncluded,
       );
     }).toList();
   }
@@ -3870,7 +3917,10 @@ class _ManualBillingLineControllers {
     code.text = line.itemCode;
     name.text = line.itemName;
     qty.text = line.qty.toString();
-    unitPrice.text = line.unitPrice.toString();
+    taxIncluded = line.taxIncluded;
+    unitPrice.text = line.taxIncluded && line.listPrice > 0
+        ? line.listPrice.toString()
+        : line.unitPrice.toString();
     purchaseRate = line.purchaseRate;
     taxRate = line.taxRate == 8 ? 8 : 10;
   }
