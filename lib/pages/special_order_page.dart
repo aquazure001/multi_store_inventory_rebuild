@@ -1430,6 +1430,134 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     );
   }
 
+  List<SpecialOrderItem> _uniqueHomeCareItems(List<SpecialOrderItem> items) {
+    final byKey = <String, SpecialOrderItem>{};
+    for (final item in items) {
+      if (!_isHomeCareSet(item)) continue;
+      byKey.putIfAbsent(_homeCareLotKey(item), () => item);
+    }
+    return byKey.values.toList()..sort((a, b) {
+      final c = _naturalCompare(_normalizeCode(a.code), _normalizeCode(b.code));
+      return c != 0 ? c : _naturalCompare(a.name, b.name);
+    });
+  }
+
+  Widget _buildHomeCareTopSummary(List<SpecialOrderItem> homeCareItems) {
+    final uniqueItems = _uniqueHomeCareItems(homeCareItems);
+    if (uniqueItems.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.blue.shade50,
+              border: Border.all(color: Colors.blue.shade200),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.inventory_2_outlined,
+                      color: Colors.blue.shade700,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'ホームケアセット残数',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.blue.shade800,
+                          fontSize: 16,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '商品コードごとに残数をまとめています。各発注カードには残数ボックスは表示しません。',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.blueGrey.shade700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          for (final item in uniqueItems) _buildHomeCareLotPanel(item),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSpecialOrderList(
+    List<SpecialOrderItem> visibleItems, {
+    required bool homeCareMode,
+  }) {
+    final emptyMessage = homeCareMode
+        ? 'ホームケアセットの発注はありません'
+        : (widget.showExpiredOnly ? '検索に一致する販売終了発注はありません' : '検索に一致する発注はありません');
+    final extraTopCount = homeCareMode ? 3 : 2;
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount:
+          extraTopCount + (visibleItems.isEmpty ? 1 : visibleItems.length),
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: TextField(
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search),
+                hintText: '商品名・コード・種別で検索',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              onChanged: (value) => setState(() => _query = value),
+            ),
+          );
+        }
+        if (index == 1) {
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+            child: Text(
+              homeCareMode
+                  ? 'ホームケアセット：上部に商品コード別残数、その下に各発注を表示'
+                  : (widget.showExpiredOnly
+                        ? '表示順：販売終了日が新しい順 → コード順 → 商品名順'
+                        : '表示順：販売終了日が近い順 → コード順 → 商品名順'),
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+            ),
+          );
+        }
+        if (homeCareMode && index == 2) {
+          return _buildHomeCareTopSummary(visibleItems);
+        }
+        if (visibleItems.isEmpty) {
+          return Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              emptyMessage,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.grey),
+            ),
+          );
+        }
+        return _buildItemCard(visibleItems[index - extraTopCount]);
+      },
+    );
+  }
+
   Widget _buildItemCard(SpecialOrderItem item) {
     final c = _typeColor(item.type);
     final totalOrdered = (_orders[item.id] ?? {}).values.fold(
@@ -1563,7 +1691,6 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         ),
         children: [
           const Divider(height: 1),
-          if (_isHomeCareSet(item)) _buildHomeCareLotPanel(item),
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
             child: Text(
@@ -1586,11 +1713,53 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   Widget build(BuildContext context) {
     final filteredItems = _items.where(_matchesSpecialOrderQuery).toList()
       ..sort(_compareSpecialOrderItems);
+    final normalItems = filteredItems
+        .where((item) => !_isHomeCareSet(item))
+        .toList();
+    final homeCareItems = filteredItems.where(_isHomeCareSet).toList();
 
-    return Scaffold(
+    Widget buildBody() {
+      if (_loading) return const Center(child: CircularProgressIndicator());
+      if (_error != null) {
+        return Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text('読み込みエラー: $_error'),
+        );
+      }
+      if (_items.isEmpty) {
+        return Center(
+          child: Text(
+            widget.showExpiredOnly
+                ? '販売終了した発注はありません'
+                : '登録された発注はありません\n＋ボタンから登録してください',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.grey),
+          ),
+        );
+      }
+      if (widget.showExpiredOnly) {
+        return _buildSpecialOrderList(filteredItems, homeCareMode: false);
+      }
+      return TabBarView(
+        children: [
+          _buildSpecialOrderList(normalItems, homeCareMode: false),
+          _buildSpecialOrderList(homeCareItems, homeCareMode: true),
+        ],
+      );
+    }
+
+    final scaffold = Scaffold(
       backgroundColor: const Color(0xFFFFF7FF),
       appBar: AppBar(
         title: Text(widget.showExpiredOnly ? '販売終了' : '特別発注・新規発注'),
+        bottom: widget.showExpiredOnly
+            ? null
+            : const TabBar(
+                tabs: [
+                  Tab(text: '通常発注'),
+                  Tab(text: 'ホームケアセット'),
+                ],
+              ),
         actions: [
           if (!widget.showExpiredOnly) ...[
             IconButton(
@@ -1618,70 +1787,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           ),
         ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-          ? Padding(
-              padding: const EdgeInsets.all(24),
-              child: Text('読み込みエラー: $_error'),
-            )
-          : _items.isEmpty
-          ? Center(
-              child: Text(
-                widget.showExpiredOnly
-                    ? '販売終了した発注はありません'
-                    : '登録された発注はありません\n＋ボタンから登録してください',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.grey),
-              ),
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              itemCount: 2 + (filteredItems.isEmpty ? 1 : filteredItems.length),
-              itemBuilder: (context, index) {
-                if (index == 0) {
-                  return Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                    child: TextField(
-                      decoration: const InputDecoration(
-                        prefixIcon: Icon(Icons.search),
-                        hintText: '商品名・コード・種別で検索',
-                        border: OutlineInputBorder(),
-                        isDense: true,
-                      ),
-                      onChanged: (value) => setState(() => _query = value),
-                    ),
-                  );
-                }
-                if (index == 1) {
-                  return Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-                    child: Text(
-                      widget.showExpiredOnly
-                          ? '表示順：販売終了日が新しい順 → コード順 → 商品名順'
-                          : '表示順：販売終了日が近い順 → コード順 → 商品名順',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey.shade700,
-                      ),
-                    ),
-                  );
-                }
-                if (filteredItems.isEmpty) {
-                  return Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Text(
-                      widget.showExpiredOnly
-                          ? '検索に一致する販売終了発注はありません'
-                          : '検索に一致する発注はありません',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.grey),
-                    ),
-                  );
-                }
-                return _buildItemCard(filteredItems[index - 2]);
-              },
-            ),
+      body: buildBody(),
       floatingActionButton: widget.showExpiredOnly
           ? null
           : FloatingActionButton(
@@ -1690,6 +1796,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
               child: const Icon(Icons.add),
             ),
     );
+
+    if (widget.showExpiredOnly) return scaffold;
+    return DefaultTabController(length: 2, child: scaffold);
   }
 }
 
