@@ -331,7 +331,14 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   }
 
   int _compareSpecialOrderItems(SpecialOrderItem a, SpecialOrderItem b) {
-    final endCompare = widget.showExpiredOnly
+    if (!widget.showExpiredOnly) {
+      final expiredCompare = a.isExpired == b.isExpired
+          ? 0
+          : (a.isExpired ? 1 : -1);
+      if (expiredCompare != 0) return expiredCompare;
+    }
+
+    final endCompare = widget.showExpiredOnly || a.isExpired
         ? b.salesEnd.compareTo(a.salesEnd)
         : a.salesEnd.compareTo(b.salesEnd);
     if (endCompare != 0) return endCompare;
@@ -351,11 +358,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   }
 
   bool _matchesSpecialOrderQuery(SpecialOrderItem item) {
-    if (widget.showExpiredOnly) {
-      if (!item.isExpired) return false;
-    } else {
-      if (item.isExpired) return false;
-    }
+    if (widget.showExpiredOnly && !item.isExpired) return false;
 
     final q = _query.trim().toLowerCase();
     if (q.isEmpty) return true;
@@ -1723,7 +1726,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                   ? 'ホームケアセット：上部に商品コード別残数、その下に各発注を表示'
                   : (widget.showExpiredOnly
                         ? '表示順：販売終了日が新しい順 → コード順 → 商品名順'
-                        : '表示順：販売終了日が近い順 → コード順 → 商品名順'),
+                        : '表示順：販売終了日が近い順 → 期間終了は一番下 → コード順'),
               style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
             ),
           );
