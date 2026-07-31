@@ -1186,7 +1186,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'ホームケア残数（同一コード合算）',
+                  'ホームケアセット在庫',
                   style: TextStyle(
                     fontWeight: FontWeight.bold,
                     color: Colors.blue.shade800,
@@ -1230,7 +1230,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                   border: Border.all(color: Colors.blue.shade100),
                 ),
                 child: Text(
-                  '現在残数 ${lot.remaining} 個',
+                  '引渡可能在庫：${lot.remaining} 個',
                   style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
@@ -1283,7 +1283,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           ),
           const SizedBox(height: 4),
           Text(
-            '※同じ商品コードの次回発注でも、この残数に発注分が加算されます。',
+            '※発注すると上の引渡可能在庫に加算され、引渡すると減ります。',
             style: TextStyle(fontSize: 11, color: Colors.blueGrey.shade700),
           ),
         ],
@@ -1472,7 +1472,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'ホームケアセット残数',
+                        'ホームケアセット在庫',
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           color: Colors.blue.shade800,
@@ -1484,7 +1484,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '商品コードごとに残数をまとめています。各発注カードには残数ボックスは表示しません。',
+                  '商品コードごとに、今お客様へ引渡できる在庫数を表示しています。',
                   style: TextStyle(
                     fontSize: 12,
                     color: Colors.blueGrey.shade700,
