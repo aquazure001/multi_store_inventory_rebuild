@@ -553,7 +553,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     }
   }
 
-  Future<void> _handoverHomeCare(SpecialOrderItem item) async {
+  Future<void> _deliverHomeCare(SpecialOrderItem item) async {
     final lot = _homeCareLotFor(item);
     final customerCode = _homeCareCustomerCtrl(item).text.trim();
     final qty = int.tryParse(_homeCareDeliveryQtyCtrl(item).text.trim()) ?? 0;
@@ -567,7 +567,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     if (qty <= 0) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('引渡数量は1以上にしてください')));
+      ).showSnackBar(const SnackBar(content: Text('納品数量は1以上にしてください')));
       return;
     }
     if (qty > lot.remaining) {
@@ -583,9 +583,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('ホームケア引渡確認'),
+        title: const Text('ホームケア納品確認'),
         content: Text(
-          '${lot.name}\n顧客コード: $customerCode\n引渡数量: $qty 個\n\n残数から差し引きます。',
+          '${lot.name}\n顧客コード: $customerCode\n納品数量: $qty 個\n\n在庫から差し引きます。',
         ),
         actions: [
           TextButton(
@@ -594,7 +594,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           ),
           ElevatedButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('引渡する'),
+            child: const Text('納品する'),
           ),
         ],
       ),
@@ -643,7 +643,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('引渡しました'),
+            content: Text('納品しました'),
             backgroundColor: Colors.green,
           ),
         );
@@ -651,7 +651,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('引渡失敗: $e'), backgroundColor: Colors.red),
+          SnackBar(content: Text('納品失敗: $e'), backgroundColor: Colors.red),
         );
       }
     }
@@ -1341,7 +1341,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                   border: Border.all(color: Colors.blue.shade100),
                 ),
                 child: Text(
-                  '引渡可能在庫：${lot.remaining} 個',
+                  '納品可能在庫：${lot.remaining} 個',
                   style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
@@ -1382,11 +1382,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           ),
           const SizedBox(height: 8),
           ElevatedButton.icon(
-            onPressed: lot.remaining <= 0
-                ? null
-                : () => _handoverHomeCare(item),
+            onPressed: lot.remaining <= 0 ? null : () => _deliverHomeCare(item),
             icon: const Icon(Icons.output),
-            label: const Text('引渡'),
+            label: const Text('納品'),
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.blue,
               foregroundColor: Colors.white,
@@ -1394,7 +1392,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           ),
           const SizedBox(height: 4),
           Text(
-            '※発注すると上の引渡可能在庫に加算され、引渡すると減ります。',
+            '※発注すると上の納品可能在庫に加算され、納品すると減ります。',
             style: TextStyle(fontSize: 11, color: Colors.blueGrey.shade700),
           ),
         ],
@@ -1460,7 +1458,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  '発注ボタンで ${lot.name} の引渡可能在庫に反映します。',
+                  '発注ボタンで ${lot.name} の納品可能在庫に反映します。',
                   style: const TextStyle(fontSize: 11),
                 ),
               ),
@@ -1674,7 +1672,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '商品コードごとに、今お客様へ引渡できる在庫数を表示しています。',
+                  '商品コードごとに、今お客様へ納品できる在庫数を表示しています。',
                   style: TextStyle(
                     fontSize: 12,
                     color: Colors.blueGrey.shade700,
