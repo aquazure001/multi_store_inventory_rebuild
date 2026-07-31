@@ -21,6 +21,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   Map<String, Map<String, int>> _orders = {};
   Map<String, Map<String, int>> _deliveries = {};
   Map<String, _HomeCareLotStock> _homeCareLots = {};
+  Map<String, Map<String, int>> _homeCareReflectedUnits = {};
   bool _loading = true;
   String? _error;
   String _query = '';
@@ -120,6 +121,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         _orders = parseNestedQty(raw['orders']);
         _deliveries = parseNestedQty(raw['deliveries']);
         _homeCareLots = homeCareLots;
+        _homeCareReflectedUnits = parseNestedQty(raw['homeCareReflectedUnits']);
         _loading = false;
       });
     } catch (e) {
@@ -198,6 +200,109 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       key,
       () => TextEditingController(text: '1'),
     );
+  }
+
+  int _homeCareReflectedTotalForItem(SpecialOrderItem item) {
+    return (_homeCareReflectedUnits[item.id] ?? {}).values.fold(
+      0,
+      (a, b) => a + b,
+    );
+  }
+
+  int _homeCareOrderedLotTotalForItem(SpecialOrderItem item) {
+    return (_orders[item.id] ?? {}).values.fold(0, (a, b) => a + b);
+  }
+
+  Future<void> _syncHomeCareExistingOrders(SpecialOrderItem item) async {
+    if (!_isHomeCareSet(item)) return;
+    final storeOrders = Map<String, int>.from(_orders[item.id] ?? {});
+    final totalLots = storeOrders.values.fold(0, (a, b) => a + b);
+    if (totalLots <= 0) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('反映する発注済みロットがありません')));
+      return;
+    }
+
+    final lot = _homeCareLotFor(item);
+    final lotSize = _positiveIntFromController(
+      _homeCareLotCtrl(item),
+      lot.lotSize <= 0 ? 1 : lot.lotSize,
+    );
+    final targetUnitsByStore = <String, int>{};
+    for (final entry in storeOrders.entries) {
+      if (entry.value > 0) {
+        targetUnitsByStore[entry.key] = entry.value * lotSize;
+      }
+    }
+    final targetTotal = targetUnitsByStore.values.fold(0, (a, b) => a + b);
+    final reflectedTotal = _homeCareReflectedTotalForItem(item);
+    final delta = reflectedTotal == 0 && lot.remaining > 0
+        ? max(0, targetTotal - lot.remaining)
+        : targetTotal - reflectedTotal;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('既存発注を在庫へ反映'),
+        content: Text(
+          '${item.name}\n発注済み $totalLots ロット × 1ロット $lotSize 個 = $targetTotal 個\n\n引渡可能在庫へ反映します。\n※すでに反映済みの分は二重加算しません。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('反映する'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await AppSession.doc('special_orders').set({
+        'homeCareLots': {
+          lot.key: {
+            'code': item.code,
+            'name': item.name,
+            'lotSize': lotSize,
+            if (delta > 0)
+              'remaining': FieldValue.increment(delta)
+            else if (delta < 0)
+              'remaining': max(0, lot.remaining + delta),
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        },
+        'homeCareReflectedUnits': {item.id: targetUnitsByStore},
+      }, SetOptions(merge: true));
+
+      setState(() {
+        _homeCareLots[lot.key] = lot.copyWith(
+          code: item.code,
+          name: item.name,
+          lotSize: lotSize,
+          remaining: max(0, lot.remaining + delta),
+        );
+        _homeCareReflectedUnits[item.id] = targetUnitsByStore;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('既存発注を在庫へ反映しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('反映失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 
   String _fmtDate(DateTime d) =>
@@ -310,19 +415,25 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         };
         if (_isHomeCareSet(item) && oldQty > 0) {
           final lot = _homeCareLotFor(item);
+          final reflectedUnits =
+              (_homeCareReflectedUnits[item.id] ?? {})[storeId] ?? 0;
           final lotSize = _positiveIntFromController(
             _homeCareLotCtrl(item),
             lot.lotSize <= 0 ? 1 : lot.lotSize,
           );
-          updates['homeCareLots.${lot.key}.remaining'] = max(
-            0,
-            lot.remaining - oldQty * lotSize,
-          );
+          if (reflectedUnits > 0) {
+            updates['homeCareLots.${lot.key}.remaining'] = max(
+              0,
+              lot.remaining - reflectedUnits,
+            );
+          }
           updates['homeCareLots.${lot.key}.lotSize'] = lotSize;
           updates['homeCareLots.${lot.key}.code'] = item.code;
           updates['homeCareLots.${lot.key}.name'] = item.name;
           updates['homeCareLots.${lot.key}.updatedAt'] =
               FieldValue.serverTimestamp();
+          updates['homeCareReflectedUnits.${item.id}.$storeId'] =
+              FieldValue.delete();
         }
         await AppSession.doc('special_orders').update(updates);
       } on FirebaseException catch (e) {
@@ -333,16 +444,22 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         if (_orders[item.id]?.isEmpty ?? false) _orders.remove(item.id);
         if (_isHomeCareSet(item) && oldQty > 0) {
           final lot = _homeCareLotFor(item);
+          final reflectedUnits =
+              (_homeCareReflectedUnits[item.id] ?? {})[storeId] ?? 0;
           final lotSize = _positiveIntFromController(
             _homeCareLotCtrl(item),
             lot.lotSize <= 0 ? 1 : lot.lotSize,
           );
           _homeCareLots[lot.key] = lot.copyWith(
             lotSize: lotSize,
-            remaining: max(0, lot.remaining - oldQty * lotSize),
+            remaining: max(0, lot.remaining - reflectedUnits),
             code: item.code,
             name: item.name,
           );
+          _homeCareReflectedUnits[item.id]?.remove(storeId);
+          if (_homeCareReflectedUnits[item.id]?.isEmpty ?? false) {
+            _homeCareReflectedUnits.remove(item.id);
+          }
         }
       });
       return;
@@ -382,7 +499,10 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           _homeCareLotCtrl(item),
           homeCareLot.lotSize <= 0 ? 1 : homeCareLot.lotSize,
         );
-        addUnits = (qty - oldQty) * lotSize;
+        final oldReflectedUnits =
+            (_homeCareReflectedUnits[item.id] ?? {})[storeId] ?? 0;
+        final newReflectedUnits = qty * lotSize;
+        addUnits = newReflectedUnits - oldReflectedUnits;
         writeData['homeCareLots'] = {
           homeCareLot.key: {
             'code': item.code,
@@ -394,6 +514,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
               'remaining': max(0, homeCareLot.remaining + addUnits),
             'updatedAt': FieldValue.serverTimestamp(),
           },
+        };
+        writeData['homeCareReflectedUnits'] = {
+          item.id: {storeId: qty * lotSize},
         };
       }
 
@@ -409,6 +532,8 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
             lotSize: lotSize,
             remaining: max(0, homeCareLot.remaining + addUnits),
           );
+          _homeCareReflectedUnits.putIfAbsent(item.id, () => {})[storeId] =
+              qty * lotSize;
         }
       });
       if (mounted) {
@@ -1165,7 +1290,6 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
 
   Widget _buildHomeCareLotPanel(SpecialOrderItem item) {
     final lot = _homeCareLotFor(item);
-    final lotCtrl = _homeCareLotCtrl(item);
     final customerCtrl = _homeCareCustomerCtrl(item);
     final qtyCtrl = _homeCareDeliveryQtyCtrl(item);
 
@@ -1206,19 +1330,6 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
             runSpacing: 8,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              SizedBox(
-                width: 118,
-                child: TextField(
-                  controller: lotCtrl,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: '1発注＝何個',
-                    suffixText: '個',
-                    isDense: true,
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-              ),
               Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 12,
@@ -1286,6 +1397,83 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
             '※発注すると上の引渡可能在庫に加算され、引渡すると減ります。',
             style: TextStyle(fontSize: 11, color: Colors.blueGrey.shade700),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHomeCareOrderLotBox(SpecialOrderItem item) {
+    if (!_isHomeCareSet(item)) return const SizedBox.shrink();
+    final lot = _homeCareLotFor(item);
+    final lotCtrl = _homeCareLotCtrl(item);
+    final orderedLots = _homeCareOrderedLotTotalForItem(item);
+    final reflectedUnits = _homeCareReflectedTotalForItem(item);
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.orange.shade50,
+        border: Border.all(color: Colors.orange.shade200),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'この発注のロット設定',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.orange.shade900,
+                  ),
+                ),
+              ),
+              if (orderedLots > 0)
+                Text(
+                  '発注済 $orderedLots ロット',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.orange.shade900,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              SizedBox(
+                width: 132,
+                child: TextField(
+                  controller: lotCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: '1ロット＝何個',
+                    suffixText: '個',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '発注ボタンで ${lot.name} の引渡可能在庫に反映します。',
+                  style: const TextStyle(fontSize: 11),
+                ),
+              ),
+            ],
+          ),
+          if (orderedLots > 0) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: () => _syncHomeCareExistingOrders(item),
+              icon: const Icon(Icons.sync),
+              label: Text(reflectedUnits > 0 ? '発注済み分を再計算' : '発注済み分を在庫へ反映'),
+            ),
+          ],
         ],
       ),
     );
@@ -1370,7 +1558,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Text(
-                        '納品予定: $ordered 個',
+                        _isHomeCareSet(item)
+                            ? '発注済: $ordered ロット'
+                            : '納品予定: $ordered 個',
                         style: TextStyle(
                           fontSize: 11,
                           color: Colors.orange.shade800,
@@ -1691,6 +1881,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         ),
         children: [
           const Divider(height: 1),
+          if (_isHomeCareSet(item)) _buildHomeCareOrderLotBox(item),
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
             child: Text(
@@ -1716,7 +1907,14 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     final normalItems = filteredItems
         .where((item) => !_isHomeCareSet(item))
         .toList();
-    final homeCareItems = filteredItems.where(_isHomeCareSet).toList();
+    final q = _query.trim().toLowerCase();
+    final normalizedQ = _normalizeCode(q);
+    final homeCareItems = _items.where(_isHomeCareSet).where((item) {
+      if (q.isEmpty) return true;
+      return item.name.toLowerCase().contains(q) ||
+          item.type.toLowerCase().contains(q) ||
+          _normalizeCode(item.code).contains(normalizedQ);
+    }).toList()..sort(_compareSpecialOrderItems);
 
     Widget buildBody() {
       if (_loading) return const Center(child: CircularProgressIndicator());
