@@ -133,15 +133,22 @@ class _OrderListPageState extends State<OrderListPage> {
         }
       }
 
-      final entries = <_OrderEntry>[];
+      final stockByStoreId = <String, Map<String, int>>{};
+      final baseByStoreId = <String, Map<String, int>>{};
       for (final store in stores) {
-        final stocks = _parseMergedStocksForStore(
+        stockByStoreId[store.id] = _parseMergedStocksForStore(
           stocksData,
           v2TMap,
           v2EMap,
           store.id,
         );
-        final bases = _parseStocksForStore(baseData, store.id);
+        baseByStoreId[store.id] = _parseStocksForStore(baseData, store.id);
+      }
+
+      final entries = <_OrderEntry>[];
+      for (final store in stores) {
+        final stocks = stockByStoreId[store.id] ?? const <String, int>{};
+        final bases = baseByStoreId[store.id] ?? const <String, int>{};
 
         for (final typeEntry in <(String, List<LegacyItem>)>[
           ('商品', products),
@@ -169,6 +176,11 @@ class _OrderListPageState extends State<OrderListPage> {
                 base: b,
                 orderedQty: orderedQty,
                 orderMeta: orderMetas[metaKey] ?? const _OrderMeta(),
+                allStoreStocks: {
+                  for (final stockStore in stores)
+                    stockStore.name:
+                        stockByStoreId[stockStore.id]?[item.id] ?? 0,
+                },
               );
               entries.add(entry);
               final key = '${store.id}_${typeName}_${item.id}';
@@ -1185,6 +1197,63 @@ class _OrderListPageState extends State<OrderListPage> {
     ),
   );
 
+  Widget _buildAllStoreStockRow(_OrderEntry e) {
+    if (e.allStoreStocks.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Wrap(
+        spacing: 4,
+        runSpacing: 4,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+            decoration: BoxDecoration(
+              color: Colors.blueGrey.shade50,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: Colors.blueGrey.shade100),
+            ),
+            child: Text(
+              '全店在庫',
+              style: TextStyle(
+                fontSize: 10,
+                color: Colors.blueGrey.shade700,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          for (final stock in e.allStoreStocks.entries)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+              decoration: BoxDecoration(
+                color: stock.value > 0
+                    ? Colors.lightBlue.shade50
+                    : Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(
+                  color: stock.value > 0
+                      ? Colors.lightBlue.shade100
+                      : Colors.grey.shade300,
+                ),
+              ),
+              child: Text(
+                '${stock.key}:${stock.value}',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: stock.value > 0
+                      ? Colors.blue.shade800
+                      : Colors.grey.shade600,
+                  fontWeight: stock.value > 0
+                      ? FontWeight.bold
+                      : FontWeight.normal,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildOrderedActionButtons(BuildContext context, _OrderEntry e) {
     return Padding(
       padding: const EdgeInsets.only(top: 6),
@@ -1248,6 +1317,7 @@ class _OrderListPageState extends State<OrderListPage> {
                         color: Colors.grey.shade600,
                       ),
                     ),
+                    _buildAllStoreStockRow(e),
                   ],
                 ),
               ),
@@ -1637,6 +1707,7 @@ class _OrderListPageState extends State<OrderListPage> {
               'コード: ${item.code}  [$itemType]',
               style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
             ),
+            _buildAllStoreStockRow(storeEntries.first),
             const SizedBox(height: 6),
             for (final e in storeEntries) _buildItemStoreRow(context, e),
           ],

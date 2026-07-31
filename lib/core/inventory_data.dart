@@ -57,6 +57,7 @@ class _OrderEntry {
     required this.base,
     this.orderedQty = 0,
     this.orderMeta = const _OrderMeta(),
+    this.allStoreStocks = const {},
   });
   final LegacyStore store;
   final LegacyItem item;
@@ -65,6 +66,7 @@ class _OrderEntry {
   final int base;
   final int orderedQty;
   final _OrderMeta orderMeta;
+  final Map<String, int> allStoreStocks;
 
   int get shortage => base - current;
   int get effectiveShortage => max(0, base - current - orderedQty);
