@@ -20,10 +20,14 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   List<LegacyStore> _stores = [];
   Map<String, Map<String, int>> _orders = {};
   Map<String, Map<String, int>> _deliveries = {};
+  Map<String, _HomeCareLotStock> _homeCareLots = {};
   bool _loading = true;
   String? _error;
   String _query = '';
   final Map<String, TextEditingController> _controllers = {};
+  final Map<String, TextEditingController> _homeCareLotControllers = {};
+  final Map<String, TextEditingController> _homeCareCustomerControllers = {};
+  final Map<String, TextEditingController> _homeCareDeliveryControllers = {};
 
   static const _kTypes = ['特別発注', '新規発注', 'その他'];
 
@@ -36,6 +40,15 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   @override
   void dispose() {
     for (final c in _controllers.values) {
+      c.dispose();
+    }
+    for (final c in _homeCareLotControllers.values) {
+      c.dispose();
+    }
+    for (final c in _homeCareCustomerControllers.values) {
+      c.dispose();
+    }
+    for (final c in _homeCareDeliveryControllers.values) {
       c.dispose();
     }
     super.dispose();
@@ -84,11 +97,29 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         return result;
       }
 
+      Map<String, _HomeCareLotStock> parseHomeCareLots(dynamic src) {
+        final result = <String, _HomeCareLotStock>{};
+        if (src is! Map) return result;
+        for (final e in src.entries) {
+          final key = e.key.toString();
+          final value = e.value;
+          if (key.isEmpty || value is! Map) continue;
+          final map = Map<String, dynamic>.from(
+            value.map((k, v) => MapEntry(k.toString(), v)),
+          );
+          result[key] = _HomeCareLotStock.fromMap(key, map);
+        }
+        return result;
+      }
+
+      final homeCareLots = parseHomeCareLots(raw['homeCareLots']);
+
       setState(() {
         _items = items;
         _stores = stores;
         _orders = parseNestedQty(raw['orders']);
         _deliveries = parseNestedQty(raw['deliveries']);
+        _homeCareLots = homeCareLots;
         _loading = false;
       });
     } catch (e) {
@@ -105,6 +136,67 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     return _controllers.putIfAbsent(
       key,
       () => TextEditingController(text: ordered > 0 ? '$ordered' : ''),
+    );
+  }
+
+  bool _isHomeCareSet(SpecialOrderItem item) {
+    final name = item.name.toLowerCase();
+    return item.type == '特別発注' &&
+        (name.contains('ホームケア') ||
+            name.contains('homecare') ||
+            name.contains('home care'));
+  }
+
+  String _homeCareLotKey(SpecialOrderItem item) {
+    final base = _normalizeCode(item.code).isNotEmpty
+        ? _normalizeCode(item.code)
+        : item.name.trim().toLowerCase();
+    return base64Url.encode(utf8.encode(base)).replaceAll('=', '');
+  }
+
+  _HomeCareLotStock _homeCareLotFor(SpecialOrderItem item) {
+    final key = _homeCareLotKey(item);
+    return _homeCareLots[key] ??
+        _HomeCareLotStock(
+          key: key,
+          code: item.code,
+          name: item.name,
+          lotSize: 1,
+          remaining: 0,
+        );
+  }
+
+  int _positiveIntFromController(
+    TextEditingController controller,
+    int fallback,
+  ) {
+    final value = int.tryParse(controller.text.trim());
+    if (value == null || value <= 0) return fallback;
+    return value;
+  }
+
+  TextEditingController _homeCareLotCtrl(SpecialOrderItem item) {
+    final lot = _homeCareLotFor(item);
+    return _homeCareLotControllers.putIfAbsent(
+      lot.key,
+      () =>
+          TextEditingController(text: lot.lotSize > 0 ? '${lot.lotSize}' : '1'),
+    );
+  }
+
+  TextEditingController _homeCareCustomerCtrl(SpecialOrderItem item) {
+    final key = _homeCareLotKey(item);
+    return _homeCareCustomerControllers.putIfAbsent(
+      key,
+      () => TextEditingController(),
+    );
+  }
+
+  TextEditingController _homeCareDeliveryQtyCtrl(SpecialOrderItem item) {
+    final key = _homeCareLotKey(item);
+    return _homeCareDeliveryControllers.putIfAbsent(
+      key,
+      () => TextEditingController(text: '1'),
     );
   }
 
@@ -191,6 +283,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           orElse: () => LegacyStore(id: storeId, code: '', name: storeId),
         )
         .name;
+    final oldQty = (_orders[item.id] ?? {})[storeId] ?? 0;
 
     if (qty <= 0) {
       final confirmed = await showDialog<bool>(
@@ -212,15 +305,45 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       );
       if (confirmed != true) return;
       try {
-        await AppSession.doc(
-          'special_orders',
-        ).update({'orders.${item.id}.$storeId': FieldValue.delete()});
+        final updates = <String, dynamic>{
+          'orders.${item.id}.$storeId': FieldValue.delete(),
+        };
+        if (_isHomeCareSet(item) && oldQty > 0) {
+          final lot = _homeCareLotFor(item);
+          final lotSize = _positiveIntFromController(
+            _homeCareLotCtrl(item),
+            lot.lotSize <= 0 ? 1 : lot.lotSize,
+          );
+          updates['homeCareLots.${lot.key}.remaining'] = max(
+            0,
+            lot.remaining - oldQty * lotSize,
+          );
+          updates['homeCareLots.${lot.key}.lotSize'] = lotSize;
+          updates['homeCareLots.${lot.key}.code'] = item.code;
+          updates['homeCareLots.${lot.key}.name'] = item.name;
+          updates['homeCareLots.${lot.key}.updatedAt'] =
+              FieldValue.serverTimestamp();
+        }
+        await AppSession.doc('special_orders').update(updates);
       } on FirebaseException catch (e) {
         if (e.code != 'not-found') rethrow;
       }
       setState(() {
         _orders[item.id]?.remove(storeId);
         if (_orders[item.id]?.isEmpty ?? false) _orders.remove(item.id);
+        if (_isHomeCareSet(item) && oldQty > 0) {
+          final lot = _homeCareLotFor(item);
+          final lotSize = _positiveIntFromController(
+            _homeCareLotCtrl(item),
+            lot.lotSize <= 0 ? 1 : lot.lotSize,
+          );
+          _homeCareLots[lot.key] = lot.copyWith(
+            lotSize: lotSize,
+            remaining: max(0, lot.remaining - oldQty * lotSize),
+            code: item.code,
+            name: item.name,
+          );
+        }
       });
       return;
     }
@@ -245,13 +368,48 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     if (confirmed != true) return;
 
     try {
-      await AppSession.doc('special_orders').set({
+      final writeData = <String, dynamic>{
         'orders': {
           item.id: {storeId: qty},
         },
-      }, SetOptions(merge: true));
+      };
+      _HomeCareLotStock? homeCareLot;
+      int lotSize = 1;
+      int addUnits = 0;
+      if (_isHomeCareSet(item)) {
+        homeCareLot = _homeCareLotFor(item);
+        lotSize = _positiveIntFromController(
+          _homeCareLotCtrl(item),
+          homeCareLot.lotSize <= 0 ? 1 : homeCareLot.lotSize,
+        );
+        addUnits = (qty - oldQty) * lotSize;
+        writeData['homeCareLots'] = {
+          homeCareLot.key: {
+            'code': item.code,
+            'name': item.name,
+            'lotSize': lotSize,
+            if (addUnits > 0)
+              'remaining': FieldValue.increment(addUnits)
+            else if (addUnits < 0)
+              'remaining': max(0, homeCareLot.remaining + addUnits),
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        };
+      }
+
+      await AppSession.doc(
+        'special_orders',
+      ).set(writeData, SetOptions(merge: true));
       setState(() {
         _orders.putIfAbsent(item.id, () => {})[storeId] = qty;
+        if (homeCareLot != null) {
+          _homeCareLots[homeCareLot.key] = homeCareLot.copyWith(
+            code: item.code,
+            name: item.name,
+            lotSize: lotSize,
+            remaining: max(0, homeCareLot.remaining + addUnits),
+          );
+        }
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -265,6 +423,110 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('エラー: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _handoverHomeCare(SpecialOrderItem item) async {
+    final lot = _homeCareLotFor(item);
+    final customerCode = _homeCareCustomerCtrl(item).text.trim();
+    final qty = int.tryParse(_homeCareDeliveryQtyCtrl(item).text.trim()) ?? 0;
+
+    if (customerCode.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('顧客コードを入力してください')));
+      return;
+    }
+    if (qty <= 0) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('引渡数量は1以上にしてください')));
+      return;
+    }
+    if (qty > lot.remaining) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('残数が不足しています（残数 ${lot.remaining} 個）'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('ホームケア引渡確認'),
+        content: Text(
+          '${lot.name}\n顧客コード: $customerCode\n引渡数量: $qty 個\n\n残数から差し引きます。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('引渡する'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await AppSession.doc('special_orders').set({
+        'homeCareLots': {
+          lot.key: {
+            'code': item.code,
+            'name': item.name,
+            'lotSize': _positiveIntFromController(
+              _homeCareLotCtrl(item),
+              lot.lotSize <= 0 ? 1 : lot.lotSize,
+            ),
+            'remaining': FieldValue.increment(-qty),
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        },
+        'homeCareHandoverLogs': FieldValue.arrayUnion([
+          {
+            'key': lot.key,
+            'code': item.code,
+            'name': item.name,
+            'customerCode': customerCode,
+            'qty': qty,
+            'at': Timestamp.now(),
+          },
+        ]),
+      }, SetOptions(merge: true));
+
+      setState(() {
+        _homeCareLots[lot.key] = lot.copyWith(
+          code: item.code,
+          name: item.name,
+          lotSize: _positiveIntFromController(
+            _homeCareLotCtrl(item),
+            lot.lotSize <= 0 ? 1 : lot.lotSize,
+          ),
+          remaining: max(0, lot.remaining - qty),
+        );
+        _homeCareCustomerCtrl(item).clear();
+        _homeCareDeliveryQtyCtrl(item).text = '1';
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('引渡しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('引渡失敗: $e'), backgroundColor: Colors.red),
         );
       }
     }
@@ -901,6 +1163,134 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     }
   }
 
+  Widget _buildHomeCareLotPanel(SpecialOrderItem item) {
+    final lot = _homeCareLotFor(item);
+    final lotCtrl = _homeCareLotCtrl(item);
+    final customerCtrl = _homeCareCustomerCtrl(item);
+    final qtyCtrl = _homeCareDeliveryQtyCtrl(item);
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.blue.shade50,
+        border: Border.all(color: Colors.blue.shade200),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.inventory_2_outlined, color: Colors.blue.shade700),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'ホームケア残数（同一コード合算）',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue.shade800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '${lot.name} / コード:${lot.code.isEmpty ? item.code : lot.code}',
+            style: const TextStyle(fontSize: 12),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              SizedBox(
+                width: 118,
+                child: TextField(
+                  controller: lotCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: '1発注＝何個',
+                    suffixText: '個',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 9,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue.shade100),
+                ),
+                child: Text(
+                  '現在残数 ${lot.remaining} 個',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                flex: 2,
+                child: TextField(
+                  controller: customerCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '顧客コード',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 90,
+                child: TextField(
+                  controller: qtyCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: '数量',
+                    suffixText: '個',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ElevatedButton.icon(
+            onPressed: lot.remaining <= 0
+                ? null
+                : () => _handoverHomeCare(item),
+            icon: const Icon(Icons.output),
+            label: const Text('引渡'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.blue,
+              foregroundColor: Colors.white,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '※同じ商品コードの次回発注でも、この残数に発注分が加算されます。',
+            style: TextStyle(fontSize: 11, color: Colors.blueGrey.shade700),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildStoreRow(SpecialOrderItem item, LegacyStore store) {
     final ordered = (_orders[item.id] ?? {})[store.id] ?? 0;
     final delivered = (_deliveries[item.id] ?? {})[store.id] ?? 0;
@@ -1173,6 +1563,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         ),
         children: [
           const Divider(height: 1),
+          if (_isHomeCareSet(item)) _buildHomeCareLotPanel(item),
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
             child: Text(
@@ -1305,3 +1696,46 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
 // ─────────────────────────────────────────────
 // 利用規約・プライバシーポリシー
 // ─────────────────────────────────────────────
+
+class _HomeCareLotStock {
+  const _HomeCareLotStock({
+    required this.key,
+    required this.code,
+    required this.name,
+    required this.lotSize,
+    required this.remaining,
+  });
+
+  final String key;
+  final String code;
+  final String name;
+  final int lotSize;
+  final int remaining;
+
+  factory _HomeCareLotStock.fromMap(String key, Map<String, dynamic> map) {
+    return _HomeCareLotStock(
+      key: key,
+      code: (map['code'] ?? '').toString(),
+      name: (map['name'] ?? '').toString(),
+      lotSize: inventoryIntValue(map['lotSize']) <= 0
+          ? 1
+          : inventoryIntValue(map['lotSize']),
+      remaining: max(0, inventoryIntValue(map['remaining'])),
+    );
+  }
+
+  _HomeCareLotStock copyWith({
+    String? code,
+    String? name,
+    int? lotSize,
+    int? remaining,
+  }) {
+    return _HomeCareLotStock(
+      key: key,
+      code: code ?? this.code,
+      name: name ?? this.name,
+      lotSize: lotSize ?? this.lotSize,
+      remaining: remaining ?? this.remaining,
+    );
+  }
+}
