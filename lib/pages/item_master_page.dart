@@ -293,6 +293,53 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
     }
   }
 
+  String _csvCell(Object? value) {
+    final text = (value ?? '').toString();
+    final escaped = text.replaceAll('"', '""');
+    return '"$escaped"';
+  }
+
+  Future<void> _exportCsv() async {
+    final rows = <List<Object?>>[
+      ['種別', '商品ID', '商品コード', '商品名', '販売終了', 'TANOMU取込メモ'],
+    ];
+
+    for (final item in _items) {
+      rows.add([
+        widget.label,
+        item.id,
+        item.code,
+        item.name,
+        item.discontinued ? 'TRUE' : 'FALSE',
+        item.discontinued ? '販売終了商品のため取込対象外または無効化候補' : '',
+      ]);
+    }
+
+    final csv = rows.map((row) => row.map(_csvCell).join(',')).join('\r\n');
+    final bytes = utf8.encode('\ufeff$csv');
+    final blob = html.Blob([bytes], 'text/csv;charset=utf-8');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    final now = DateTime.now();
+    final stamp =
+        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}';
+    final safeLabel = widget.label.replaceAll(
+      RegExp(r'[^\w\u3040-\u30ff\u3400-\u9fff]+'),
+      '_',
+    );
+    html.AnchorElement(href: url)
+      ..download = '商品マスタ_${safeLabel}_$stamp.csv'
+      ..click();
+    html.Url.revokeObjectUrl(url);
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('${widget.label}マスタCSVを出力しました'),
+        backgroundColor: Colors.green,
+      ),
+    );
+  }
+
   Future<void> _deleteItem(LegacyItem item) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -392,14 +439,35 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
               if (index == 1) return const SizedBox(height: 12);
               if (index == 2) {
                 return Card(
-                  child: ListTile(
-                    title: Text('${widget.label}数'),
-                    trailing: Text(
-                      '${_items.length} 件',
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '${widget.label}数',
+                                style: const TextStyle(fontSize: 16),
+                              ),
+                            ),
+                            Text(
+                              '${_items.length} 件',
+                              style: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        OutlinedButton.icon(
+                          onPressed: _items.isEmpty ? null : _exportCsv,
+                          icon: const Icon(Icons.download),
+                          label: Text('${widget.label}マスタCSV出力'),
+                        ),
+                      ],
                     ),
                   ),
                 );
