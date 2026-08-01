@@ -62,6 +62,7 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
   bool _loading = true;
   String? _error;
   String _query = '';
+  int _maxItems = 10;
 
   @override
   void initState() {
@@ -75,10 +76,25 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
       _error = null;
     });
     try {
-      final doc = await FirebaseFirestore.instance
-          .collection('inventory_shared_v1')
-          .doc(widget.docId)
-          .get();
+      final results = await Future.wait([
+        FirebaseFirestore.instance
+            .collection('inventory_shared_v1')
+            .doc(widget.docId)
+            .get(),
+        FirebaseFirestore.instance
+            .collection('orgs')
+            .doc(AppSession.orgId)
+            .get(),
+      ]);
+      final doc = results[0];
+      final orgDoc = results[1];
+      final orgData = orgDoc.data() ?? <String, dynamic>{};
+      final maxItems = switch (widget.label) {
+        '商品' => inventoryIntValue(orgData['maxProducts']),
+        'テスター' => inventoryIntValue(orgData['maxTesters']),
+        '備品' => inventoryIntValue(orgData['maxEquipments']),
+        _ => 10,
+      };
       final raw = doc.data()?['items'];
       final rawItems = <Map<String, dynamic>>[];
       if (raw is List) {
@@ -92,6 +108,7 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
       setState(() {
         _rawItems = rawItems;
         _items = _sorted(rawItems);
+        _maxItems = maxItems > 0 ? maxItems : 10;
         _loading = false;
       });
     } catch (e) {
@@ -241,6 +258,15 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
   }
 
   Future<void> _addItem() async {
+    if (_rawItems.length >= _maxItems) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${widget.label}マスタの上限（$_maxItems件）に達しています'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
     final result = await _showItemDialog();
     if (result == null) return;
 
@@ -540,7 +566,7 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
                               ),
                             ),
                             Text(
-                              '${_items.length} 件',
+                              '${_items.length} / $_maxItems 件',
                               style: const TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.bold,
@@ -652,7 +678,7 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
             width: double.infinity,
             height: 52,
             child: ElevatedButton.icon(
-              onPressed: _addItem,
+              onPressed: _rawItems.length >= _maxItems ? null : _addItem,
               icon: const Icon(Icons.add),
               label: Text(
                 '${widget.label}を追加',

@@ -180,30 +180,62 @@ class _SuperAdminPageState extends State<SuperAdminPage> {
     String orgId,
     int currentMaxStores,
     int currentMaxUsers,
+    int currentMaxProducts,
+    int currentMaxTesters,
+    int currentMaxEquipments,
   ) async {
     final storesCtrl = TextEditingController(text: currentMaxStores.toString());
     final usersCtrl = TextEditingController(text: currentMaxUsers.toString());
+    final productsCtrl = TextEditingController(
+      text: currentMaxProducts.toString(),
+    );
+    final testersCtrl = TextEditingController(
+      text: currentMaxTesters.toString(),
+    );
+    final equipmentsCtrl = TextEditingController(
+      text: currentMaxEquipments.toString(),
+    );
 
     final result = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('店舗数・ユーザー数の上限変更'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: storesCtrl,
-              decoration: const InputDecoration(labelText: '最大店舗数'),
-              keyboardType: TextInputType.number,
-              autofocus: true,
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: usersCtrl,
-              decoration: const InputDecoration(labelText: '最大ユーザー数'),
-              keyboardType: TextInputType.number,
-            ),
-          ],
+        title: const Text('各種上限を変更'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: storesCtrl,
+                decoration: const InputDecoration(labelText: '最大店舗数'),
+                keyboardType: TextInputType.number,
+                autofocus: true,
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: usersCtrl,
+                decoration: const InputDecoration(labelText: '最大ユーザー数'),
+                keyboardType: TextInputType.number,
+              ),
+              const Divider(height: 24),
+              TextField(
+                controller: productsCtrl,
+                decoration: const InputDecoration(labelText: '商品マスタ上限'),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: testersCtrl,
+                decoration: const InputDecoration(labelText: 'テスターマスタ上限'),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: equipmentsCtrl,
+                decoration: const InputDecoration(labelText: '備品マスタ上限'),
+                keyboardType: TextInputType.number,
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
@@ -222,18 +254,34 @@ class _SuperAdminPageState extends State<SuperAdminPage> {
     final newMaxStores =
         int.tryParse(storesCtrl.text.trim()) ?? currentMaxStores;
     final newMaxUsers = int.tryParse(usersCtrl.text.trim()) ?? currentMaxUsers;
-    if (newMaxStores == currentMaxStores && newMaxUsers == currentMaxUsers) {
+    final newMaxProducts =
+        int.tryParse(productsCtrl.text.trim()) ?? currentMaxProducts;
+    final newMaxTesters =
+        int.tryParse(testersCtrl.text.trim()) ?? currentMaxTesters;
+    final newMaxEquipments =
+        int.tryParse(equipmentsCtrl.text.trim()) ?? currentMaxEquipments;
+    if (newMaxStores == currentMaxStores &&
+        newMaxUsers == currentMaxUsers &&
+        newMaxProducts == currentMaxProducts &&
+        newMaxTesters == currentMaxTesters &&
+        newMaxEquipments == currentMaxEquipments) {
       return;
     }
     await FirebaseFirestore.instance.collection('orgs').doc(orgId).update({
       'maxStores': newMaxStores,
       'maxUsers': newMaxUsers,
+      'maxProducts': newMaxProducts,
+      'maxTesters': newMaxTesters,
+      'maxEquipments': newMaxEquipments,
     });
     setState(() {
       final idx = _orgs.indexWhere((o) => o['id'] == orgId);
       if (idx != -1) {
         _orgs[idx]['maxStores'] = newMaxStores;
         _orgs[idx]['maxUsers'] = newMaxUsers;
+        _orgs[idx]['maxProducts'] = newMaxProducts;
+        _orgs[idx]['maxTesters'] = newMaxTesters;
+        _orgs[idx]['maxEquipments'] = newMaxEquipments;
       }
     });
   }
@@ -334,6 +382,9 @@ class _SuperAdminPageState extends State<SuperAdminPage> {
     final approved = (org['approved'] as bool?) ?? true;
     final maxStores = (org['maxStores'] as int?) ?? 5;
     final maxUsers = (org['maxUsers'] as int?) ?? 5;
+    final maxProducts = (org['maxProducts'] as int?) ?? 10;
+    final maxTesters = (org['maxTesters'] as int?) ?? 10;
+    final maxEquipments = (org['maxEquipments'] as int?) ?? 10;
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -466,7 +517,7 @@ class _SuperAdminPageState extends State<SuperAdminPage> {
             const SizedBox(height: 8),
             // 上限情報
             Text(
-              '上限: 店舗 $maxStores / ユーザー $maxUsers',
+              '上限: 店舗 $maxStores / ユーザー $maxUsers / 商品 $maxProducts / テスター $maxTesters / 備品 $maxEquipments',
               style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
             ),
             const SizedBox(height: 8),
@@ -503,7 +554,14 @@ class _SuperAdminPageState extends State<SuperAdminPage> {
                   tooltip: '上限を変更',
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(),
-                  onPressed: () => _editLimits(orgId, maxStores, maxUsers),
+                  onPressed: () => _editLimits(
+                    orgId,
+                    maxStores,
+                    maxUsers,
+                    maxProducts,
+                    maxTesters,
+                    maxEquipments,
+                  ),
                 ),
               ],
             ),
