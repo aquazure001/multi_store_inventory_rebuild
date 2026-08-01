@@ -55,6 +55,12 @@ class AppSession {
 
   static CollectionReference<Map<String, dynamic>> get billingReceiptPdfs =>
       doc('billing_receipt_pdfs').collection('entries');
+
+  static CollectionReference<Map<String, dynamic>> get posSales =>
+      doc('pos_sales').collection('entries');
+
+  static CollectionReference<Map<String, dynamic>> get posReceiptPdfs =>
+      doc('pos_receipt_pdfs').collection('entries');
 }
 
 // 広告エントリ（スロット番号付き）

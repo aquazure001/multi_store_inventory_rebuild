@@ -709,6 +709,10 @@ class _StoreListPageState extends State<StoreListPage> {
                 navigator.push(
                   MaterialPageRoute(builder: (_) => const OrderListPage()),
                 );
+              } else if (value == 'pos') {
+                Navigator.of(
+                  context,
+                ).push(MaterialPageRoute(builder: (_) => const PosPage()));
               } else if (value == 'delivery') {
                 Navigator.of(context).push(
                   MaterialPageRoute(
@@ -858,6 +862,16 @@ class _StoreListPageState extends State<StoreListPage> {
                     Icon(Icons.shopping_cart),
                     SizedBox(width: 12),
                     Text('発注リスト'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'pos',
+                child: Row(
+                  children: [
+                    Icon(Icons.point_of_sale),
+                    SizedBox(width: 12),
+                    Text('レジ'),
                   ],
                 ),
               ),
