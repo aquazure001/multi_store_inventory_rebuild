@@ -51,6 +51,53 @@ class LegacyItem {
   }
 }
 
+class StoreQuantityLimit {
+  const StoreQuantityLimit({
+    this.products = 0,
+    this.testers = 0,
+    this.equipments = 0,
+  });
+
+  final int products;
+  final int testers;
+  final int equipments;
+
+  int forTypeKey(String typeKey) {
+    if (typeKey == 'products') return products;
+    if (typeKey == 'testers') return testers;
+    if (typeKey == 'equipments') return equipments;
+    return 0;
+  }
+
+  int forTitle(String title) {
+    if (title == '商品') return products;
+    if (title == 'テスター') return testers;
+    if (title == '備品') return equipments;
+    return 0;
+  }
+
+  factory StoreQuantityLimit.fromMap(Map<String, dynamic> map) {
+    return StoreQuantityLimit(
+      products: inventoryIntValue(map['products']),
+      testers: inventoryIntValue(map['testers']),
+      equipments: inventoryIntValue(map['equipments']),
+    );
+  }
+}
+
+StoreQuantityLimit _parseStoreQuantityLimit(
+  Map<String, dynamic> data,
+  String storeId,
+) {
+  final stores = data['stores'];
+  if (stores is! Map) return const StoreQuantityLimit();
+  final raw = stores[storeId];
+  if (raw is! Map) return const StoreQuantityLimit();
+  return StoreQuantityLimit.fromMap(
+    Map<String, dynamic>.from(raw.map((k, v) => MapEntry(k.toString(), v))),
+  );
+}
+
 class HistoryEntry {
   const HistoryEntry({
     required this.id,

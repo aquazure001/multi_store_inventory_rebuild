@@ -222,6 +222,20 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
     }
   }
 
+  Future<int> _storeQuantityLimit({
+    required String storeId,
+    required String typeKey,
+  }) async {
+    try {
+      final data =
+          (await AppSession.storeQuantityLimitsDoc.get()).data() ??
+          <String, dynamic>{};
+      return _parseStoreQuantityLimit(data, storeId).forTypeKey(typeKey);
+    } catch (_) {
+      return 0;
+    }
+  }
+
   Future<void> _deliverItem(
     QueryDocumentSnapshot<Map<String, dynamic>> batchDoc,
     int index,
@@ -305,6 +319,30 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
       );
+    }
+
+    final currentQty = await _currentStockQty(
+      isProduct: isProduct,
+      typeKey: typeKey,
+      storeId: storeId,
+      itemId: itemId,
+    );
+    final quantityLimit = await _storeQuantityLimit(
+      storeId: storeId,
+      typeKey: typeKey,
+    );
+    if (quantityLimit > 0 && currentQty + remaining > quantityLimit) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '納品できません。$storeNameの$typeLabelは1品目あたり$quantityLimit個までです（現在$currentQty個、納品$remaining個）',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
     }
 
     var deliveryStatusSaved = false;

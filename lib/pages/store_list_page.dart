@@ -149,6 +149,21 @@ class _StoreListPageState extends State<StoreListPage> {
           {'id': id, 'code': code, 'name': name},
         ]),
       });
+      await AppSession.storeQuantityLimitsDoc.set({
+        'stores': {
+          id: {
+            'storeId': id,
+            'storeName': name,
+            'products': 2000,
+            'testers': 2000,
+            'equipments': 2000,
+          },
+        },
+        'updatedAt': FieldValue.serverTimestamp(),
+        'updatedAtLocal': DateTime.now().toIso8601String(),
+        'updatedBy': AppSession.nickname,
+        'updatedByEmail': AppSession.email,
+      }, SetOptions(merge: true));
       _loadStores();
     } catch (e) {
       if (mounted) {
@@ -717,6 +732,12 @@ class _StoreListPageState extends State<StoreListPage> {
                 Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const StripeSettingsPage()),
                 );
+              } else if (value == 'store_quantity_limits') {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const StoreQuantityLimitsPage(),
+                  ),
+                );
               } else if (value == 'delivery') {
                 Navigator.of(context).push(
                   MaterialPageRoute(
@@ -887,6 +908,17 @@ class _StoreListPageState extends State<StoreListPage> {
                       Icon(Icons.credit_card),
                       SizedBox(width: 12),
                       Text('店舗Stripe設定'),
+                    ],
+                  ),
+                ),
+              if (AppSession.isAdmin || AppSession.isSuperAdmin)
+                const PopupMenuItem(
+                  value: 'store_quantity_limits',
+                  child: Row(
+                    children: [
+                      Icon(Icons.speed),
+                      SizedBox(width: 12),
+                      Text('店舗別数量上限'),
                     ],
                   ),
                 ),

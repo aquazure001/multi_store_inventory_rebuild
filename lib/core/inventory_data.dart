@@ -113,6 +113,7 @@ class _InventoryData {
     this.productOrderMetas = const {},
     this.testerOrderMetas = const {},
     this.equipmentOrderMetas = const {},
+    this.quantityLimits = const StoreQuantityLimit(),
   });
 
   final List<LegacyItem> products;
@@ -128,4 +129,5 @@ class _InventoryData {
   final Map<String, _OrderMeta> productOrderMetas;
   final Map<String, _OrderMeta> testerOrderMetas;
   final Map<String, _OrderMeta> equipmentOrderMetas;
+  final StoreQuantityLimit quantityLimits;
 }

@@ -48,6 +48,7 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
       AppSession.baselineDoc.get(),
       AppSession.stocksV2Doc.get(),
       AppSession.ordersDoc.get(),
+      AppSession.storeQuantityLimitsDoc.get(),
     ]);
 
     final stocksData = results[0].data() ?? {};
@@ -72,6 +73,13 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
     final ordersRaw = results[3].exists
         ? (results[3].data() ?? <String, dynamic>{})
         : <String, dynamic>{};
+    final quantityLimitsRaw = results[4].exists
+        ? (results[4].data() ?? <String, dynamic>{})
+        : <String, dynamic>{};
+    final quantityLimits = _parseStoreQuantityLimit(
+      quantityLimitsRaw,
+      widget.store.id,
+    );
     final ordersPMap = (ordersRaw['products'] is Map)
         ? Map<String, dynamic>.from(
             (ordersRaw['products'] as Map).map(
@@ -170,6 +178,7 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
         'equipments',
         widget.store.id,
       ),
+      quantityLimits: quantityLimits,
     );
   }
 
@@ -236,6 +245,7 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
                     orderMetas: data.productOrderMetas,
                     storeId: widget.store.id,
                     storeName: widget.store.name,
+                    quantityLimit: data.quantityLimits.products,
                     onDelivered: _refresh,
                   ),
                   _InventoryList(
@@ -247,6 +257,7 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
                     orderMetas: data.testerOrderMetas,
                     storeId: widget.store.id,
                     storeName: widget.store.name,
+                    quantityLimit: data.quantityLimits.testers,
                     onDelivered: _refresh,
                   ),
                   _InventoryList(
@@ -258,6 +269,7 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
                     orderMetas: data.equipmentOrderMetas,
                     storeId: widget.store.id,
                     storeName: widget.store.name,
+                    quantityLimit: data.quantityLimits.equipments,
                     onDelivered: _refresh,
                   ),
                 ],
@@ -284,6 +296,7 @@ class _InventoryList extends StatefulWidget {
     required this.storeName,
     this.orderedStocks = const {},
     this.orderMetas = const {},
+    this.quantityLimit = 0,
     this.onDelivered,
   });
 
@@ -295,6 +308,7 @@ class _InventoryList extends StatefulWidget {
   final String storeName;
   final Map<String, int> orderedStocks;
   final Map<String, _OrderMeta> orderMetas;
+  final int quantityLimit;
   final VoidCallback? onDelivered;
 
   @override
@@ -366,6 +380,20 @@ class _InventoryListState extends State<_InventoryList> {
 
   String _orderMetaField(String itemId) =>
       '_meta.${_typeKey}__${widget.storeId}__$itemId';
+
+  bool _isOverQuantityLimit(int value) =>
+      widget.quantityLimit > 0 && value > widget.quantityLimit;
+
+  void _showQuantityLimitMessage() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '${widget.storeName}の${widget.title}は1品目あたり${widget.quantityLimit}個までです',
+        ),
+        backgroundColor: Colors.red,
+      ),
+    );
+  }
 
   List<MapEntry<String, _OrderMeta>> get _unacknowledgedOrders =>
       _localOrderMetas.entries
@@ -538,8 +566,13 @@ class _InventoryListState extends State<_InventoryList> {
   }
 
   void _increment(String id) {
+    final next = (_localStocks[id] ?? 0) + 1;
+    if (_isOverQuantityLimit(next)) {
+      _showQuantityLimitMessage();
+      return;
+    }
     setState(() {
-      _localStocks[id] = (_localStocks[id] ?? 0) + 1;
+      _localStocks[id] = next;
       _changedIds.add(id);
     });
   }
@@ -586,6 +619,10 @@ class _InventoryListState extends State<_InventoryList> {
       ),
     );
     if (result != null && result >= 0) {
+      if (_isOverQuantityLimit(result)) {
+        _showQuantityLimitMessage();
+        return;
+      }
       setState(() {
         _localStocks[item.id] = result;
         _changedIds.add(item.id);
@@ -605,6 +642,23 @@ class _InventoryListState extends State<_InventoryList> {
       final newCount = _localStocks[id] ?? 0;
       return (item: item, oldCount: oldCount, newCount: newCount);
     }).toList();
+
+    final overLimitChanges = changes
+        .where((c) => _isOverQuantityLimit(c.newCount))
+        .toList();
+    if (overLimitChanges.isNotEmpty) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '保存できません。${widget.storeName}の${widget.title}は1品目あたり${widget.quantityLimit}個までです',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -754,6 +808,32 @@ class _InventoryListState extends State<_InventoryList> {
         onChanged: (value) => setState(() => _query = value),
       ),
       const SizedBox(height: 8),
+      if (widget.quantityLimit > 0)
+        Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.deepPurple.shade50,
+            border: Border.all(color: Colors.deepPurple.shade200),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.speed, color: Colors.deepPurple.shade700, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '${widget.storeName}の${widget.title}上限: 1品目あたり${widget.quantityLimit}個',
+                  style: TextStyle(
+                    color: Colors.deepPurple.shade800,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       if (unacknowledgedOrders.isNotEmpty)
         Container(
           margin: const EdgeInsets.only(bottom: 8),
@@ -1010,6 +1090,7 @@ class _InventoryListState extends State<_InventoryList> {
                       if (item.discontinued) return Colors.grey;
                       final cur = _localStocks[item.id] ?? 0;
                       final base = _localBaseStocks[item.id] ?? 0;
+                      if (_isOverQuantityLimit(cur)) return Colors.deepPurple;
                       if (base > 0 && cur < base) return Colors.red;
                       if (_changedIds.contains(item.id)) return Colors.orange;
                       return null;

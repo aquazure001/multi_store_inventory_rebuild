@@ -64,6 +64,9 @@ class AppSession {
 
   static DocumentReference<Map<String, dynamic>> get posStripeSettingsDoc =>
       doc('pos_stripe_settings');
+
+  static DocumentReference<Map<String, dynamic>> get storeQuantityLimitsDoc =>
+      doc('store_quantity_limits');
 }
 
 // 広告エントリ（スロット番号付き）
