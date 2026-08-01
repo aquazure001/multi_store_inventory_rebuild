@@ -713,6 +713,10 @@ class _StoreListPageState extends State<StoreListPage> {
                 Navigator.of(
                   context,
                 ).push(MaterialPageRoute(builder: (_) => const PosPage()));
+              } else if (value == 'stripe_settings') {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const StripeSettingsPage()),
+                );
               } else if (value == 'delivery') {
                 Navigator.of(context).push(
                   MaterialPageRoute(
@@ -875,6 +879,17 @@ class _StoreListPageState extends State<StoreListPage> {
                   ],
                 ),
               ),
+              if (AppSession.isAdmin || AppSession.isSuperAdmin)
+                const PopupMenuItem(
+                  value: 'stripe_settings',
+                  child: Row(
+                    children: [
+                      Icon(Icons.credit_card),
+                      SizedBox(width: 12),
+                      Text('店舗Stripe設定'),
+                    ],
+                  ),
+                ),
               const PopupMenuItem(
                 value: 'delivery',
                 child: Row(

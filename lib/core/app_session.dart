@@ -61,6 +61,9 @@ class AppSession {
 
   static CollectionReference<Map<String, dynamic>> get posReceiptPdfs =>
       doc('pos_receipt_pdfs').collection('entries');
+
+  static DocumentReference<Map<String, dynamic>> get posStripeSettingsDoc =>
+      doc('pos_stripe_settings');
 }
 
 // 広告エントリ（スロット番号付き）

@@ -40,6 +40,7 @@ part 'pages/legal_page.dart';
 part 'pages/item_master_page.dart';
 part 'pages/billing_page.dart';
 part 'pages/pos_page.dart';
+part 'pages/stripe_settings_page.dart';
 part 'core/app_session.dart';
 part 'core/models.dart';
 part 'core/inventory_data.dart';
