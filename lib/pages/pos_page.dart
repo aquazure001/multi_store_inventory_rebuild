@@ -94,6 +94,15 @@ class _PosPageState extends State<PosPage> {
   _PosPrice? get _selectedPrice {
     final item = _selectedProduct;
     if (item == null) return null;
+    if (item.taxExcludedPrice > 0) {
+      return _PosPrice(
+        itemType: '商品',
+        itemCode: item.code,
+        itemName: item.name,
+        unitPrice: item.taxExcludedPrice,
+        taxRate: item.reducedTax ? 8 : 10,
+      );
+    }
     return _prices[_priceKey(item.code, item.name)];
   }
 
@@ -126,7 +135,7 @@ class _PosPageState extends State<PosPage> {
         _message = '商品コード $code が見つかりません';
       } else {
         _selectedProduct = matches.first;
-        _message = _selectedPrice == null ? '単価マスタ未登録の商品です' : null;
+        _message = _selectedPrice == null ? '商品マスタに税抜価格が未登録です' : null;
       }
     });
   }
@@ -144,7 +153,7 @@ class _PosPageState extends State<PosPage> {
       return;
     }
     if (price == null || price.unitPrice <= 0) {
-      _showSnack('単価マスタ未登録です。先に単価を登録してください', Colors.orange);
+      _showSnack('商品マスタに税抜価格を登録してください', Colors.orange);
       return;
     }
     if (_received < _total) {
@@ -212,6 +221,7 @@ class _PosPageState extends State<PosPage> {
           'itemName': item.name,
           'qty': _qty,
           'taxRate': _taxRate,
+          'reducedTax': _taxRate == 8,
           'taxExcludedUnitPrice': _taxExcludedUnitPrice,
           'taxIncludedUnitPrice': _taxIncludedUnitPrice,
           'total': _total,
@@ -518,7 +528,7 @@ class _PosPageState extends State<PosPage> {
                       const SizedBox(height: 12),
                       if (price == null)
                         const Text(
-                          '単価マスタ未登録です。請求・受領管理で単価を保存してください。',
+                          '商品マスタに税抜価格が未登録です。商品マスタ管理で税抜価格を登録してください。',
                           style: TextStyle(
                             color: Colors.red,
                             fontWeight: FontWeight.bold,

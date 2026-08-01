@@ -127,54 +127,115 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
     _clearMasterDataCache();
   }
 
-  Future<Map<String, String>?> _showItemDialog({
+  Future<Map<String, dynamic>?> _showItemDialog({
     String? initialCode,
     String? initialName,
+    int initialTaxExcludedPrice = 0,
+    bool initialReducedTax = false,
   }) async {
     final codeCtrl = TextEditingController(text: initialCode ?? '');
     final nameCtrl = TextEditingController(text: initialName ?? '');
+    final priceCtrl = TextEditingController(
+      text: initialTaxExcludedPrice > 0
+          ? initialTaxExcludedPrice.toString()
+          : '',
+    );
+    var reducedTax = initialReducedTax;
+    final isProduct = widget.label == '商品';
     final isNew = initialName == null;
-    return showDialog<Map<String, String>>(
+    return showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(isNew ? '${widget.label}を追加' : '${widget.label}を編集'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: codeCtrl,
-              decoration: const InputDecoration(
-                labelText: 'コード',
-                border: OutlineInputBorder(),
-              ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(isNew ? '${widget.label}を追加' : '${widget.label}を編集'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: codeCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'コード',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: nameCtrl,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    labelText: '名前 *',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                if (isProduct) ...[
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: priceCtrl,
+                    keyboardType: TextInputType.number,
+                    onChanged: (_) => setDialogState(() {}),
+                    decoration: const InputDecoration(
+                      labelText: '税抜価格',
+                      prefixText: '￥',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Builder(
+                    builder: (_) {
+                      final price = inventoryIntValue(priceCtrl.text);
+                      final taxRate = reducedTax ? 8 : 10;
+                      final included = (price * (100 + taxRate) / 100).round();
+                      return Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          price > 0
+                              ? '税込価格：￥${included.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',')}（$taxRate%）'
+                              : '税込価格：未設定',
+                          style: TextStyle(
+                            color: Colors.grey.shade700,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: reducedTax,
+                    onChanged: (value) {
+                      setDialogState(() {
+                        reducedTax = value == true;
+                      });
+                    },
+                    title: const Text('軽減税率（8%）'),
+                    subtitle: const Text('チェックなしは10%で計算'),
+                    controlAffinity: ListTileControlAffinity.leading,
+                  ),
+                ],
+              ],
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: nameCtrl,
-              autofocus: true,
-              decoration: const InputDecoration(
-                labelText: '名前 *',
-                border: OutlineInputBorder(),
-              ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('キャンセル'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final name = nameCtrl.text.trim();
+                if (name.isEmpty) return;
+                Navigator.of(ctx).pop({
+                  'code': codeCtrl.text.trim(),
+                  'name': name,
+                  'taxExcludedPrice': inventoryIntValue(priceCtrl.text),
+                  'reducedTax': reducedTax,
+                });
+              },
+              child: const Text('保存'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('キャンセル'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final name = nameCtrl.text.trim();
-              if (name.isEmpty) return;
-              Navigator.of(
-                ctx,
-              ).pop({'code': codeCtrl.text.trim(), 'name': name});
-            },
-            child: const Text('保存'),
-          ),
-        ],
       ),
     );
   }
@@ -189,6 +250,9 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
         'id': newId,
         'code': result['code']!,
         'name': result['name']!,
+        if (widget.label == '商品')
+          'taxExcludedPrice': inventoryIntValue(result['taxExcludedPrice']),
+        if (widget.label == '商品') 'reducedTax': result['reducedTax'] == true,
       });
       _items = _sorted(_rawItems);
     });
@@ -220,6 +284,8 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
     final result = await _showItemDialog(
       initialCode: item.code,
       initialName: item.name,
+      initialTaxExcludedPrice: item.taxExcludedPrice,
+      initialReducedTax: item.reducedTax,
     );
     if (result == null) return;
 
@@ -230,7 +296,10 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
     setState(() {
       _rawItems[idx] = Map<String, dynamic>.from(_rawItems[idx])
         ..['code'] = result['code']!
-        ..['name'] = result['name']!;
+        ..['name'] = result['name']!
+        ..['taxExcludedPrice'] = inventoryIntValue(result['taxExcludedPrice'])
+        ..['reducedTax'] = result['reducedTax'] == true
+        ..['taxRate'] = result['reducedTax'] == true ? 8 : 10;
       _items = _sorted(_rawItems);
     });
 
@@ -301,7 +370,17 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
 
   Future<void> _exportCsv() async {
     final rows = <List<Object?>>[
-      ['種別', '商品ID', '商品コード', '商品名', '販売終了', 'TANOMU取込メモ'],
+      [
+        '種別',
+        '商品ID',
+        '商品コード',
+        '商品名',
+        '税抜価格',
+        '税率',
+        '税込価格',
+        '販売終了',
+        'TANOMU取込メモ',
+      ],
     ];
 
     for (final item in _items) {
@@ -310,6 +389,14 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
         item.id,
         item.code,
         item.name,
+        widget.label == '商品' && item.taxExcludedPrice > 0
+            ? item.taxExcludedPrice
+            : '',
+        widget.label == '商品' ? (item.reducedTax ? '8%' : '10%') : '',
+        widget.label == '商品' && item.taxExcludedPrice > 0
+            ? (item.taxExcludedPrice * (100 + (item.reducedTax ? 8 : 10)) / 100)
+                  .round()
+            : '',
         item.discontinued ? 'TRUE' : 'FALSE',
         item.discontinued ? '販売終了商品のため取込対象外または無効化候補' : '',
       ]);
@@ -521,7 +608,11 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
                         ),
                     ],
                   ),
-                  subtitle: Text('コード: ${item.code}'),
+                  subtitle: Text(
+                    widget.label == '商品'
+                        ? 'コード: ${item.code} / 税抜: ${item.taxExcludedPrice > 0 ? '￥${item.taxExcludedPrice}' : '未設定'} / 税率: ${item.reducedTax ? '8%' : '10%'}'
+                        : 'コード: ${item.code}',
+                  ),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [

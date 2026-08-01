@@ -26,12 +26,16 @@ class LegacyItem {
     required this.code,
     required this.name,
     this.discontinued = false,
+    this.taxExcludedPrice = 0,
+    this.reducedTax = false,
   });
 
   final String id;
   final String code;
   final String name;
   final bool discontinued;
+  final int taxExcludedPrice;
+  final bool reducedTax;
 
   factory LegacyItem.fromMap(Map<String, dynamic> map) {
     return LegacyItem(
@@ -39,6 +43,10 @@ class LegacyItem {
       code: (map['code'] ?? '').toString(),
       name: (map['name'] ?? '').toString(),
       discontinued: map['discontinued'] == true,
+      taxExcludedPrice: inventoryIntValue(
+        map['taxExcludedPrice'] ?? map['priceExcludingTax'],
+      ),
+      reducedTax: map['reducedTax'] == true || map['taxRate'] == 8,
     );
   }
 }
