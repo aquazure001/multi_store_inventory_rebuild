@@ -11,6 +11,15 @@ class _PosPageState extends State<PosPage> {
   final TextEditingController _codeController = TextEditingController();
   final TextEditingController _qtyController = TextEditingController(text: '1');
   final TextEditingController _receivedController = TextEditingController();
+  final TextEditingController _manualNameController = TextEditingController(
+    text: '金額手入力',
+  );
+  final TextEditingController _manualAmountController = TextEditingController();
+  final TextEditingController _manualQtyController = TextEditingController(
+    text: '1',
+  );
+  final TextEditingController _invoiceNumberController =
+      TextEditingController();
 
   List<LegacyStore> _stores = [];
   List<LegacyItem> _products = [];
@@ -20,6 +29,8 @@ class _PosPageState extends State<PosPage> {
   String? _message;
   bool _loading = true;
   bool _saving = false;
+  bool _manualMode = false;
+  int _manualTaxRate = 10;
 
   @override
   void initState() {
@@ -32,6 +43,10 @@ class _PosPageState extends State<PosPage> {
     _codeController.dispose();
     _qtyController.dispose();
     _receivedController.dispose();
+    _manualNameController.dispose();
+    _manualAmountController.dispose();
+    _manualQtyController.dispose();
+    _invoiceNumberController.dispose();
     super.dispose();
   }
 
@@ -45,10 +60,12 @@ class _PosPageState extends State<PosPage> {
         AppSession.doc('stores').get(),
         AppSession.doc('products').get(),
         AppSession.doc('billing_prices').get(),
+        AppSession.doc('pos_settings').get(),
       ]);
       final storesDoc = results[0];
       final productsDoc = results[1];
       final priceDoc = results[2];
+      final settingsDoc = results[3];
 
       final stores = _parseStores(storesDoc.data() ?? <String, dynamic>{});
       final products = _parseItemsFromDoc(
@@ -71,11 +88,14 @@ class _PosPageState extends State<PosPage> {
         }
       }
 
+      final settings = settingsDoc.data() ?? <String, dynamic>{};
       setState(() {
         _stores = stores;
         _products = products;
         _prices = prices;
         _selectedStore = stores.isNotEmpty ? stores.first : null;
+        _invoiceNumberController.text = (settings['invoiceNumber'] ?? '')
+            .toString();
         _loading = false;
       });
     } catch (e) {
@@ -125,6 +145,25 @@ class _PosPageState extends State<PosPage> {
 
   int get _change => _received - _total;
 
+  int get _manualQty {
+    final parsed = int.tryParse(_manualQtyController.text.trim()) ?? 1;
+    return parsed <= 0 ? 1 : parsed;
+  }
+
+  int get _manualTaxIncludedUnitPrice =>
+      int.tryParse(_manualAmountController.text.replaceAll(',', '').trim()) ??
+      0;
+
+  int get _manualTaxExcludedUnitPrice =>
+      (_manualTaxIncludedUnitPrice * 100 / (100 + _manualTaxRate)).round();
+
+  int get _manualTotal => _manualTaxIncludedUnitPrice * _manualQty;
+
+  int get _manualReceived =>
+      int.tryParse(_receivedController.text.replaceAll(',', '').trim()) ?? 0;
+
+  int get _manualChange => _manualReceived - _manualTotal;
+
   void _findProduct() {
     final code = _codeController.text.trim();
     if (code.isEmpty) return;
@@ -135,9 +174,150 @@ class _PosPageState extends State<PosPage> {
         _message = '商品コード $code が見つかりません';
       } else {
         _selectedProduct = matches.first;
+        _manualMode = false;
         _message = _selectedPrice == null ? '商品マスタに税抜価格が未登録です' : null;
       }
     });
+  }
+
+  Future<void> _saveInvoiceNumber() async {
+    try {
+      await AppSession.doc('pos_settings').set({
+        'invoiceNumber': _invoiceNumberController.text.trim(),
+        'updatedAt': FieldValue.serverTimestamp(),
+        'updatedAtLocal': DateTime.now().toIso8601String(),
+        'updatedBy': AppSession.nickname,
+        'updatedByEmail': AppSession.email,
+      }, SetOptions(merge: true));
+      _showSnack('インボイス事業者番号を保存しました', Colors.green);
+    } catch (e) {
+      _showSnack('保存失敗: $e', Colors.red);
+    }
+  }
+
+  void _openManualInput() {
+    setState(() {
+      _manualMode = true;
+      _selectedProduct = null;
+      _codeController.clear();
+      _message = null;
+      if (_manualNameController.text.trim().isEmpty) {
+        _manualNameController.text = '金額手入力';
+      }
+    });
+  }
+
+  Future<void> _confirmManualSale() async {
+    final store = _selectedStore;
+    final itemName = _manualNameController.text.trim().isEmpty
+        ? '金額手入力'
+        : _manualNameController.text.trim();
+    if (store == null) {
+      _showSnack('店舗を選択してください', Colors.orange);
+      return;
+    }
+    if (_manualTaxIncludedUnitPrice <= 0) {
+      _showSnack('税込金額を入力してください', Colors.orange);
+      return;
+    }
+    if (_manualReceived < _manualTotal) {
+      _showSnack('預かり金が不足しています', Colors.orange);
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('手入力会計を確定しますか？'),
+        content: Text(
+          '${store.name}\n$itemName\n数量 $_manualQty 個\n合計 ￥${_yen(_manualTotal)}\n\n※商品在庫は変更しません。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('確定する'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _saving = true);
+    try {
+      final saleRef = AppSession.posSales.doc();
+      final now = DateTime.now();
+      await saleRef.set({
+        'id': saleRef.id,
+        'status': 'completed',
+        'saleType': 'manual',
+        'soldAt': FieldValue.serverTimestamp(),
+        'soldAtLocal': now.toIso8601String(),
+        'soldBy': AppSession.nickname,
+        'uid': AppSession.uid,
+        'storeId': store.id,
+        'storeName': store.name,
+        'itemType': '手入力',
+        'itemId': '',
+        'itemCode': '',
+        'itemName': itemName,
+        'qty': _manualQty,
+        'taxRate': _manualTaxRate,
+        'reducedTax': _manualTaxRate == 8,
+        'taxExcludedUnitPrice': _manualTaxExcludedUnitPrice,
+        'taxIncludedUnitPrice': _manualTaxIncludedUnitPrice,
+        'total': _manualTotal,
+        'received': _manualReceived,
+        'change': _manualChange,
+        'invoiceNumber': _invoiceNumberController.text.trim(),
+        'stockUpdated': false,
+      });
+
+      final pdfBytes = await _createReceiptPdf(
+        saleId: saleRef.id,
+        soldAt: now,
+        storeName: store.name,
+        itemName: itemName,
+        itemCode: '',
+        qty: _manualQty,
+        taxRate: _manualTaxRate,
+        taxExcludedUnitPrice: _manualTaxExcludedUnitPrice,
+        taxIncludedUnitPrice: _manualTaxIncludedUnitPrice,
+        total: _manualTotal,
+        received: _manualReceived,
+        change: _manualChange,
+        invoiceNumber: _invoiceNumberController.text.trim(),
+        stockText: '在庫変更なし',
+      );
+      await AppSession.posReceiptPdfs.doc(saleRef.id).set({
+        'saleId': saleRef.id,
+        'soldAtLocal': now.toIso8601String(),
+        'storeId': store.id,
+        'storeName': store.name,
+        'itemCode': '',
+        'itemName': itemName,
+        'pdfBase64': base64Encode(pdfBytes),
+        'pdfFileName': 'レシート_${saleRef.id}.pdf',
+      });
+      await Printing.sharePdf(
+        bytes: pdfBytes,
+        filename: 'レシート_${saleRef.id}.pdf',
+      );
+
+      setState(() {
+        _manualAmountController.clear();
+        _manualQtyController.text = '1';
+        _receivedController.clear();
+        _message = '手入力会計を確定しました。';
+      });
+    } catch (e) {
+      _showSnack('会計確定失敗: $e', Colors.red);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   Future<void> _confirmSale() async {
@@ -209,6 +389,7 @@ class _PosPageState extends State<PosPage> {
         tx.set(saleRef, {
           'id': saleRef.id,
           'status': 'completed',
+          'saleType': 'product',
           'soldAt': FieldValue.serverTimestamp(),
           'soldAtLocal': now.toIso8601String(),
           'soldBy': AppSession.nickname,
@@ -227,6 +408,8 @@ class _PosPageState extends State<PosPage> {
           'total': _total,
           'received': _received,
           'change': _change,
+          'invoiceNumber': _invoiceNumberController.text.trim(),
+          'stockUpdated': true,
           'oldStock': oldStock,
           'newStock': newStock,
         });
@@ -235,10 +418,18 @@ class _PosPageState extends State<PosPage> {
       final pdfBytes = await _createReceiptPdf(
         saleId: saleRef.id,
         soldAt: now,
-        store: store,
-        item: item,
-        oldStock: oldStock,
-        newStock: newStock,
+        storeName: store.name,
+        itemName: item.name,
+        itemCode: item.code,
+        qty: _qty,
+        taxRate: _taxRate,
+        taxExcludedUnitPrice: _taxExcludedUnitPrice,
+        taxIncludedUnitPrice: _taxIncludedUnitPrice,
+        total: _total,
+        received: _received,
+        change: _change,
+        invoiceNumber: _invoiceNumberController.text.trim(),
+        stockText: '在庫更新：$oldStock → $newStock',
       );
       await AppSession.posReceiptPdfs.doc(saleRef.id).set({
         'saleId': saleRef.id,
@@ -248,11 +439,11 @@ class _PosPageState extends State<PosPage> {
         'itemCode': item.code,
         'itemName': item.name,
         'pdfBase64': base64Encode(pdfBytes),
-        'pdfFileName': '領収書_${saleRef.id}.pdf',
+        'pdfFileName': 'レシート_${saleRef.id}.pdf',
       });
       await Printing.sharePdf(
         bytes: pdfBytes,
-        filename: '領収書_${saleRef.id}.pdf',
+        filename: 'レシート_${saleRef.id}.pdf',
       );
 
       setState(() {
@@ -272,17 +463,26 @@ class _PosPageState extends State<PosPage> {
   Future<Uint8List> _createReceiptPdf({
     required String saleId,
     required DateTime soldAt,
-    required LegacyStore store,
-    required LegacyItem item,
-    required int oldStock,
-    required int newStock,
+    required String storeName,
+    required String itemName,
+    required String itemCode,
+    required int qty,
+    required int taxRate,
+    required int taxExcludedUnitPrice,
+    required int taxIncludedUnitPrice,
+    required int total,
+    required int received,
+    required int change,
+    required String invoiceNumber,
+    required String stockText,
   }) async {
     final font = await PdfGoogleFonts.notoSansJPRegular();
     final bold = await PdfGoogleFonts.notoSansJPBold();
     final logoData = await rootBundle.load('assets/billing/restart_logo.png');
     final logo = pw.MemoryImage(logoData.buffer.asUint8List());
     final doc = pw.Document();
-    final tax = _total - (_taxExcludedUnitPrice * _qty);
+    final taxExcludedTotal = taxExcludedUnitPrice * qty;
+    final tax = total - taxExcludedTotal;
 
     doc.addPage(
       pw.Page(
@@ -303,7 +503,12 @@ class _PosPageState extends State<PosPage> {
               '発行日：${_dateText(soldAt)}',
               style: pw.TextStyle(font: font),
             ),
-            pw.Text('店舗：${store.name}', style: pw.TextStyle(font: font)),
+            pw.Text('店舗：$storeName', style: pw.TextStyle(font: font)),
+            if (invoiceNumber.trim().isNotEmpty)
+              pw.Text(
+                '登録番号：${invoiceNumber.trim()}',
+                style: pw.TextStyle(font: font),
+              ),
             pw.Text(
               'No：$saleId',
               style: pw.TextStyle(font: font, fontSize: 10),
@@ -320,7 +525,7 @@ class _PosPageState extends State<PosPage> {
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
                 children: [
                   pw.Text(
-                    '￥${_yen(_total)}',
+                    '￥${_yen(total)}',
                     style: pw.TextStyle(font: bold, fontSize: 26),
                   ),
                   pw.SizedBox(height: 4),
@@ -349,10 +554,13 @@ class _PosPageState extends State<PosPage> {
                 ),
                 pw.TableRow(
                   children: [
-                    _pdfText('${item.name}\nコード:${item.code}', font),
-                    _pdfText('$_qty', font),
-                    _pdfText('￥${_yen(_taxIncludedUnitPrice)}', font),
-                    _pdfText('￥${_yen(_total)}', font),
+                    _pdfText(
+                      itemCode.isEmpty ? itemName : '$itemName\nコード:$itemCode',
+                      font,
+                    ),
+                    _pdfText('$qty', font),
+                    _pdfText('￥${_yen(taxIncludedUnitPrice)}', font),
+                    _pdfText('￥${_yen(total)}', font),
                   ],
                 ),
               ],
@@ -364,19 +572,28 @@ class _PosPageState extends State<PosPage> {
                 crossAxisAlignment: pw.CrossAxisAlignment.end,
                 children: [
                   pw.Text(
-                    '税抜単価：￥${_yen(_taxExcludedUnitPrice)}',
+                    '税抜単価：￥${_yen(taxExcludedUnitPrice)}',
                     style: pw.TextStyle(font: font),
                   ),
                   pw.Text(
-                    '消費税（$_taxRate%）：￥${_yen(tax)}',
+                    '税抜合計：￥${_yen(taxExcludedTotal)}',
                     style: pw.TextStyle(font: font),
                   ),
                   pw.Text(
-                    '預かり金：￥${_yen(_received)}',
+                    '消費税（$taxRate%）：￥${_yen(tax)}',
                     style: pw.TextStyle(font: font),
                   ),
                   pw.Text(
-                    'おつり：￥${_yen(_change)}',
+                    '税込合計：￥${_yen(total)}',
+                    style: pw.TextStyle(font: bold),
+                  ),
+                  pw.SizedBox(height: 6),
+                  pw.Text(
+                    '預かり金：￥${_yen(received)}',
+                    style: pw.TextStyle(font: font),
+                  ),
+                  pw.Text(
+                    'おつり：￥${_yen(change)}',
                     style: pw.TextStyle(font: bold),
                   ),
                 ],
@@ -384,7 +601,7 @@ class _PosPageState extends State<PosPage> {
             ),
             pw.Spacer(),
             pw.Text(
-              '在庫更新：$oldStock → $newStock',
+              stockText,
               style: pw.TextStyle(
                 font: font,
                 fontSize: 10,
@@ -435,6 +652,13 @@ class _PosPageState extends State<PosPage> {
         title: const Text('レジ'),
         actions: [
           IconButton(
+            onPressed: () => Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (_) => const PosHistoryPage())),
+            icon: const Icon(Icons.history),
+            tooltip: '取引履歴',
+          ),
+          IconButton(
             onPressed: _saving ? null : _load,
             icon: const Icon(Icons.refresh),
             tooltip: '再読み込み',
@@ -468,6 +692,36 @@ class _PosPageState extends State<PosPage> {
                       onChanged: _saving
                           ? null
                           : (store) => setState(() => _selectedStore = store),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _invoiceNumberController,
+                            decoration: const InputDecoration(
+                              labelText: 'インボイス事業者番号',
+                              hintText: 'Tから始まる登録番号',
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          onPressed: _saving ? null : _saveInvoiceNumber,
+                          icon: const Icon(Icons.save),
+                          label: const Text('保存'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: _saving ? null : _openManualInput,
+                        icon: const Icon(Icons.edit_note),
+                        label: const Text('金額手入力'),
+                      ),
                     ),
                     const SizedBox(height: 12),
                     Row(
@@ -510,6 +764,7 @@ class _PosPageState extends State<PosPage> {
                 ),
               ),
             ),
+            if (_manualMode) _buildManualAmountCard(),
             if (item != null)
               Card(
                 child: Padding(
@@ -605,7 +860,7 @@ class _PosPageState extends State<PosPage> {
                                     ),
                                   )
                                 : const Icon(Icons.check_circle),
-                            label: const Text('会計確定・領収書PDF作成'),
+                            label: const Text('会計確定・レシートPDF印刷'),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.green,
                               foregroundColor: Colors.white,
@@ -618,6 +873,115 @@ class _PosPageState extends State<PosPage> {
                   ),
                 ),
               ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildManualAmountCard() {
+    final shortage = _manualReceived < _manualTotal;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '金額手入力',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _manualNameController,
+              decoration: const InputDecoration(
+                labelText: '内容・品名',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _manualAmountController,
+                    decoration: const InputDecoration(
+                      labelText: '税込単価',
+                      border: OutlineInputBorder(),
+                    ),
+                    keyboardType: TextInputType.number,
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _manualQtyController,
+                    decoration: const InputDecoration(
+                      labelText: '数量',
+                      border: OutlineInputBorder(),
+                    ),
+                    keyboardType: TextInputType.number,
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<int>(
+              initialValue: _manualTaxRate,
+              decoration: const InputDecoration(
+                labelText: '税率',
+                border: OutlineInputBorder(),
+              ),
+              items: const [
+                DropdownMenuItem(value: 10, child: Text('10%')),
+                DropdownMenuItem(value: 8, child: Text('8%（軽減税率）')),
+              ],
+              onChanged: _saving
+                  ? null
+                  : (value) => setState(() => _manualTaxRate = value ?? 10),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _receivedController,
+              decoration: const InputDecoration(
+                labelText: '預かり金',
+                border: OutlineInputBorder(),
+              ),
+              keyboardType: TextInputType.number,
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: 12),
+            _summaryRow('税抜単価', '￥${_yen(_manualTaxExcludedUnitPrice)}'),
+            _summaryRow('税込合計', '￥${_yen(_manualTotal)}', bold: true),
+            _summaryRow('預かり金', '￥${_yen(_manualReceived)}'),
+            _summaryRow(
+              'おつり',
+              shortage ? '不足' : '￥${_yen(_manualChange)}',
+              bold: true,
+              color: shortage ? Colors.red : Colors.green.shade700,
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _saving ? null : _confirmManualSale,
+                icon: _saving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.receipt_long),
+                label: const Text('手入力会計確定・レシートPDF印刷'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -668,6 +1032,136 @@ class _PosPageState extends State<PosPage> {
       ],
     ),
   );
+}
+
+class PosHistoryPage extends StatefulWidget {
+  const PosHistoryPage({super.key});
+
+  @override
+  State<PosHistoryPage> createState() => _PosHistoryPageState();
+}
+
+class _PosHistoryPageState extends State<PosHistoryPage> {
+  bool _opening = false;
+
+  Future<void> _openReceipt(String saleId) async {
+    if (_opening) return;
+    setState(() => _opening = true);
+    try {
+      final doc = await AppSession.posReceiptPdfs.doc(saleId).get();
+      final data = doc.data() ?? <String, dynamic>{};
+      final raw = (data['pdfBase64'] ?? '').toString();
+      if (raw.isEmpty) {
+        _showSnack('保存PDFが見つかりません', Colors.orange);
+        return;
+      }
+      final bytes = base64Decode(raw);
+      final name = (data['pdfFileName'] ?? 'レシート_$saleId.pdf').toString();
+      await Printing.sharePdf(bytes: bytes, filename: name);
+    } catch (e) {
+      _showSnack('レシート印刷失敗: $e', Colors.red);
+    } finally {
+      if (mounted) setState(() => _opening = false);
+    }
+  }
+
+  void _showSnack(String text, Color color) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(text), backgroundColor: color));
+  }
+
+  String _yen(int value) => value.toString().replaceAllMapped(
+    RegExp(r'\B(?=(\d{3})+(?!\d))'),
+    (_) => ',',
+  );
+
+  String _formatDate(String value) {
+    final date = DateTime.tryParse(value);
+    if (date == null) return value;
+    return '${date.year}/${date.month}/${date.day} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFFFF7FF),
+      appBar: AppBar(title: const Text('レジ取引履歴')),
+      body: SafeArea(
+        child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: AppSession.posSales
+              .orderBy('soldAtLocal', descending: true)
+              .limit(100)
+              .snapshots(),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError) {
+              return Padding(
+                padding: const EdgeInsets.all(24),
+                child: SelectableText('読み取りエラー\n\n${snapshot.error}'),
+              );
+            }
+            final docs = snapshot.data?.docs ?? [];
+            if (docs.isEmpty) {
+              return const Center(child: Text('取引履歴はありません'));
+            }
+            return ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: docs.length,
+              itemBuilder: (context, index) {
+                final doc = docs[index];
+                final data = doc.data();
+                final total = inventoryIntValue(data['total']);
+                final received = inventoryIntValue(data['received']);
+                final change = inventoryIntValue(data['change']);
+                final itemName = (data['itemName'] ?? '').toString();
+                final itemCode = (data['itemCode'] ?? '').toString();
+                final storeName = (data['storeName'] ?? '').toString();
+                final soldAt = (data['soldAtLocal'] ?? '').toString();
+                final saleType = (data['saleType'] ?? 'product').toString();
+                return Card(
+                  child: ListTile(
+                    title: Text(
+                      itemCode.isEmpty ? itemName : '$itemName / $itemCode',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    subtitle: Text(
+                      '$storeName / ${_formatDate(soldAt)}\n'
+                      '区分: ${saleType == 'manual' ? '金額手入力' : '商品'} / '
+                      '預かり: ￥${_yen(received)} / おつり: ￥${_yen(change)}',
+                    ),
+                    trailing: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          '￥${_yen(total)}',
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: _opening
+                              ? null
+                              : () => _openReceipt(doc.id),
+                          child: const Text('印刷'),
+                        ),
+                      ],
+                    ),
+                    isThreeLine: true,
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
 }
 
 class _PosPrice {
