@@ -1,0 +1,194 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────
+// 多店舗在庫管理システム Firestoreセキュリティルール
+//
+// 調査結果に基づく設計方針:
+// - 未認証アクセスは一切不要（ログイン画面・サインアップ画面はFirestoreに
+//   触れないため確認済み）→ 全コレクションで request.auth != null を前提にする
+// - inventory_shared_v1 配下は org_{orgId}__ プレフィックスで組織スコープ
+// - 統括管理者（superadmin）はメールアドレス固定判定で全組織を横断
+// - billing_* は統括管理者のみ、orders確定/order_saved_pdfs/
+//   pos_stripe_settings/store_quantity_limits の書き込みは組織admin以上
+// - それ以外は同組織メンバーなら読み書き可
+// ─────────────────────────────────────────────────────────────
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── 共通ヘルパー ──────────────────────────────────────
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSuperAdmin() {
+      // アプリ全体で唯一のハードコードされた統括管理者アカウント
+      // （lib/core/app_session.dart の AppSession.isSuperAdmin と同じ判定）
+      return isSignedIn() && request.auth.token.email == 're.start.niigata@gmail.com';
+    }
+
+    // 自分自身の users/{uid} ドキュメントから orgId / role を取得する。
+    // ドキュメントが存在しない場合（サインアップ直後〜組織設定完了前の
+    // 中間状態）は「無所属」として扱う。
+    function myOrgId() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.orgId
+        : '';
+    }
+
+    function myRole() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+        : '';
+    }
+
+    // 管理者判定は role だけでなく orgId が空でないことも必須にする
+    // （脱退・削除直後は role:'admin' のまま orgId が空になるため）
+    function isOrgAdmin(orgId) {
+      return orgId != '' && myOrgId() == orgId && myRole() == 'admin';
+    }
+
+    function isOrgMember(orgId) {
+      return orgId != '' && myOrgId() == orgId;
+    }
+
+    // inventory_shared_v1 のドキュメントIDは "org_{orgId}__{suffix}" 形式。
+    // 部分文字列の抽出関数が使えないため、自分のorgIdを埋め込んだ正規表現で
+    // 「このドキュメントは自分の組織のものか」を判定する。
+    function isLegacyDocId(id) {
+      return !id.matches('^org_.*');
+    }
+
+    function isMyOrgDocId(id) {
+      return myOrgId() != '' && id.matches('^org_' + myOrgId() + '__.*$');
+    }
+
+    function isMyOrgAdminDocId(id) {
+      return myOrgId() != '' && myRole() == 'admin' &&
+        id.matches('^org_' + myOrgId() + '__.*$');
+    }
+
+    // 統括管理者のみ読み書き可能なドキュメント（請求・受領管理）
+    function isBillingDocId(id) {
+      return id.matches('.*__billing_invoices$') ||
+             id.matches('.*__billing_invoice_pdfs$') ||
+             id.matches('.*__billing_receipts$') ||
+             id.matches('.*__billing_receipt_pdfs$');
+    }
+
+    // 書き込みは組織admin以上に限定するドキュメント
+    // （orders自体・納品処理・既存発注表の更新は全員に開放し、
+    //   ここでは「発注確定」に相当する新規バッチ作成のみを別途battchesで扱う）
+    function isAdminWriteDocId(id) {
+      return id.matches('.*__pos_stripe_settings$') ||
+             id.matches('.*__store_quantity_limits$') ||
+             id.matches('.*__order_saved_pdfs$');
+    }
+
+    // ── users ────────────────────────────────────────────
+    // 読み取り: 認証済みなら誰でも可（組織参加時の人数チェック等で
+    //           他組織メンバーの一覧を読む必要があるため現状維持）
+    // 書き込み: 本人のみ。ただし orgId は
+    //           「現在空文字（無所属）→ 任意の値に設定」または
+    //           「現在の値のまま変更しない」または
+    //           「現在の値 → 空文字（脱退）」の3パターンのみ許可。
+    //           これにより、一度組織に参加した後に自分のorgIdを
+    //           勝手に他組織のIDへ書き換える「なりすまし参加」を防ぐ。
+    //           別のメンバーのorgId/roleは、そのメンバーが現在所属する
+    //           組織のadmin（または統括管理者）だけがリセット可能
+    //           （メンバー削除処理用、orgId/role以外は変更不可）。
+    match /users/{uid} {
+      allow read: if isSignedIn();
+
+      allow create: if isSignedIn()
+        && request.auth.uid == uid
+        && request.resource.data.role in ['admin', 'member'];
+
+      allow update: if isSignedIn() && (
+        (request.auth.uid == uid && (
+          resource.data.orgId == '' ||
+          (request.resource.data.orgId == resource.data.orgId &&
+           request.resource.data.role == resource.data.role) ||
+          (request.resource.data.orgId == '' && request.resource.data.role == 'admin')
+        ))
+        ||
+        (request.auth.uid != uid &&
+         (isOrgAdmin(resource.data.orgId) || isSuperAdmin()) &&
+         request.resource.data.orgId == '' &&
+         request.resource.data.role == 'admin' &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['orgId', 'role']))
+      );
+
+      allow delete: if isSignedIn() && request.auth.uid == uid;
+    }
+
+    // ── orgs（組織メタデータ：名前・ロゴ・招待コード・上限設定など）──
+    // 読み取り: 認証済みなら誰でも可
+    //           （広告配信機能が他組織のadSlots等を横断的に読む、
+    //            招待コード参加フローが参加前の組織情報を読む必要がある）
+    // 作成: 現在どの組織にも属していないユーザーのみ（新規組織作成）
+    // 更新・削除: 自組織の管理者、または統括管理者のみ
+    match /orgs/{orgId} {
+      allow read: if isSignedIn();
+
+      allow create: if isSignedIn() && myOrgId() == '';
+
+      allow update, delete: if isSignedIn() &&
+        (isOrgAdmin(orgId) || isSuperAdmin());
+    }
+
+    // ── organizations（旧システムの組織コレクション・移行専用）──
+    // 読み取りのみ維持（初回ログイン時の自動移行チェックで使用）。
+    // 現行コードはこのコレクションに書き込まないため、書き込みは禁止。
+    match /organizations/{orgId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    // ── inventory_shared_v1（組織ごとの業務データ）──────────
+    match /inventory_shared_v1/{docId} {
+
+      // 旧形式（org_プレフィックスなし）のドキュメントは読み取りのみ維持
+      allow read: if isSignedIn() && (
+        isLegacyDocId(docId) ||
+        (isBillingDocId(docId) ? isSuperAdmin() : (isMyOrgDocId(docId) || isSuperAdmin()))
+      );
+
+      allow write: if isSignedIn() && !isLegacyDocId(docId) && (
+        isBillingDocId(docId) ? isSuperAdmin() :
+        isAdminWriteDocId(docId) ? (isMyOrgAdminDocId(docId) || isSuperAdmin()) :
+        (isMyOrgDocId(docId) || isSuperAdmin())
+      );
+
+      // history / order_request_history / order_delivery_status /
+      // order_saved_pdfs / billing_* / pos_sales / pos_receipt_pdfs 等の
+      // "entries" サブコレクション
+      match /entries/{entryId} {
+        allow read: if isSignedIn() && (
+          isBillingDocId(docId) ? isSuperAdmin() : (isMyOrgDocId(docId) || isSuperAdmin())
+        );
+        allow write: if isSignedIn() && (
+          isBillingDocId(docId) ? isSuperAdmin() :
+          isAdminWriteDocId(docId) ? (isMyOrgAdminDocId(docId) || isSuperAdmin()) :
+          (isMyOrgDocId(docId) || isSuperAdmin())
+        );
+      }
+
+      // orders ドキュメント配下の発注バッチ。
+      // 新規作成（＝発注確定）は組織admin以上のみ。
+      // 既存バッチの読み取り・更新（納品処理・取消・訂正等）は組織メンバー全員可。
+      match /batches/{batchId} {
+        allow read, update, delete: if isSignedIn() &&
+          (isMyOrgDocId(docId) || isSuperAdmin());
+        allow create: if isSignedIn() &&
+          (isMyOrgAdminDocId(docId) || isSuperAdmin());
+      }
+    }
+
+    // ── それ以外の未定義パスはすべて拒否 ──────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
