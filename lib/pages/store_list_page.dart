@@ -746,6 +746,10 @@ class _StoreListPageState extends State<StoreListPage> {
                 Navigator.of(
                   context,
                 ).push(MaterialPageRoute(builder: (_) => const PosPage()));
+              } else if (value == 'pos_summary') {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const PosSummaryPage()),
+                );
               } else if (value == 'stripe_settings') {
                 Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const StripeSettingsPage()),
@@ -903,6 +907,16 @@ class _StoreListPageState extends State<StoreListPage> {
                     Icon(Icons.point_of_sale),
                     SizedBox(width: 12),
                     Text('レジ'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'pos_summary',
+                child: Row(
+                  children: [
+                    Icon(Icons.query_stats),
+                    SizedBox(width: 12),
+                    Text('レジ実績集計'),
                   ],
                 ),
               ),
