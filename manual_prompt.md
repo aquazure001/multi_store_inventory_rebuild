@@ -24,7 +24,9 @@
 
 ### スプレッドシート駆動の仕組み（重要）
 
-このマニュアル（manual.html）は、TANOMUプロジェクトの `web/help/assets/help.js` の `loadSheetManual()` と同じ方式で、Googleスプレッドシートの内容を実行時に取得して本文を差し替えられる構造になっています。マニュアルを再生成・編集する際は、この仕組みを壊さないよう以下を守ってください。
+このマニュアルの実体は `web/help/manual.html` に配置されています（`flutter build web` 時に `web/` 配下がそのまま `build/web/` にコピーされ、Firebase Hostingで `https://multi-store-inventory-app.web.app/help/manual.html` として配信される）。アプリ内からは設定画面の「マニュアル・使い方」から新しいタブで開けます。
+
+このマニュアルは、TANOMUプロジェクトの `web/help/assets/help.js` の `loadSheetManual()` と同じ方式で、Googleスプレッドシートの内容を実行時に取得して本文を差し替えられる構造になっています。マニュアルを再生成・編集する際は、この仕組みを壊さないよう以下を守ってください。
 
 - `<body data-help-sheet-id="..." data-help-sheet-gid="...">` にスプレッドシートID・gidをdata属性としてハードコードする（ビルド・デプロイ不要、都度fetch方式）
 - 各章は `<div class="section" id="sN" data-section-id="スラッグ">` とし、見出しは `<span class="section-title-text">` で囲む。本文は `<div class="section-body">` で囲む

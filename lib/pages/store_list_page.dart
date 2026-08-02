@@ -605,6 +605,21 @@ class _StoreListPageState extends State<StoreListPage> {
     }
   }
 
+  PopupMenuItem<String> _menuSectionHeader(String label) =>
+      PopupMenuItem<String>(
+        enabled: false,
+        height: 28,
+        child: Text(
+          label,
+          style: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: Colors.deepPurple,
+            letterSpacing: 0.5,
+          ),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -690,6 +705,9 @@ class _StoreListPageState extends State<StoreListPage> {
                       onChangePassword: _changePassword,
                       onLeaveOrg: _leaveOrg,
                       onDeleteAccount: _deleteAccount,
+                      onFeedbackFeature: () => _openFeedback('feature'),
+                      onFeedbackFix: () => _openFeedback('fix'),
+                      onFeedbackBug: () => _openFeedback('bug'),
                     ),
                   ),
                 );
@@ -780,66 +798,10 @@ class _StoreListPageState extends State<StoreListPage> {
                 Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const SuperAdminPage()),
                 );
-              } else if (value == 'nickname') {
-                _changeNickname();
-              } else if (value == 'password') {
-                _changePassword();
-              } else if (value == 'leave') {
-                _leaveOrg();
-              } else if (value == 'terms') {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => const LegalPage(
-                      title: '利用規約',
-                      content: _kTermsOfService,
-                    ),
-                  ),
-                );
-              } else if (value == 'privacy') {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => const LegalPage(
-                      title: 'プライバシーポリシー',
-                      content: _kPrivacyPolicy,
-                    ),
-                  ),
-                );
-              } else if (value == 'feedback_feature') {
-                _openFeedback('feature');
-              } else if (value == 'feedback_fix') {
-                _openFeedback('fix');
-              } else if (value == 'feedback_bug') {
-                _openFeedback('bug');
-              } else if (value == 'logout') {
-                FirebaseAuth.instance.signOut();
-                AppSession.clear();
-              } else if (value == 'delete_account') {
-                _deleteAccount();
               }
             },
             itemBuilder: (context) => [
-              const PopupMenuItem(
-                value: 'manual_update',
-                child: Row(
-                  children: [
-                    Icon(Icons.system_update_alt),
-                    SizedBox(width: 12),
-                    Text('最新の更新を反映'),
-                  ],
-                ),
-              ),
-              const PopupMenuDivider(),
-              const PopupMenuItem(
-                value: 'settings',
-                child: Row(
-                  children: [
-                    Icon(Icons.settings),
-                    SizedBox(width: 12),
-                    Text('設定'),
-                  ],
-                ),
-              ),
-              const PopupMenuDivider(),
+              _menuSectionHeader('在庫・棚卸し'),
               const PopupMenuItem(
                 value: 'all_stores',
                 child: Row(
@@ -880,6 +842,8 @@ class _StoreListPageState extends State<StoreListPage> {
                   ],
                 ),
               ),
+              const PopupMenuDivider(),
+              _menuSectionHeader('発注・納品'),
               const PopupMenuItem(
                 value: 'order',
                 child: Row(
@@ -891,37 +855,15 @@ class _StoreListPageState extends State<StoreListPage> {
                 ),
               ),
               const PopupMenuItem(
-                value: 'pos',
+                value: 'special_order',
                 child: Row(
                   children: [
-                    Icon(Icons.point_of_sale),
+                    Icon(Icons.star_border),
                     SizedBox(width: 12),
-                    Text('レジ'),
+                    Text('特別発注・新規発注'),
                   ],
                 ),
               ),
-              if (AppSession.isAdmin || AppSession.isSuperAdmin)
-                const PopupMenuItem(
-                  value: 'stripe_settings',
-                  child: Row(
-                    children: [
-                      Icon(Icons.credit_card),
-                      SizedBox(width: 12),
-                      Text('店舗Stripe設定'),
-                    ],
-                  ),
-                ),
-              if (AppSession.isAdmin || AppSession.isSuperAdmin)
-                const PopupMenuItem(
-                  value: 'store_quantity_limits',
-                  child: Row(
-                    children: [
-                      Icon(Icons.speed),
-                      SizedBox(width: 12),
-                      Text('店舗別数量上限'),
-                    ],
-                  ),
-                ),
               const PopupMenuItem(
                 value: 'delivery',
                 child: Row(
@@ -942,6 +884,28 @@ class _StoreListPageState extends State<StoreListPage> {
                   ],
                 ),
               ),
+              const PopupMenuItem(
+                value: 'order_request_history',
+                child: Row(
+                  children: [
+                    Icon(Icons.history_edu),
+                    SizedBox(width: 12),
+                    Text('発注ボタン履歴'),
+                  ],
+                ),
+              ),
+              const PopupMenuDivider(),
+              _menuSectionHeader('レジ・請求'),
+              const PopupMenuItem(
+                value: 'pos',
+                child: Row(
+                  children: [
+                    Icon(Icons.point_of_sale),
+                    SizedBox(width: 12),
+                    Text('レジ'),
+                  ],
+                ),
+              ),
               if (AppSession.isSuperAdmin)
                 const PopupMenuItem(
                   value: 'billing',
@@ -953,27 +917,71 @@ class _StoreListPageState extends State<StoreListPage> {
                     ],
                   ),
                 ),
-              const PopupMenuItem(
-                value: 'order_request_history',
-                child: Row(
-                  children: [
-                    Icon(Icons.history_edu),
-                    SizedBox(width: 12),
-                    Text('発注ボタン履歴'),
-                  ],
+              if (AppSession.isAdmin || AppSession.isSuperAdmin) ...[
+                const PopupMenuDivider(),
+                _menuSectionHeader('組織管理'),
+                if (AppSession.isAdmin)
+                  const PopupMenuItem(
+                    value: 'org',
+                    child: Row(
+                      children: [
+                        Icon(Icons.manage_accounts),
+                        SizedBox(width: 12),
+                        Text('組織管理'),
+                      ],
+                    ),
+                  ),
+                if (AppSession.isAdmin)
+                  const PopupMenuItem(
+                    value: 'ad',
+                    child: Row(
+                      children: [
+                        Icon(Icons.campaign),
+                        SizedBox(width: 12),
+                        Text('広告スペース管理'),
+                      ],
+                    ),
+                  ),
+                if (AppSession.isSuperAdmin)
+                  const PopupMenuItem(
+                    value: 'superadmin',
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.admin_panel_settings,
+                          color: Colors.deepPurple,
+                        ),
+                        SizedBox(width: 12),
+                        Text(
+                          '統括管理',
+                          style: TextStyle(color: Colors.deepPurple),
+                        ),
+                      ],
+                    ),
+                  ),
+                const PopupMenuItem(
+                  value: 'stripe_settings',
+                  child: Row(
+                    children: [
+                      Icon(Icons.credit_card),
+                      SizedBox(width: 12),
+                      Text('店舗Stripe設定'),
+                    ],
+                  ),
                 ),
-              ),
-              const PopupMenuItem(
-                value: 'special_order',
-                child: Row(
-                  children: [
-                    Icon(Icons.star_border),
-                    SizedBox(width: 12),
-                    Text('特別発注・新規発注'),
-                  ],
+                const PopupMenuItem(
+                  value: 'store_quantity_limits',
+                  child: Row(
+                    children: [
+                      Icon(Icons.speed),
+                      SizedBox(width: 12),
+                      Text('店舗別数量上限'),
+                    ],
+                  ),
                 ),
-              ),
+              ],
               const PopupMenuDivider(),
+              _menuSectionHeader('その他'),
               const PopupMenuItem(
                 value: 'reorder',
                 child: Row(
@@ -984,145 +992,23 @@ class _StoreListPageState extends State<StoreListPage> {
                   ],
                 ),
               ),
-              const PopupMenuDivider(),
-              if (AppSession.isAdmin)
-                const PopupMenuItem(
-                  value: 'org',
-                  child: Row(
-                    children: [
-                      Icon(Icons.manage_accounts),
-                      SizedBox(width: 12),
-                      Text('組織管理'),
-                    ],
-                  ),
-                ),
-              if (AppSession.isAdmin)
-                const PopupMenuItem(
-                  value: 'ad',
-                  child: Row(
-                    children: [
-                      Icon(Icons.campaign),
-                      SizedBox(width: 12),
-                      Text('広告スペース管理'),
-                    ],
-                  ),
-                ),
-              if (AppSession.isSuperAdmin)
-                const PopupMenuItem(
-                  value: 'superadmin',
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.admin_panel_settings,
-                        color: Colors.deepPurple,
-                      ),
-                      SizedBox(width: 12),
-                      Text('統括管理', style: TextStyle(color: Colors.deepPurple)),
-                    ],
-                  ),
-                ),
-              if (!AppSession.isAdmin)
-                const PopupMenuItem(
-                  value: 'leave',
-                  child: Row(
-                    children: [
-                      Icon(Icons.exit_to_app, color: Colors.orange),
-                      SizedBox(width: 12),
-                      Text('組織を脱退', style: TextStyle(color: Colors.orange)),
-                    ],
-                  ),
-                ),
-              const PopupMenuDivider(),
               const PopupMenuItem(
-                value: 'nickname',
+                value: 'manual_update',
                 child: Row(
                   children: [
-                    Icon(Icons.badge_outlined),
+                    Icon(Icons.system_update_alt),
                     SizedBox(width: 12),
-                    Text('ニックネーム変更'),
+                    Text('最新の更新を反映'),
                   ],
                 ),
               ),
               const PopupMenuItem(
-                value: 'password',
+                value: 'settings',
                 child: Row(
                   children: [
-                    Icon(Icons.lock_outline),
+                    Icon(Icons.settings),
                     SizedBox(width: 12),
-                    Text('パスワード変更'),
-                  ],
-                ),
-              ),
-              const PopupMenuDivider(),
-              const PopupMenuItem(
-                value: 'terms',
-                child: Row(
-                  children: [
-                    Icon(Icons.article_outlined),
-                    SizedBox(width: 12),
-                    Text('利用規約'),
-                  ],
-                ),
-              ),
-              const PopupMenuItem(
-                value: 'privacy',
-                child: Row(
-                  children: [
-                    Icon(Icons.privacy_tip_outlined),
-                    SizedBox(width: 12),
-                    Text('プライバシーポリシー'),
-                  ],
-                ),
-              ),
-              const PopupMenuDivider(),
-              const PopupMenuItem(
-                value: 'feedback_feature',
-                child: Row(
-                  children: [
-                    Icon(Icons.add_circle_outline, color: Colors.blue),
-                    SizedBox(width: 12),
-                    Text('機能追加依頼'),
-                  ],
-                ),
-              ),
-              const PopupMenuItem(
-                value: 'feedback_fix',
-                child: Row(
-                  children: [
-                    Icon(Icons.build_outlined, color: Colors.orange),
-                    SizedBox(width: 12),
-                    Text('修正依頼'),
-                  ],
-                ),
-              ),
-              const PopupMenuItem(
-                value: 'feedback_bug',
-                child: Row(
-                  children: [
-                    Icon(Icons.bug_report_outlined, color: Colors.red),
-                    SizedBox(width: 12),
-                    Text('バグ報告'),
-                  ],
-                ),
-              ),
-              const PopupMenuDivider(),
-              const PopupMenuItem(
-                value: 'logout',
-                child: Row(
-                  children: [
-                    Icon(Icons.logout, color: Colors.red),
-                    SizedBox(width: 12),
-                    Text('ログアウト', style: TextStyle(color: Colors.red)),
-                  ],
-                ),
-              ),
-              const PopupMenuItem(
-                value: 'delete_account',
-                child: Row(
-                  children: [
-                    Icon(Icons.delete_forever, color: Colors.red),
-                    SizedBox(width: 12),
-                    Text('アカウント削除', style: TextStyle(color: Colors.red)),
+                    Text('設定'),
                   ],
                 ),
               ),
