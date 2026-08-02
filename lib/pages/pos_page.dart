@@ -183,6 +183,13 @@ class _PosPageState extends State<PosPage> {
 
   int get _change => _received - _cartTotal;
 
+  bool get _messageIsError =>
+      _message != null &&
+      (_message!.contains('エラー') ||
+          _message!.contains('未登録') ||
+          _message!.contains('見つかりません') ||
+          _message!.contains('不足'));
+
   void _findProduct() {
     final code = _codeController.text.trim();
     if (code.isEmpty) return;
@@ -214,15 +221,17 @@ class _PosPageState extends State<PosPage> {
     }
   }
 
-  void _openManualInput() {
+  void _setMode(bool manual) {
     setState(() {
-      _manualMode = true;
-      _selectedProduct = null;
-      _codeController.clear();
-      _message = null;
-      if (_manualNameController.text.trim().isEmpty) {
-        _manualNameController.text = '金額手入力';
+      _manualMode = manual;
+      if (manual) {
+        _selectedProduct = null;
+        _codeController.clear();
+        if (_manualNameController.text.trim().isEmpty) {
+          _manualNameController.text = '金額手入力';
+        }
       }
+      _message = null;
     });
   }
 
@@ -644,20 +653,17 @@ class _PosPageState extends State<PosPage> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    final item = _selectedProduct;
-    final price = _selectedPrice;
-
     return Scaffold(
       backgroundColor: const Color(0xFFFFF7FF),
       appBar: AppBar(
         title: const Text('レジ'),
         actions: [
-          IconButton(
+          TextButton.icon(
             onPressed: () => Navigator.of(
               context,
             ).push(MaterialPageRoute(builder: (_) => const PosHistoryPage())),
             icon: const Icon(Icons.history),
-            tooltip: '取引履歴',
+            label: const Text('過去の取引'),
           ),
           IconButton(
             onPressed: _saving ? null : _load,
@@ -670,183 +676,68 @@ class _PosPageState extends State<PosPage> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    DropdownButtonFormField<LegacyStore>(
-                      initialValue: _selectedStore,
-                      decoration: const InputDecoration(
-                        labelText: '販売店舗',
-                        border: OutlineInputBorder(),
-                      ),
-                      items: _stores
-                          .map(
-                            (store) => DropdownMenuItem(
-                              value: store,
-                              child: Text(store.name),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: _saving
-                          ? null
-                          : (store) => setState(() => _selectedStore = store),
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _invoiceNumberController,
-                            decoration: const InputDecoration(
-                              labelText: 'インボイス事業者番号',
-                              hintText: 'Tから始まる登録番号',
-                              border: OutlineInputBorder(),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        ElevatedButton.icon(
-                          onPressed: _saving ? null : _saveInvoiceNumber,
-                          icon: const Icon(Icons.save),
-                          label: const Text('保存'),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: _saving ? null : _openManualInput,
-                        icon: const Icon(Icons.edit_note),
-                        label: const Text('金額手入力'),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _codeController,
-                            decoration: const InputDecoration(
-                              labelText: '商品コード',
-                              border: OutlineInputBorder(),
-                            ),
-                            keyboardType: TextInputType.number,
-                            onSubmitted: (_) => _findProduct(),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        ElevatedButton.icon(
-                          onPressed: _saving ? null : _findProduct,
-                          icon: const Icon(Icons.search),
-                          label: const Text('検索'),
-                        ),
-                      ],
-                    ),
-                    if (_message != null) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        _message!,
-                        style: TextStyle(
-                          color:
-                              _message!.contains('エラー') ||
-                                  _message!.contains('未登録') ||
-                                  _message!.contains('見つかりません') ||
-                                  _message!.contains('不足')
-                              ? Colors.red
-                              : Colors.green.shade700,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-            if (_manualMode) _buildManualAddCard(),
-            if (!_manualMode && item != null) _buildProductAddCard(item, price),
-            if (_cart.isNotEmpty) _buildCartCard(),
+            _buildStoreInvoiceCard(),
+            _buildAddItemCard(),
+            _buildCartAndTotalsCard(),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildProductAddCard(LegacyItem item, _PosPrice? price) {
+  Widget _buildStoreInvoiceCard() {
+    final store = _selectedStore;
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              item.name,
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+      child: ExpansionTile(
+        initiallyExpanded: store == null,
+        leading: const Icon(Icons.storefront_outlined),
+        title: const Text('店舗・インボイス設定'),
+        subtitle: Text(store?.name ?? '店舗を選択してください'),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        children: [
+          DropdownButtonFormField<LegacyStore>(
+            initialValue: _selectedStore,
+            decoration: const InputDecoration(
+              labelText: '販売店舗',
+              border: OutlineInputBorder(),
             ),
-            Text('コード: ${item.code}'),
-            const SizedBox(height: 12),
-            if (price == null)
-              const Text(
-                '商品マスタに税抜価格が未登録です。商品マスタ管理で税抜価格を登録してください。',
-                style: TextStyle(
-                  color: Colors.red,
-                  fontWeight: FontWeight.bold,
-                ),
-              )
-            else ...[
-              Row(
-                children: [
-                  Expanded(
-                    child: _amountTile(
-                      '税抜単価',
-                      '￥${_yen(_taxExcludedUnitPrice)}',
-                    ),
+            items: _stores
+                .map(
+                  (store) =>
+                      DropdownMenuItem(value: store, child: Text(store.name)),
+                )
+                .toList(),
+            onChanged: _saving
+                ? null
+                : (store) => setState(() => _selectedStore = store),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _invoiceNumberController,
+                  decoration: const InputDecoration(
+                    labelText: 'インボイス事業者番号',
+                    hintText: 'Tから始まる登録番号',
+                    border: OutlineInputBorder(),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _amountTile(
-                      '税込単価',
-                      '￥${_yen(_taxIncludedUnitPrice)}',
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _qtyController,
-                decoration: const InputDecoration(
-                  labelText: '数量',
-                  border: OutlineInputBorder(),
                 ),
-                keyboardType: TextInputType.number,
-                onChanged: (_) => setState(() {}),
               ),
-              const SizedBox(height: 12),
-              _summaryRow(
-                '小計',
-                '￥${_yen(_taxIncludedUnitPrice * _qty)}',
-                bold: true,
-              ),
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: _saving ? null : _addProductToCart,
-                  icon: const Icon(Icons.add_shopping_cart),
-                  label: const Text('カートに追加'),
-                ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                onPressed: _saving ? null : _saveInvoiceNumber,
+                icon: const Icon(Icons.save),
+                label: const Text('保存'),
               ),
             ],
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildManualAddCard() {
+  Widget _buildAddItemCard() {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -854,83 +745,209 @@ class _PosPageState extends State<PosPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              '金額手入力',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              '① 商品を追加',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
-            TextField(
-              controller: _manualNameController,
-              decoration: const InputDecoration(
-                labelText: '内容・品名',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _manualAmountController,
-                    decoration: const InputDecoration(
-                      labelText: '税込単価',
-                      border: OutlineInputBorder(),
-                    ),
-                    keyboardType: TextInputType.number,
-                    onChanged: (_) => setState(() {}),
-                  ),
+            SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(
+                  value: false,
+                  label: Text('商品コード検索'),
+                  icon: Icon(Icons.qr_code_scanner),
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: TextField(
-                    controller: _manualQtyController,
-                    decoration: const InputDecoration(
-                      labelText: '数量',
-                      border: OutlineInputBorder(),
-                    ),
-                    keyboardType: TextInputType.number,
-                    onChanged: (_) => setState(() {}),
-                  ),
+                ButtonSegment(
+                  value: true,
+                  label: Text('金額手入力'),
+                  icon: Icon(Icons.edit_note),
                 ),
               ],
-            ),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<int>(
-              initialValue: _manualTaxRate,
-              decoration: const InputDecoration(
-                labelText: '税率',
-                border: OutlineInputBorder(),
-              ),
-              items: const [
-                DropdownMenuItem(value: 10, child: Text('10%')),
-                DropdownMenuItem(value: 8, child: Text('8%（軽減税率）')),
-              ],
-              onChanged: _saving
+              selected: {_manualMode},
+              onSelectionChanged: _saving
                   ? null
-                  : (value) => setState(() => _manualTaxRate = value ?? 10),
+                  : (selection) => _setMode(selection.first),
             ),
-            const SizedBox(height: 12),
-            _summaryRow('税抜単価', '￥${_yen(_manualTaxExcludedUnitPrice)}'),
-            _summaryRow(
-              '小計',
-              '￥${_yen(_manualTaxIncludedUnitPrice * _manualQty)}',
-              bold: true,
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _saving ? null : _addManualToCart,
-                icon: const Icon(Icons.add_shopping_cart),
-                label: const Text('カートに追加'),
+            if (_message != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                _message!,
+                style: TextStyle(
+                  color: _messageIsError ? Colors.red : Colors.green.shade700,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
-            ),
+            ],
+            const SizedBox(height: 16),
+            if (_manualMode)
+              _buildManualEntryFields()
+            else
+              _buildProductEntryFields(),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildCartCard() {
+  Widget _buildProductEntryFields() {
+    final item = _selectedProduct;
+    final price = _selectedPrice;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _codeController,
+                decoration: const InputDecoration(
+                  labelText: '商品コード',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.number,
+                onSubmitted: (_) => _findProduct(),
+              ),
+            ),
+            const SizedBox(width: 8),
+            ElevatedButton.icon(
+              onPressed: _saving ? null : _findProduct,
+              icon: const Icon(Icons.search),
+              label: const Text('検索'),
+            ),
+          ],
+        ),
+        if (item != null) ...[
+          const SizedBox(height: 16),
+          const Divider(),
+          const SizedBox(height: 8),
+          Text(
+            item.name,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          Text('コード: ${item.code}'),
+          const SizedBox(height: 12),
+          if (price == null)
+            const Text(
+              '商品マスタに税抜価格が未登録です。商品マスタ管理で税抜価格を登録してください。',
+              style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+            )
+          else ...[
+            Row(
+              children: [
+                Expanded(
+                  child: _amountTile('税抜単価', '￥${_yen(_taxExcludedUnitPrice)}'),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _amountTile('税込単価', '￥${_yen(_taxIncludedUnitPrice)}'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _qtyController,
+              decoration: const InputDecoration(
+                labelText: '数量',
+                border: OutlineInputBorder(),
+              ),
+              keyboardType: TextInputType.number,
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: 12),
+            _summaryRow(
+              '小計',
+              '￥${_yen(_taxIncludedUnitPrice * _qty)}',
+              bold: true,
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _saving ? null : _addProductToCart,
+                icon: const Icon(Icons.add_shopping_cart),
+                label: const Text('カートに追加'),
+              ),
+            ),
+          ],
+        ],
+      ],
+    );
+  }
+
+  Widget _buildManualEntryFields() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextField(
+          controller: _manualNameController,
+          decoration: const InputDecoration(
+            labelText: '内容・品名',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _manualAmountController,
+                decoration: const InputDecoration(
+                  labelText: '税込単価',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.number,
+                onChanged: (_) => setState(() {}),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                controller: _manualQtyController,
+                decoration: const InputDecoration(
+                  labelText: '数量',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.number,
+                onChanged: (_) => setState(() {}),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<int>(
+          initialValue: _manualTaxRate,
+          decoration: const InputDecoration(
+            labelText: '税率',
+            border: OutlineInputBorder(),
+          ),
+          items: const [
+            DropdownMenuItem(value: 10, child: Text('10%')),
+            DropdownMenuItem(value: 8, child: Text('8%（軽減税率）')),
+          ],
+          onChanged: _saving
+              ? null
+              : (value) => setState(() => _manualTaxRate = value ?? 10),
+        ),
+        const SizedBox(height: 12),
+        _summaryRow('税抜単価', '￥${_yen(_manualTaxExcludedUnitPrice)}'),
+        _summaryRow(
+          '小計',
+          '￥${_yen(_manualTaxIncludedUnitPrice * _manualQty)}',
+          bold: true,
+        ),
+        const SizedBox(height: 16),
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: _saving ? null : _addManualToCart,
+            icon: const Icon(Icons.add_shopping_cart),
+            label: const Text('カートに追加'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCartAndTotalsCard() {
     final shortage = _received < _cartTotal;
     return Card(
       child: Padding(
@@ -939,15 +956,49 @@ class _PosPageState extends State<PosPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'カート（${_cart.length}点）',
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              '② カート（${_cart.length}点）',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
-            for (int i = 0; i < _cart.length; i++) ...[
-              _cartLineTile(i, _cart[i]),
-              if (i < _cart.length - 1) const Divider(height: 1),
-            ],
+            if (_cart.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 20),
+                child: Center(
+                  child: Column(
+                    children: [
+                      Icon(
+                        Icons.shopping_cart_outlined,
+                        size: 40,
+                        color: Colors.grey.shade400,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'まだ商品がありません',
+                        style: TextStyle(color: Colors.grey.shade600),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '上の「商品を追加」からカートに追加してください',
+                        style: TextStyle(
+                          color: Colors.grey.shade500,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            else
+              for (int i = 0; i < _cart.length; i++) ...[
+                _cartLineTile(i, _cart[i]),
+                if (i < _cart.length - 1) const Divider(height: 1),
+              ],
             const Divider(),
+            const Text(
+              '③ 合計・お会計',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
             _summaryRow('合計', '￥${_yen(_cartTotal)}', bold: true),
             const SizedBox(height: 12),
             TextField(
@@ -971,18 +1022,22 @@ class _PosPageState extends State<PosPage> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: _saving ? null : _confirmCartSale,
+                onPressed: (_saving || _cart.isEmpty) ? null : _confirmCartSale,
                 icon: _saving
                     ? const SizedBox(
                         width: 18,
                         height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
                       )
                     : const Icon(Icons.check_circle),
                 label: const Text('会計確定・レシートPDF発行'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.green,
                   foregroundColor: Colors.white,
+                  disabledBackgroundColor: Colors.grey.shade300,
                   padding: const EdgeInsets.symmetric(vertical: 14),
                 ),
               ),
