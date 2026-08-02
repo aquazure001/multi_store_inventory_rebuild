@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>多店舗在庫管理システム マニュアル v1.2.0</title>
+  <title>多店舗在庫管理システム マニュアル v1.3.0</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -85,6 +85,7 @@
       font-weight: 700;
       flex-shrink: 0;
     }
+    h2.section-title .section-title-text { flex: 1; }
     h3 {
       font-size: 1.1rem;
       color: #4a148c;
@@ -186,7 +187,14 @@
     }
   </style>
 </head>
-<body>
+<!--
+  スプレッドシート駆動マニュアル（TANOMUのweb/help/assets/help.js loadSheetManual()と同じ方式）。
+  下記2つのdata属性に、Googleスプレッドシートを「ウェブに公開」した際のシートIDとgidを設定してください。
+  - シートID: スプレッドシートURL https://docs.google.com/spreadsheets/d/【ここ】/edit の部分
+  - gid: シート下部のタブURL #gid=【ここ】 の部分（省略時は0）
+  未設定（プレースホルダーのまま）または取得に失敗した場合は、このHTMLに書かれている静的な本文がそのまま表示されます（フォールバック）。
+-->
+<body data-help-sheet-id="1g-Odbbdm9kOGsUNoZSEHVx2zqNXffC7Gk9o3TlByUIQ" data-help-sheet-gid="0">
 
 <!-- ==============================
      表紙
@@ -195,7 +203,7 @@
   <h1>多店舗在庫管理システム</h1>
   <div class="subtitle">マニュアル</div>
   <div class="version">
-    バージョン 1.2.0 &nbsp;|&nbsp; 2026年6月<br>
+    バージョン 1.3.0 &nbsp;|&nbsp; 2026年8月<br>
     Web: <a href="https://multi-store-inventory-app.web.app" target="_blank" style="color:rgba(255,255,255,0.85)">multi-store-inventory-app.web.app</a>
   </div>
 </div>
@@ -215,22 +223,24 @@
     <li><a href="#s7">商品マスタ管理</a></li>
     <li><a href="#s8">発注リスト</a></li>
     <li><a href="#s9">特別発注・新規発注</a></li>
-    <li><a href="#s10">修正・追加履歴</a></li>
-    <li><a href="#s11">店舗の並び替え</a></li>
-    <li><a href="#s12">組織管理（管理者専用）</a></li>
-    <li><a href="#s13">広告スペース管理（管理者専用）</a></li>
-    <li><a href="#s14">アカウント設定</a></li>
-    <li><a href="#s15">フィードバック送信</a></li>
-    <li><a href="#s16">権限一覧</a></li>
-    <li><a href="#s17">よくある質問（FAQ）</a></li>
+    <li><a href="#s10">レジ・会計</a></li>
+    <li><a href="#s11">修正・追加履歴</a></li>
+    <li><a href="#s12">店舗の並び替え</a></li>
+    <li><a href="#s13">組織管理（管理者専用）</a></li>
+    <li><a href="#s14">広告スペース管理（管理者専用）</a></li>
+    <li><a href="#s15">アカウント設定</a></li>
+    <li><a href="#s16">フィードバック送信</a></li>
+    <li><a href="#s17">権限一覧</a></li>
+    <li><a href="#s18">よくある質問（FAQ）</a></li>
   </ol>
 </div>
 
 <!-- ==============================
      1. アプリ概要
 =============================== -->
-<div class="section" id="s1">
-  <h2 class="section-title"><span class="num">1</span>アプリ概要</h2>
+<div class="section" id="s1" data-section-id="overview">
+  <h2 class="section-title"><span class="num">1</span><span class="section-title-text">アプリ概要</span></h2>
+  <div class="section-body">
 
   <p>
     本アプリは、複数店舗の在庫をリアルタイムで一元管理するためのシステムです。
@@ -244,6 +254,7 @@
     <tr><td>基準在庫</td><td>各アイテムに基準在庫数を設定し、不足分を赤字で表示</td></tr>
     <tr><td>発注リスト</td><td>基準在庫を下回った商品を全店舗横断で一覧表示、発注・PDF出力</td></tr>
     <tr><td>特別発注</td><td>通常の発注フローとは別に、特別・新規発注品を管理</td></tr>
+    <tr><td>レジ・会計</td><td>店舗での会計処理と手入力会計、レシートPDFの発行・取引履歴確認</td></tr>
     <tr><td>履歴</td><td>在庫変更の記録を直近100件保存・確認</td></tr>
     <tr><td>商品マスタ</td><td>商品・テスター・備品のマスタデータを管理</td></tr>
     <tr><td>組織管理</td><td>メンバー管理、招待コード、ロゴ設定など</td></tr>
@@ -259,13 +270,15 @@
   <div class="info">
     <strong>Web版URL:</strong> <a href="https://multi-store-inventory-app.web.app" target="_blank">https://multi-store-inventory-app.web.app</a>
   </div>
+  </div>
 </div>
 
 <!-- ==============================
      2. はじめに（初回セットアップ）
 =============================== -->
-<div class="section" id="s2">
-  <h2 class="section-title"><span class="num">2</span>はじめに（初回セットアップ）</h2>
+<div class="section" id="s2" data-section-id="setup">
+  <h2 class="section-title"><span class="num">2</span><span class="section-title-text">はじめに（初回セットアップ）</span></h2>
+  <div class="section-body">
 
   <h3>アカウント作成</h3>
   <div class="step"><div class="num">1</div><div class="content">WebブラウザでURLにアクセスし、「新規登録」をタップします。</div></div>
@@ -302,13 +315,15 @@
 
   <h3>利用規約への同意</h3>
   <p>組織作成・参加の際は、利用規約とプライバシーポリシーへの同意が必要です。</p>
+  </div>
 </div>
 
 <!-- ==============================
      3. ログイン・ログアウト
 =============================== -->
-<div class="section" id="s3">
-  <h2 class="section-title"><span class="num">3</span>ログイン・ログアウト</h2>
+<div class="section" id="s3" data-section-id="login">
+  <h2 class="section-title"><span class="num">3</span><span class="section-title-text">ログイン・ログアウト</span></h2>
+  <div class="section-body">
 
   <h3>ログイン</h3>
   <div class="step"><div class="num">1</div><div class="content">URLにアクセスします。</div></div>
@@ -322,13 +337,15 @@
   <h3>ログアウト</h3>
   <div class="step"><div class="num">1</div><div class="content">右上の <strong>⋮（メニュー）</strong> をタップします。</div></div>
   <div class="step"><div class="num">2</div><div class="content">「ログアウト」をタップします。</div></div>
+  </div>
 </div>
 
 <!-- ==============================
      4. 店舗一覧（メイン画面）
 =============================== -->
-<div class="section" id="s4">
-  <h2 class="section-title"><span class="num">4</span>店舗一覧（メイン画面）</h2>
+<div class="section" id="s4" data-section-id="store_list">
+  <h2 class="section-title"><span class="num">4</span><span class="section-title-text">店舗一覧（メイン画面）</span></h2>
+  <div class="section-body">
 
   <p>ログイン後に最初に表示される画面です。登録されている全店舗が一覧表示されます。</p>
 
@@ -356,6 +373,7 @@
     <tr><td>商品マスタ管理</td><td>商品・テスター・備品のマスタを編集</td><td><span class="badge badge-all">全員</span></td></tr>
     <tr><td>発注リスト</td><td>不足在庫の発注・PDF出力</td><td><span class="badge badge-all">全員</span></td></tr>
     <tr><td>特別発注・新規発注</td><td>通常外の特別発注品管理</td><td><span class="badge badge-all">全員</span></td></tr>
+    <tr><td>レジ</td><td>店舗での会計処理・レシートPDF発行・取引履歴確認</td><td><span class="badge badge-all">全員</span></td></tr>
     <tr><td>店舗の並び替え</td><td>ドラッグ操作で店舗の表示順を変更</td><td><span class="badge badge-all">全員</span></td></tr>
     <tr><td>組織管理</td><td>組織名・ロゴ・メンバー・招待コード管理</td><td><span class="badge badge-admin">管理者</span></td></tr>
     <tr><td>広告スペース管理</td><td>広告バナーの設定</td><td><span class="badge badge-admin">管理者</span></td></tr>
@@ -367,13 +385,15 @@
     <tr><td>ログアウト</td><td>ログアウト</td><td><span class="badge badge-all">全員</span></td></tr>
     <tr><td>アカウント削除</td><td>アカウントを完全削除（要パスワード確認）</td><td><span class="badge badge-all">全員</span></td></tr>
   </table>
+  </div>
 </div>
 
 <!-- ==============================
      5. 店舗別在庫管理
 =============================== -->
-<div class="section" id="s5">
-  <h2 class="section-title"><span class="num">5</span>店舗別在庫管理</h2>
+<div class="section" id="s5" data-section-id="store_inventory">
+  <h2 class="section-title"><span class="num">5</span><span class="section-title-text">店舗別在庫管理</span></h2>
+  <div class="section-body">
 
   <p>店舗一覧から店舗名をタップすると、その店舗の在庫ページが開きます。</p>
 
@@ -430,13 +450,15 @@
 
   <h3>再読み込み</h3>
   <p>右上の更新アイコンをタップすると最新データを取得します。</p>
+  </div>
 </div>
 
 <!-- ==============================
      6. 全店舗在庫確認
 =============================== -->
-<div class="section" id="s6">
-  <h2 class="section-title"><span class="num">6</span>全店舗在庫確認</h2>
+<div class="section" id="s6" data-section-id="all_store_inventory">
+  <h2 class="section-title"><span class="num">6</span><span class="section-title-text">全店舗在庫確認</span></h2>
+  <div class="section-body">
 
   <p>
     メニューの「全店舗在庫確認」から、すべての店舗の在庫を一つのテーブルで横断確認できます。
@@ -452,13 +474,15 @@
   <div class="info">
     この画面は読み取り専用です。在庫数の変更は各店舗の在庫ページから行ってください。
   </div>
+  </div>
 </div>
 
 <!-- ==============================
      7. 商品マスタ管理
 =============================== -->
-<div class="section" id="s7">
-  <h2 class="section-title"><span class="num">7</span>商品マスタ管理</h2>
+<div class="section" id="s7" data-section-id="item_master">
+  <h2 class="section-title"><span class="num">7</span><span class="section-title-text">商品マスタ管理</span></h2>
+  <div class="section-body">
 
   <p>
     メニューの「商品マスタ管理」から、商品・テスター・備品のマスタデータを管理します。
@@ -468,6 +492,19 @@
   <div class="step"><div class="num">1</div><div class="content">タブ（商品 / テスター / 備品）を選択します。</div></div>
   <div class="step"><div class="num">2</div><div class="content">右下の <strong>＋</strong> ボタンをタップします。</div></div>
   <div class="step"><div class="num">3</div><div class="content">コード（任意）と名前（必須）を入力して「保存」します。</div></div>
+
+  <h3>レジ用価格・軽減税率（商品タブのみ）</h3>
+  <p>
+    「商品」タブのアイテム追加・編集ダイアログでは、コード・名前に加えて<strong>税抜価格</strong>と<strong>軽減税率（8%）</strong>を設定できます。
+    ここで設定した内容が「レジ」機能での会計金額の自動計算に使用されます。
+  </p>
+  <ul>
+    <li><strong>税抜価格</strong>: レジで会計する際の単価（税抜）。入力すると税込価格が自動でプレビュー表示されます。</li>
+    <li><strong>軽減税率（8%）</strong>: チェックを入れると消費税率8%で計算されます。チェックなしは10%で計算されます。</li>
+  </ul>
+  <div class="note">
+    <strong>注意:</strong> 税抜価格が未登録（0円）のアイテムは、レジで選択しても会計できません。レジで販売する商品は必ず税抜価格を登録してください。
+  </div>
 
   <h3>アイテムの編集</h3>
   <p>アイテムの行をタップすると編集ダイアログが開きます。コードや名前を変更して保存できます。</p>
@@ -483,13 +520,15 @@
 
   <h3>検索</h3>
   <p>上部の検索バーでアイテムを絞り込めます。</p>
+  </div>
 </div>
 
 <!-- ==============================
      8. 発注リスト
 =============================== -->
-<div class="section" id="s8">
-  <h2 class="section-title"><span class="num">8</span>発注リスト</h2>
+<div class="section" id="s8" data-section-id="order_list">
+  <h2 class="section-title"><span class="num">8</span><span class="section-title-text">発注リスト</span></h2>
+  <div class="section-body">
 
   <p>
     メニューの「発注リスト」から、基準在庫を下回っているすべての商品・テスター・備品を確認し、発注処理・PDF出力ができます。
@@ -518,13 +557,15 @@
   <h3>PDF出力</h3>
   <div class="step"><div class="num">1</div><div class="content">右上の印刷アイコンをタップします。</div></div>
   <div class="step"><div class="num">2</div><div class="content">現在の発注リストがPDFとして生成され、印刷または保存できます。</div></div>
+  </div>
 </div>
 
 <!-- ==============================
      9. 特別発注・新規発注
 =============================== -->
-<div class="section" id="s9">
-  <h2 class="section-title"><span class="num">9</span>特別発注・新規発注</h2>
+<div class="section" id="s9" data-section-id="special_order">
+  <h2 class="section-title"><span class="num">9</span><span class="section-title-text">特別発注・新規発注</span></h2>
+  <div class="section-body">
 
   <p>
     メニューの「特別発注・新規発注」から、通常の発注リストには含まれない特別品・新規取り扱い品の発注を管理します。
@@ -552,13 +593,73 @@
 
   <h3>完了したアイテムの削除</h3>
   <p>アイテム右側の削除ボタンからアイテムを削除できます。</p>
+  </div>
 </div>
 
 <!-- ==============================
-     10. 修正・追加履歴
+     10. レジ・会計
 =============================== -->
-<div class="section" id="s10">
-  <h2 class="section-title"><span class="num">10</span>修正・追加履歴</h2>
+<div class="section" id="s10" data-section-id="pos">
+  <h2 class="section-title"><span class="num">10</span><span class="section-title-text">レジ・会計</span></h2>
+  <div class="section-body">
+
+  <p>
+    メニューの「レジ」から、店舗店頭での会計処理を行い、レシート（領収書）PDFを発行できます。
+    商品コードを指定した通常会計と、商品マスタにない金額を都度入力する手入力会計の2種類があります。
+  </p>
+
+  <h3>販売店舗・インボイス番号の設定</h3>
+  <div class="step"><div class="num">1</div><div class="content">「販売店舗」ドロップダウンから会計を行う店舗を選択します。</div></div>
+  <div class="step"><div class="num">2</div><div class="content">「インボイス事業者番号」（Tから始まる登録番号）を入力し「保存」します。以降のレシートに印字されます。</div></div>
+
+  <h3>商品会計（商品コード指定）</h3>
+  <div class="step"><div class="num">1</div><div class="content">「商品コード」欄にコードを入力し「検索」（またはEnter）をタップします。</div></div>
+  <div class="step"><div class="num">2</div><div class="content">該当商品が見つかると、税抜単価・税込単価（軽減税率対応）が表示されます。</div></div>
+  <div class="step"><div class="num">3</div><div class="content">「数量」と「預かり金」を入力すると、合計金額とおつりが自動計算されます。</div></div>
+  <div class="step"><div class="num">4</div><div class="content">「会計確定・レシートPDF印刷」をタップし、確認ダイアログで「確定する」を選択します。</div></div>
+
+  <div class="note">
+    <strong>在庫について:</strong> 商品会計を確定すると、選択した店舗の在庫が数量分自動的に減算されます。在庫が数量に満たない場合はエラーとなり会計できません。
+  </div>
+
+  <h3>金額手入力（商品マスタにない会計）</h3>
+  <p>領収書のみ発行したい場合や、商品マスタに未登録の品目を会計する場合に使用します。</p>
+  <div class="step"><div class="num">1</div><div class="content">「金額手入力」ボタンをタップします。</div></div>
+  <div class="step"><div class="num">2</div><div class="content">「内容・品名」「税込単価」「数量」を入力します。</div></div>
+  <div class="step"><div class="num">3</div><div class="content">「税率」で10%または8%（軽減税率）を選択します。</div></div>
+  <div class="step"><div class="num">4</div><div class="content">「預かり金」を入力し、「手入力会計確定・レシートPDF印刷」をタップします。</div></div>
+
+  <div class="info">
+    手入力会計では在庫数は変更されません（「在庫変更なし」としてレシートに記載されます）。
+  </div>
+
+  <h3>会計確定後の動作</h3>
+  <ul>
+    <li>会計内容を記録した「領収書」PDFが自動生成されます。</li>
+    <li>PDFは端末の共有・印刷機能（Printing）を通じてそのまま印刷または保存できます。</li>
+    <li>PDFは取引履歴からも後で再印刷できるよう保存されます。</li>
+    <li>領収書には発行日・店舗名・インボイス登録番号・品名・数量・税抜/税込単価・消費税額・預かり金・おつり・在庫更新内容が記載されます。</li>
+  </ul>
+
+  <h3>取引履歴の確認</h3>
+  <div class="step"><div class="num">1</div><div class="content">レジ画面右上の履歴アイコン（🕐）をタップします。</div></div>
+  <div class="step"><div class="num">2</div><div class="content">直近100件の取引が新しい順に一覧表示されます（店舗名・日時・区分・預かり金・おつり・合計金額）。</div></div>
+  <div class="step"><div class="num">3</div><div class="content">各取引の「印刷」をタップすると、保存済みのレシートPDFを再度印刷・共有できます。</div></div>
+
+  <table>
+    <tr><th>区分</th><th>内容</th></tr>
+    <tr><td>商品</td><td>商品マスタの税抜価格・軽減税率をもとに会計。在庫が自動更新される。</td></tr>
+    <tr><td>金額手入力</td><td>都度入力した金額・税率で会計。在庫は更新されない。</td></tr>
+  </table>
+  </div>
+</div>
+
+<!-- ==============================
+     11. 修正・追加履歴
+=============================== -->
+<div class="section" id="s11" data-section-id="history">
+  <h2 class="section-title"><span class="num">11</span><span class="section-title-text">修正・追加履歴</span></h2>
+  <div class="section-body">
 
   <p>
     メニューの「修正・追加履歴」から、在庫変更の記録を確認できます。
@@ -583,26 +684,30 @@
   <div class="info">
     右上の更新アイコンをタップすると最新の履歴を取得します。
   </div>
+  </div>
 </div>
 
 <!-- ==============================
-     11. 店舗の並び替え
+     12. 店舗の並び替え
 =============================== -->
-<div class="section" id="s11">
-  <h2 class="section-title"><span class="num">11</span>店舗の並び替え</h2>
+<div class="section" id="s12" data-section-id="store_reorder">
+  <h2 class="section-title"><span class="num">12</span><span class="section-title-text">店舗の並び替え</span></h2>
+  <div class="section-body">
 
   <p>メニューの「店舗の並び替え」から、店舗一覧の表示順を変更できます。</p>
 
   <div class="step"><div class="num">1</div><div class="content">「店舗の並び替え」を開くと、現在の順番でリストが表示されます。</div></div>
   <div class="step"><div class="num">2</div><div class="content">各行の右端の <strong>≡</strong> アイコンをドラッグして順番を変更します。</div></div>
   <div class="step"><div class="num">3</div><div class="content">「保存」ボタンをタップして確定します。</div></div>
+  </div>
 </div>
 
 <!-- ==============================
-     12. 組織管理（管理者専用）
+     13. 組織管理（管理者専用）
 =============================== -->
-<div class="section" id="s12">
-  <h2 class="section-title"><span class="num">12</span>組織管理 <span class="badge badge-admin">管理者専用</span></h2>
+<div class="section" id="s13" data-section-id="org_management">
+  <h2 class="section-title"><span class="num">13</span><span class="section-title-text">組織管理</span> <span class="badge badge-admin">管理者専用</span></h2>
+  <div class="section-body">
 
   <p>メニューの「組織管理」から、組織の設定を管理します（管理者のみ表示）。</p>
 
@@ -638,13 +743,15 @@
 
   <h3>組織の削除</h3>
   <p>「組織を削除」ボタンから組織全体を削除できます。この操作は取り消せません。</p>
+  </div>
 </div>
 
 <!-- ==============================
-     13. 広告スペース管理（管理者専用）
+     14. 広告スペース管理（管理者専用）
 =============================== -->
-<div class="section" id="s13">
-  <h2 class="section-title"><span class="num">13</span>広告スペース管理 <span class="badge badge-admin">管理者専用</span></h2>
+<div class="section" id="s14" data-section-id="ad_management">
+  <h2 class="section-title"><span class="num">14</span><span class="section-title-text">広告スペース管理</span> <span class="badge badge-admin">管理者専用</span></h2>
+  <div class="section-body">
 
   <p>メニューの「広告スペース管理」から、広告バナーの表示設定を行います（管理者のみ）。</p>
 
@@ -669,13 +776,15 @@
     <li>店舗一覧画面の下部に広告バナーが表示されます（1分ごとにローテーション）。</li>
     <li>発注リストを開く際に全画面広告が3秒間表示されます（広告あり時のみ）。</li>
   </ul>
+  </div>
 </div>
 
 <!-- ==============================
-     14. アカウント設定
+     15. アカウント設定
 =============================== -->
-<div class="section" id="s14">
-  <h2 class="section-title"><span class="num">14</span>アカウント設定</h2>
+<div class="section" id="s15" data-section-id="account_settings">
+  <h2 class="section-title"><span class="num">15</span><span class="section-title-text">アカウント設定</span></h2>
+  <div class="section-body">
 
   <h3>ニックネームの変更</h3>
   <div class="step"><div class="num">1</div><div class="content">メニューの「ニックネーム変更」をタップします。</div></div>
@@ -700,13 +809,15 @@
   <div class="warn">
     <strong>警告:</strong> アカウント削除は取り消せません。アカウントとすべての認証情報が完全に削除されます。
   </div>
+  </div>
 </div>
 
 <!-- ==============================
-     15. フィードバック送信
+     16. フィードバック送信
 =============================== -->
-<div class="section" id="s15">
-  <h2 class="section-title"><span class="num">15</span>フィードバック送信</h2>
+<div class="section" id="s16" data-section-id="feedback">
+  <h2 class="section-title"><span class="num">16</span><span class="section-title-text">フィードバック送信</span></h2>
+  <div class="section-body">
 
   <p>本アプリに関するご要望・不具合報告はメニューから送信できます。</p>
 
@@ -718,13 +829,15 @@
   </table>
 
   <p>送信すると、ニックネームとメールアドレスを含むメールが <strong>info@happy-bluebird.co.jp</strong> に送信されます。</p>
+  </div>
 </div>
 
 <!-- ==============================
-     16. 権限一覧
+     17. 権限一覧
 =============================== -->
-<div class="section" id="s16">
-  <h2 class="section-title"><span class="num">16</span>権限一覧</h2>
+<div class="section" id="s17" data-section-id="permissions">
+  <h2 class="section-title"><span class="num">17</span><span class="section-title-text">権限一覧</span></h2>
+  <div class="section-body">
 
   <table>
     <tr>
@@ -738,6 +851,7 @@
     <tr><td>商品マスタ管理</td><td>○</td><td>○</td></tr>
     <tr><td>発注リスト・発注操作</td><td>○</td><td>○</td></tr>
     <tr><td>特別発注管理</td><td>○</td><td>○</td></tr>
+    <tr><td>レジ・会計（商品会計・手入力会計）</td><td>○</td><td>○</td></tr>
     <tr><td>履歴確認</td><td>○</td><td>○</td></tr>
     <tr><td>店舗の並び替え</td><td>○</td><td>○</td></tr>
     <tr><td>ニックネーム変更</td><td>○</td><td>○</td></tr>
@@ -749,13 +863,15 @@
     <tr><td>広告スペース管理</td><td>○</td><td>×</td></tr>
     <tr><td>組織を脱退</td><td>×</td><td>○</td></tr>
   </table>
+  </div>
 </div>
 
 <!-- ==============================
-     17. FAQ
+     18. FAQ
 =============================== -->
-<div class="section" id="s17">
-  <h2 class="section-title"><span class="num">17</span>よくある質問（FAQ）</h2>
+<div class="section" id="s18" data-section-id="faq">
+  <h2 class="section-title"><span class="num">18</span><span class="section-title-text">よくある質問（FAQ）</span></h2>
+  <div class="section-body">
 
   <h3>Q. 在庫を変更したのに保存されていない</h3>
   <p><strong>A.</strong> ＋/−ボタンで変更後、必ず画面下部の「保存」ボタンをタップしてください。タップせずに画面を離れると変更は破棄されます。</p>
@@ -780,11 +896,151 @@
 
   <h3>Q. 店舗数の上限を増やしたい / ユーザー数を増やしたい</h3>
   <p><strong>A.</strong> 上限変更は統括管理者のみが行えます。「フィードバック → 機能追加依頼」または「info@happy-bluebird.co.jp」までご連絡ください。</p>
+
+  <h3>Q. レジで商品コードを検索しても会計できない</h3>
+  <p><strong>A.</strong> 「商品マスタに税抜価格が未登録です」と表示される場合は、商品マスタ管理でその商品の税抜価格を設定してください。価格が未登録（0円）の商品はレジで会計できません。</p>
+
+  <h3>Q. レジで在庫が足りないと言われる</h3>
+  <p><strong>A.</strong> 商品会計は在庫を自動で減算するため、店舗の在庫数が数量に満たない場合は会計できません。在庫を確認・補充するか、金額手入力を利用してください（手入力は在庫を変更しません）。</p>
+  </div>
 </div>
 
 <footer>
-  多店舗在庫管理システム マニュアル v1.2.0 &copy; 2026 Happy Bluebird Co., Ltd.
+  多店舗在庫管理システム マニュアル v1.3.0 &copy; 2026 Happy Bluebird Co., Ltd.
 </footer>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  loadSheetManual();
+});
+
+// TANOMU (web/help/assets/help.js) の loadSheetManual() と同じ方式:
+// Googleスプレッドシートを「ウェブに公開」した状態のCSVエクスポートURLを無認証でfetchし、
+// 取得・解析に成功した場合のみ本文を差し替える。失敗時は何もせず、このHTMLの静的本文をそのまま表示する。
+async function loadSheetManual() {
+  const sheetId = document.body.dataset.helpSheetId;
+  const gid = document.body.dataset.helpSheetGid;
+  if (!sheetId || sheetId === 'YOUR_SHEET_ID_HERE' || !gid) return;
+
+  try {
+    const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&gid=${gid}&cachebust=${Date.now()}`;
+    const response = await fetch(url);
+    if (!response.ok) return;
+    const text = await response.text();
+    const rows = parseCsv(text);
+
+    // 1行目はヘッダー（section_id, section_title, content_html, order）として読み飛ばす
+    const items = rows
+      .slice(1)
+      .map((row) => ({
+        sectionId: String(row[0] || '').trim(),
+        title: String(row[1] || '').trim(),
+        contentHtml: String(row[2] || ''),
+        order: Number(row[3] || 0),
+      }))
+      .filter((item) => item.sectionId)
+      .sort((a, b) => a.order - b.order);
+
+    if (!items.length) return;
+    applySheetManual(items);
+  } catch {
+    // シートが未公開・通信不可・形式不正の場合は、HTML内の既存本文をそのまま表示する。
+  }
+}
+
+function applySheetManual(items) {
+  const footer = document.querySelector('footer');
+  const container = footer ? footer.parentNode : document.body;
+  const tocList = document.querySelector('.toc ol');
+  if (tocList) tocList.innerHTML = '';
+
+  const existingSections = new Map(
+    [...document.querySelectorAll('.section[data-section-id]')].map((el) => [
+      el.dataset.sectionId,
+      el,
+    ])
+  );
+
+  items.forEach((item, index) => {
+    const num = index + 1;
+    let section = existingSections.get(item.sectionId);
+
+    if (!section) {
+      // シートにのみ存在する新規セクション。最小限のテンプレートを組み立てる。
+      section = document.createElement('div');
+      section.className = 'section';
+      section.dataset.sectionId = item.sectionId;
+      section.innerHTML =
+        '<h2 class="section-title"><span class="num"></span>' +
+        '<span class="section-title-text"></span></h2>' +
+        '<div class="section-body"></div>';
+    }
+
+    section.id = `s${num}`;
+
+    const numEl = section.querySelector('.num');
+    if (numEl) numEl.textContent = String(num);
+
+    const titleEl = section.querySelector('.section-title-text');
+    if (titleEl && item.title) titleEl.textContent = item.title;
+
+    const bodyEl = section.querySelector('.section-body');
+    if (bodyEl && item.contentHtml) bodyEl.innerHTML = item.contentHtml;
+
+    if (footer) {
+      container.insertBefore(section, footer);
+    } else {
+      container.appendChild(section);
+    }
+
+    if (tocList) {
+      const li = document.createElement('li');
+      const a = document.createElement('a');
+      a.href = `#s${num}`;
+      a.textContent = (titleEl && titleEl.textContent) || item.title;
+      li.appendChild(a);
+      tocList.appendChild(li);
+    }
+  });
+}
+
+// TANOMUのparseCsv()と同一実装（引用符・改行を含むCSVセルに対応した簡易パーサー）
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    const next = text[i + 1];
+    if (char === '"' && inQuotes && next === '"') {
+      cell += '"';
+      i++;
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === ',' && !inQuotes) {
+      row.push(cell);
+      cell = '';
+    } else if ((char === '\n' || char === '\r') && !inQuotes) {
+      if (char === '\r' && next === '\n') i++;
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = '';
+    } else {
+      cell += char;
+    }
+  }
+
+  if (cell || row.length) {
+    row.push(cell);
+    rows.push(row);
+  }
+
+  return rows;
+}
+</script>
 
 </body>
 </html>
