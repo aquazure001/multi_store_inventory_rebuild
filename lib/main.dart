@@ -41,6 +41,7 @@ part 'pages/item_master_page.dart';
 part 'pages/billing_page.dart';
 part 'pages/pos_page.dart';
 part 'pages/pos_summary_page.dart';
+part 'pages/home_care_handover_log_page.dart';
 part 'pages/stripe_settings_page.dart';
 part 'pages/store_quantity_limits_page.dart';
 part 'core/app_session.dart';
