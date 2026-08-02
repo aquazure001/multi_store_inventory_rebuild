@@ -780,12 +780,6 @@ class _StoreListPageState extends State<StoreListPage> {
                     builder: (_) => const OrderRequestHistoryPage(),
                   ),
                 );
-              } else if (value == 'home_care_handover_log') {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => const HomeCareHandoverLogPage(),
-                  ),
-                );
               } else if (value == 'reorder') {
                 _goToReorder();
               } else if (value == 'org') {
@@ -901,16 +895,6 @@ class _StoreListPageState extends State<StoreListPage> {
                     Icon(Icons.history_edu),
                     SizedBox(width: 12),
                     Text('発注ボタン履歴'),
-                  ],
-                ),
-              ),
-              const PopupMenuItem(
-                value: 'home_care_handover_log',
-                child: Row(
-                  children: [
-                    Icon(Icons.assignment_turned_in_outlined),
-                    SizedBox(width: 12),
-                    Text('ホームケアセット納品履歴'),
                   ],
                 ),
               ),
