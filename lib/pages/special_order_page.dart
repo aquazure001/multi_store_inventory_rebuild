@@ -283,13 +283,6 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     );
   }
 
-  int _homeCareReflectedTotalForItem(SpecialOrderItem item) {
-    return (_homeCareReflectedUnits[item.id] ?? {}).values.fold(
-      0,
-      (a, b) => a + b,
-    );
-  }
-
   int _homeCareOrderedLotTotalForItem(SpecialOrderItem item) {
     return (_orders[item.id] ?? {}).values.fold(0, (a, b) => a + b);
   }
@@ -315,98 +308,6 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     return _homeCareCustomerOrdersForItem(item)
         .where((entry) => entry.delivered)
         .fold(0, (total, entry) => total + entry.qty);
-  }
-
-  Future<void> _syncHomeCareExistingOrders(SpecialOrderItem item) async {
-    if (!_isHomeCareSet(item)) return;
-    final storeOrders = Map<String, int>.from(_orders[item.id] ?? {});
-    final totalLots = storeOrders.values.fold(0, (a, b) => a + b);
-    if (totalLots <= 0) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('反映する発注済みロットがありません')));
-      return;
-    }
-
-    final lot = _homeCareLotFor(item);
-    final lotSize = _positiveIntFromController(
-      _homeCareLotCtrl(item),
-      lot.lotSize <= 0 ? 1 : lot.lotSize,
-    );
-    final targetUnitsByStore = <String, int>{};
-    for (final entry in storeOrders.entries) {
-      if (entry.value > 0) {
-        targetUnitsByStore[entry.key] = entry.value * lotSize;
-      }
-    }
-    final targetTotal = targetUnitsByStore.values.fold(0, (a, b) => a + b);
-    final reflectedTotal = _homeCareReflectedTotalForItem(item);
-    final delta = reflectedTotal == 0 && lot.remaining > 0
-        ? max(0, targetTotal - lot.remaining)
-        : targetTotal - reflectedTotal;
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('既存発注を在庫へ反映'),
-        content: Text(
-          '${item.name}\n発注済み $totalLots ロット × 1ロット $lotSize 個 = $targetTotal 個\n\n引渡可能在庫へ反映します。\n※すでに反映済みの分は二重加算しません。',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('キャンセル'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('反映する'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-
-    try {
-      await AppSession.doc('special_orders').set({
-        'homeCareLots': {
-          lot.key: {
-            'code': item.code,
-            'name': item.name,
-            'lotSize': lotSize,
-            if (delta > 0)
-              'remaining': FieldValue.increment(delta)
-            else if (delta < 0)
-              'remaining': max(0, lot.remaining + delta),
-            'updatedAt': FieldValue.serverTimestamp(),
-          },
-        },
-        'homeCareReflectedUnits': {item.id: targetUnitsByStore},
-      }, SetOptions(merge: true));
-
-      setState(() {
-        _homeCareLots[lot.key] = lot.copyWith(
-          code: item.code,
-          name: item.name,
-          lotSize: lotSize,
-          remaining: max(0, lot.remaining + delta),
-        );
-        _homeCareReflectedUnits[item.id] = targetUnitsByStore;
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('既存発注を在庫へ反映しました'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('反映失敗: $e'), backgroundColor: Colors.red),
-        );
-      }
-    }
   }
 
   String _fmtDate(DateTime d) =>
@@ -1751,6 +1652,125 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     }
   }
 
+  Future<void> _editHomeCareLegacyOrder(
+    SpecialOrderItem item,
+    String storeId,
+    String storeName,
+    int currentQty,
+  ) async {
+    final ctrl = TextEditingController(text: '$currentQty');
+    try {
+      final result = await showDialog<int?>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('旧方式発注分を修正'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                item.name,
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 4),
+              Text(storeName),
+              const SizedBox(height: 12),
+              TextField(
+                controller: ctrl,
+                keyboardType: TextInputType.number,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  labelText: '発注数',
+                  suffixText: '個',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '0にすると削除します。これは旧方式の入力数だけを修正します。',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              child: const Text('キャンセル'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final value = int.tryParse(ctrl.text.trim());
+                if (value == null || value < 0) return;
+                Navigator.of(ctx).pop(value);
+              },
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      );
+      if (result == null) return;
+      if (!mounted) return;
+
+      if (result <= 0) {
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('旧方式発注分を削除'),
+            content: Text('$storeName の ${item.name} の旧方式発注分を削除しますか？'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('キャンセル'),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red,
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('削除する'),
+              ),
+            ],
+          ),
+        );
+        if (confirmed != true) return;
+        await AppSession.doc(
+          'special_orders',
+        ).update({'orders.${item.id}.$storeId': FieldValue.delete()});
+        setState(() {
+          _orders[item.id]?.remove(storeId);
+          if (_orders[item.id]?.isEmpty ?? false) _orders.remove(item.id);
+        });
+      } else {
+        await AppSession.doc('special_orders').set({
+          'orders': {
+            item.id: {storeId: result},
+          },
+        }, SetOptions(merge: true));
+        setState(() {
+          _orders.putIfAbsent(item.id, () => {})[storeId] = result;
+        });
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('旧方式発注分を修正しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('修正失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      ctrl.dispose();
+    }
+  }
+
   Widget _buildHomeCareLegacyOrderBox(SpecialOrderItem item) {
     final storeOrders =
         (_orders[item.id] ?? {}).entries
@@ -1772,13 +1792,10 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
 
     if (storeOrders.isEmpty) return const SizedBox.shrink();
 
-    final lot = _homeCareLotFor(item);
-    final lotSize = max(1, lot.lotSize);
-    final totalLots = storeOrders.fold<int>(
+    final totalQty = storeOrders.fold<int>(
       0,
       (total, entry) => total + entry.value,
     );
-    final totalUnits = totalLots * lotSize;
 
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -1805,7 +1822,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 ),
               ),
               Text(
-                '合計 $totalLots ロット / 目安 $totalUnits 個',
+                '合計 $totalQty 個',
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.bold,
@@ -1816,7 +1833,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           ),
           const SizedBox(height: 6),
           Text(
-            '以前の店舗別仮発注で入力された分です。データは消していません。',
+            '以前の店舗別入力分です。スタッフ入力の個数として表示しています。',
             style: TextStyle(fontSize: 12, color: Colors.orange.shade900),
           ),
           const SizedBox(height: 8),
@@ -1828,7 +1845,6 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                   orElse: () =>
                       LegacyStore(id: entry.key, code: '', name: entry.key),
                 );
-                final units = entry.value * lotSize;
                 return Container(
                   margin: const EdgeInsets.only(bottom: 6),
                   padding: const EdgeInsets.symmetric(
@@ -1849,16 +1865,21 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                         ),
                       ),
                       Text(
-                        '${entry.value} ロット',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
+                        '${entry.value} 個',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                       const SizedBox(width: 8),
-                      Text(
-                        '目安 $units 個',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey.shade700,
+                      OutlinedButton(
+                        onPressed: () => _editHomeCareLegacyOrder(
+                          item,
+                          entry.key,
+                          store.name,
+                          entry.value,
                         ),
+                        child: const Text('修正'),
                       ),
                     ],
                   ),
@@ -2239,7 +2260,6 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     final lot = _homeCareLotFor(item);
     final lotCtrl = _homeCareLotCtrl(item);
     final orderedLots = _homeCareOrderedLotTotalForItem(item);
-    final reflectedUnits = _homeCareReflectedTotalForItem(item);
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
       padding: const EdgeInsets.all(10),
@@ -2264,7 +2284,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
               ),
               if (orderedLots > 0)
                 Text(
-                  '発注済 $orderedLots ロット',
+                  '旧入力 $orderedLots 個',
                   style: TextStyle(
                     fontSize: 12,
                     color: Colors.orange.shade900,
@@ -2300,10 +2320,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           ),
           if (orderedLots > 0) ...[
             const SizedBox(height: 8),
-            OutlinedButton.icon(
-              onPressed: () => _syncHomeCareExistingOrders(item),
-              icon: const Icon(Icons.sync),
-              label: Text(reflectedUnits > 0 ? '発注済み分を再計算' : '発注済み分を在庫へ反映'),
+            Text(
+              '旧方式の入力分は下に個数で表示されます。実際に仕入れた在庫数は、このロット設定で発注するか、納品可能在庫を修正してください。',
+              style: TextStyle(fontSize: 11, color: Colors.orange.shade900),
             ),
           ],
         ],
