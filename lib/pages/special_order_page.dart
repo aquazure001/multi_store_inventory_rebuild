@@ -1751,6 +1751,125 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     }
   }
 
+  Widget _buildHomeCareLegacyOrderBox(SpecialOrderItem item) {
+    final storeOrders =
+        (_orders[item.id] ?? {}).entries
+            .where((entry) => entry.value > 0)
+            .toList()
+          ..sort((a, b) {
+            final storeA = _stores.firstWhere(
+              (store) => store.id == a.key,
+              orElse: () => LegacyStore(id: a.key, code: '', name: a.key),
+            );
+            final storeB = _stores.firstWhere(
+              (store) => store.id == b.key,
+              orElse: () => LegacyStore(id: b.key, code: '', name: b.key),
+            );
+            final codeCompare = storeA.code.compareTo(storeB.code);
+            if (codeCompare != 0) return codeCompare;
+            return storeA.name.compareTo(storeB.name);
+          });
+
+    if (storeOrders.isEmpty) return const SizedBox.shrink();
+
+    final lot = _homeCareLotFor(item);
+    final lotSize = max(1, lot.lotSize);
+    final totalLots = storeOrders.fold<int>(
+      0,
+      (total, entry) => total + entry.value,
+    );
+    final totalUnits = totalLots * lotSize;
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.orange.shade50,
+        border: Border.all(color: Colors.orange.shade200),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.history, color: Colors.orange.shade800),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '旧方式の発注分',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.orange.shade900,
+                  ),
+                ),
+              ),
+              Text(
+                '合計 $totalLots ロット / 目安 $totalUnits 個',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.orange.shade900,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '以前の店舗別仮発注で入力された分です。データは消していません。',
+            style: TextStyle(fontSize: 12, color: Colors.orange.shade900),
+          ),
+          const SizedBox(height: 8),
+          for (final entry in storeOrders)
+            Builder(
+              builder: (context) {
+                final store = _stores.firstWhere(
+                  (store) => store.id == entry.key,
+                  orElse: () =>
+                      LegacyStore(id: entry.key, code: '', name: entry.key),
+                );
+                final units = entry.value * lotSize;
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    border: Border.all(color: Colors.orange.shade100),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          store.name,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                      Text(
+                        '${entry.value} ロット',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        '目安 $units 個',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade700,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildHomeCareCustomerOrderBox(SpecialOrderItem item) {
     final codeCtrl = _homeCareCustomerCtrl(item);
     final nameCtrl = _homeCareCustomerNameCtrl(item);
@@ -2598,6 +2717,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
             if (AppSession.isAdmin || AppSession.isSuperAdmin)
               _buildHomeCareOrderLotBox(item),
             _buildHomeCareCustomerOrderBox(item),
+            _buildHomeCareLegacyOrderBox(item),
           ] else ...[
             const Padding(
               padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
