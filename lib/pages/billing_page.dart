@@ -3007,6 +3007,199 @@ class _BillingPageState extends State<BillingPage> {
     }
   }
 
+  CollectionReference<Map<String, dynamic>> get _manualTemplateCollection =>
+      AppSession.doc('manual_billing_templates').collection('entries');
+
+  List<Map<String, dynamic>> _manualTemplateRowsFromControllers(
+    List<_ManualBillingLineControllers> rows,
+  ) {
+    final result = <Map<String, dynamic>>[];
+    for (final row in rows) {
+      final name = row.name.text.trim();
+      final qty = inventoryIntValue(row.qty.text);
+      final unitPrice = inventoryIntValue(row.unitPrice.text);
+      if (name.isEmpty && unitPrice <= 0) continue;
+      result.add({
+        'type': row.type.text.trim().isEmpty ? '任意' : row.type.text.trim(),
+        'code': row.code.text.trim(),
+        'name': name,
+        'qty': qty <= 0 ? 1 : qty,
+        'unitPrice': unitPrice,
+        'taxRate': row.taxRate == 8 ? 8 : 10,
+        'taxIncluded': row.taxIncluded,
+      });
+    }
+    return result;
+  }
+
+  void _applyManualTemplateRows(
+    List<_ManualBillingLineControllers> rows,
+    List<dynamic> templateRows,
+  ) {
+    for (final row in rows) {
+      row.type.text = '任意';
+      row.code.clear();
+      row.name.clear();
+      row.qty.text = '1';
+      row.unitPrice.clear();
+      row.taxRate = 10;
+      row.taxIncluded = false;
+    }
+    for (int i = 0; i < rows.length && i < templateRows.length; i++) {
+      final raw = templateRows[i];
+      if (raw is! Map) continue;
+      final map = Map<String, dynamic>.from(
+        raw.map((k, v) => MapEntry(k.toString(), v)),
+      );
+      rows[i].type.text = (map['type'] ?? '任意').toString();
+      rows[i].code.text = (map['code'] ?? '').toString();
+      rows[i].name.text = (map['name'] ?? '').toString();
+      rows[i].qty.text = '${max(1, inventoryIntValue(map['qty']))}';
+      rows[i].unitPrice.text = inventoryIntValue(map['unitPrice']) <= 0
+          ? ''
+          : '${inventoryIntValue(map['unitPrice'])}';
+      rows[i].taxRate = inventoryIntValue(map['taxRate']) == 8 ? 8 : 10;
+      rows[i].taxIncluded = map['taxIncluded'] == true;
+    }
+  }
+
+  Future<void> _saveManualBillingTemplate(
+    BuildContext dialogContext,
+    List<_ManualBillingLineControllers> rows,
+  ) async {
+    final templateRows = _manualTemplateRowsFromControllers(rows);
+    if (templateRows.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('保存する内容を1行以上入力してください'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    final nameController = TextEditingController(
+      text: (templateRows.first['name'] ?? '任意項目テンプレート').toString(),
+    );
+    final templateName = await showDialog<String>(
+      context: dialogContext,
+      builder: (ctx) => AlertDialog(
+        title: const Text('この内容を保存'),
+        content: TextField(
+          controller: nameController,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: '保存名',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(nameController.text.trim()),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    nameController.dispose();
+    if (templateName == null || templateName.trim().isEmpty) return;
+
+    try {
+      await _manualTemplateCollection.add({
+        'name': templateName.trim(),
+        'items': templateRows,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+        'updatedAtLocal': DateTime.now().toIso8601String(),
+        'createdBy': AppSession.nickname,
+        'createdByEmail': AppSession.email,
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('任意項目テンプレートを保存しました'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('テンプレート保存失敗: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  Future<void> _selectManualBillingTemplate(
+    BuildContext dialogContext,
+    List<_ManualBillingLineControllers> rows,
+    StateSetter dialogSetState,
+  ) async {
+    try {
+      final snap = await _manualTemplateCollection.get();
+      final docs = snap.docs.toList()
+        ..sort((a, b) {
+          final ad = (a.data()['updatedAtLocal'] ?? '').toString();
+          final bd = (b.data()['updatedAtLocal'] ?? '').toString();
+          return bd.compareTo(ad);
+        });
+      if (docs.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('保存済みテンプレートはありません'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+      if (!dialogContext.mounted) return;
+      final selected =
+          await showDialog<QueryDocumentSnapshot<Map<String, dynamic>>>(
+            context: dialogContext,
+            builder: (ctx) => SimpleDialog(
+              title: const Text('保存済み内容を呼び出す'),
+              children: [
+                for (final doc in docs)
+                  SimpleDialogOption(
+                    onPressed: () => Navigator.of(ctx).pop(doc),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          (doc.data()['name'] ?? '無題').toString(),
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          '${(doc.data()['items'] as List?)?.length ?? 0}行',
+                          style: TextStyle(
+                            color: Colors.grey.shade600,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          );
+      if (selected == null) return;
+      final items = selected.data()['items'];
+      if (items is! List) return;
+      dialogSetState(() {
+        _applyManualTemplateRows(rows, items);
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('テンプレート読込失敗: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
   Future<void> _createManualInvoice() async {
     final availableStores = _manualIssuanceStoreOptions();
     if (availableStores.isEmpty) {
@@ -3129,6 +3322,30 @@ class _BillingPageState extends State<BillingPage> {
                           ),
                         ],
                       ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => _selectManualBillingTemplate(
+                              ctx,
+                              rows,
+                              dialogSetState,
+                            ),
+                            icon: const Icon(Icons.folder_open),
+                            label: const Text('保存済み内容を呼び出す'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () =>
+                                _saveManualBillingTemplate(ctx, rows),
+                            icon: const Icon(Icons.save_alt),
+                            label: const Text('この内容を保存'),
+                          ),
+                        ),
+                      ],
+                    ),
                     const SizedBox(height: 8),
                     for (int i = 0; i < rows.length; i++)
                       Padding(
@@ -3591,6 +3808,30 @@ class _BillingPageState extends State<BillingPage> {
                           ),
                         ],
                       ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => _selectManualBillingTemplate(
+                              ctx,
+                              rows,
+                              dialogSetState,
+                            ),
+                            icon: const Icon(Icons.folder_open),
+                            label: const Text('保存済み内容を呼び出す'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () =>
+                                _saveManualBillingTemplate(ctx, rows),
+                            icon: const Icon(Icons.save_alt),
+                            label: const Text('この内容を保存'),
+                          ),
+                        ),
+                      ],
+                    ),
                     const SizedBox(height: 8),
                     for (int i = 0; i < rows.length; i++)
                       Padding(
