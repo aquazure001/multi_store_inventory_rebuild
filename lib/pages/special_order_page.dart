@@ -22,6 +22,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   Map<String, Map<String, int>> _deliveries = {};
   Map<String, _HomeCareLotStock> _homeCareLots = {};
   Map<String, Map<String, int>> _homeCareReflectedUnits = {};
+  final Map<String, _HomeCareCustomerOrderEntry> _homeCareCustomerOrders = {};
   List<_HandoverLogEntry> _handoverLogs = [];
   List<_RemainingAdjustmentEntry> _remainingAdjustments = [];
   bool _loading = true;
@@ -30,6 +31,10 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   final Map<String, TextEditingController> _controllers = {};
   final Map<String, TextEditingController> _homeCareLotControllers = {};
   final Map<String, TextEditingController> _homeCareCustomerControllers = {};
+  final Map<String, TextEditingController> _homeCareCustomerNameControllers =
+      {};
+  final Map<String, TextEditingController>
+  _homeCareCustomerOrderQtyControllers = {};
   final Map<String, TextEditingController> _homeCareDeliveryControllers = {};
 
   static const _kTypes = ['特別発注', '新規発注', 'その他'];
@@ -49,6 +54,12 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       c.dispose();
     }
     for (final c in _homeCareCustomerControllers.values) {
+      c.dispose();
+    }
+    for (final c in _homeCareCustomerNameControllers.values) {
+      c.dispose();
+    }
+    for (final c in _homeCareCustomerOrderQtyControllers.values) {
       c.dispose();
     }
     for (final c in _homeCareDeliveryControllers.values) {
@@ -147,6 +158,23 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         }
       }
 
+      final rawCustomerOrders = raw['homeCareCustomerOrders'];
+      final customerOrders = <String, _HomeCareCustomerOrderEntry>{};
+      if (rawCustomerOrders is Map) {
+        for (final e in rawCustomerOrders.entries) {
+          final value = e.value;
+          if (value is! Map) continue;
+          final map = Map<String, dynamic>.from(
+            value.map((k, v) => MapEntry(k.toString(), v)),
+          );
+          final entry = _HomeCareCustomerOrderEntry.fromMap(
+            e.key.toString(),
+            map,
+          );
+          if (entry.id.isNotEmpty) customerOrders[entry.id] = entry;
+        }
+      }
+
       setState(() {
         _items = items;
         _stores = stores;
@@ -154,6 +182,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         _deliveries = parseNestedQty(raw['deliveries']);
         _homeCareLots = homeCareLots;
         _homeCareReflectedUnits = parseNestedQty(raw['homeCareReflectedUnits']);
+        _homeCareCustomerOrders
+          ..clear()
+          ..addAll(customerOrders);
         _handoverLogs = handoverLogs;
         _remainingAdjustments = adjustments;
         _loading = false;
@@ -228,6 +259,22 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     );
   }
 
+  TextEditingController _homeCareCustomerNameCtrl(SpecialOrderItem item) {
+    final key = _homeCareLotKey(item);
+    return _homeCareCustomerNameControllers.putIfAbsent(
+      key,
+      () => TextEditingController(),
+    );
+  }
+
+  TextEditingController _homeCareCustomerOrderQtyCtrl(SpecialOrderItem item) {
+    final key = _homeCareLotKey(item);
+    return _homeCareCustomerOrderQtyControllers.putIfAbsent(
+      key,
+      () => TextEditingController(text: '1'),
+    );
+  }
+
   TextEditingController _homeCareDeliveryQtyCtrl(SpecialOrderItem item) {
     final key = _homeCareLotKey(item);
     return _homeCareDeliveryControllers.putIfAbsent(
@@ -245,6 +292,29 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
 
   int _homeCareOrderedLotTotalForItem(SpecialOrderItem item) {
     return (_orders[item.id] ?? {}).values.fold(0, (a, b) => a + b);
+  }
+
+  List<_HomeCareCustomerOrderEntry> _homeCareCustomerOrdersForItem(
+    SpecialOrderItem item,
+  ) {
+    final lotKey = _homeCareLotKey(item);
+    final result = _homeCareCustomerOrders.values
+        .where((entry) => entry.itemId == item.id || entry.lotKey == lotKey)
+        .toList();
+    result.sort((a, b) => b.orderedAt.compareTo(a.orderedAt));
+    return result;
+  }
+
+  int _homeCareCustomerOrderTotalForItem(SpecialOrderItem item) {
+    return _homeCareCustomerOrdersForItem(
+      item,
+    ).fold(0, (total, entry) => total + entry.qty);
+  }
+
+  int _homeCareCustomerDeliveredTotalForItem(SpecialOrderItem item) {
+    return _homeCareCustomerOrdersForItem(item)
+        .where((entry) => entry.delivered)
+        .fold(0, (total, entry) => total + entry.qty);
   }
 
   Future<void> _syncHomeCareExistingOrders(SpecialOrderItem item) async {
@@ -590,6 +660,206 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     }
   }
 
+  Future<void> _placeHomeCareCustomerOrder(SpecialOrderItem item) async {
+    if (!item.isInSalesPeriod) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            item.isBeforeSales ? '販売期間前のため入力できません' : '販売期間終了のため入力できません',
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    final customerCode = _homeCareCustomerCtrl(item).text.trim();
+    final customerName = _homeCareCustomerNameCtrl(item).text.trim();
+    final qty =
+        int.tryParse(_homeCareCustomerOrderQtyCtrl(item).text.trim()) ?? 0;
+    if (customerCode.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('顧客コードを入力してください')));
+      return;
+    }
+    if (qty <= 0) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('発注数は1以上にしてください')));
+      return;
+    }
+    final lot = _homeCareLotFor(item);
+    final now = DateTime.now();
+    final entryId =
+        'hco_${now.microsecondsSinceEpoch}_${customerCode.replaceAll(RegExp(r'[^0-9A-Za-z_-]'), '')}';
+    final entry = _HomeCareCustomerOrderEntry(
+      id: entryId,
+      itemId: item.id,
+      lotKey: lot.key,
+      itemCode: item.code,
+      itemName: item.name,
+      customerCode: customerCode,
+      customerName: customerName,
+      qty: qty,
+      delivered: false,
+      orderedAt: now,
+      deliveredAt: null,
+    );
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('ホームケア仮発注確認'),
+        content: Text(
+          '${item.name}\n顧客コード: $customerCode\n顧客名: ${customerName.isEmpty ? '-' : customerName}\n数量: $qty 個\n\nこの内容で仮発注します。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('仮発注する'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await AppSession.doc('special_orders').set({
+        'homeCareLots': {
+          lot.key: {
+            'code': item.code,
+            'name': item.name,
+            'lotSize': _positiveIntFromController(
+              _homeCareLotCtrl(item),
+              lot.lotSize <= 0 ? 1 : lot.lotSize,
+            ),
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        },
+        'homeCareCustomerOrders': {entryId: entry.toMap()},
+      }, SetOptions(merge: true));
+      setState(() {
+        _homeCareCustomerOrders[entryId] = entry;
+        _homeCareCustomerCtrl(item).clear();
+        _homeCareCustomerNameCtrl(item).clear();
+        _homeCareCustomerOrderQtyCtrl(item).text = '1';
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('顧客別に仮発注しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('仮発注失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _toggleHomeCareCustomerDelivered(
+    SpecialOrderItem item,
+    _HomeCareCustomerOrderEntry entry,
+    bool delivered,
+  ) async {
+    if (entry.delivered == delivered) return;
+    final lot = _homeCareLotFor(item);
+    if (delivered && entry.qty > lot.remaining) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('在庫が不足しています（在庫 ${lot.remaining} 個）'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(delivered ? '引渡し済みにしますか？' : '引渡し済みを解除しますか？'),
+        content: Text(
+          '${entry.customerCode} / ${entry.customerName.isEmpty ? '-' : entry.customerName}\n${entry.qty} 個\n\n${delivered ? '在庫から数量を減らします。' : '在庫へ数量を戻します。'}',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(delivered ? '引渡し済みにする' : '解除する'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    final now = DateTime.now();
+    final updated = entry.copyWith(
+      delivered: delivered,
+      deliveredAt: delivered ? now : null,
+    );
+    final stockDelta = delivered ? -entry.qty : entry.qty;
+    try {
+      await AppSession.doc('special_orders').set({
+        'homeCareLots': {
+          lot.key: {
+            'code': item.code,
+            'name': item.name,
+            'lotSize': _positiveIntFromController(
+              _homeCareLotCtrl(item),
+              lot.lotSize <= 0 ? 1 : lot.lotSize,
+            ),
+            'remaining': FieldValue.increment(stockDelta),
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        },
+        'homeCareCustomerOrders': {entry.id: updated.toMap()},
+        'homeCareHandoverLogs': FieldValue.arrayUnion([
+          {
+            'key': lot.key,
+            'code': item.code,
+            'name': item.name,
+            'customerCode': entry.customerCode,
+            'qty': delivered ? entry.qty : -entry.qty,
+            'at': Timestamp.now(),
+          },
+        ]),
+      }, SetOptions(merge: true));
+      setState(() {
+        _homeCareLots[lot.key] = lot.copyWith(
+          code: item.code,
+          name: item.name,
+          remaining: max(0, lot.remaining + stockDelta),
+        );
+        _homeCareCustomerOrders[entry.id] = updated;
+        _handoverLogs.add(
+          _HandoverLogEntry(
+            key: lot.key,
+            customerCode: entry.customerCode,
+            qty: delivered ? entry.qty : -entry.qty,
+            at: now,
+          ),
+        );
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('引渡し更新失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
   Future<void> _deliverHomeCare(SpecialOrderItem item) async {
     final lot = _homeCareLotFor(item);
     final customerCode = _homeCareCustomerCtrl(item).text.trim();
@@ -695,7 +965,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   }
 
   Future<void> _editRemaining(SpecialOrderItem item) async {
-    if (!AppSession.isSuperAdmin) return;
+    if (!(AppSession.isAdmin || AppSession.isSuperAdmin)) return;
     final lot = _homeCareLotFor(item);
     final newValueCtrl = TextEditingController(text: '${lot.remaining}');
     final reasonCtrl = TextEditingController();
@@ -1481,6 +1751,161 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     }
   }
 
+  Widget _buildHomeCareCustomerOrderBox(SpecialOrderItem item) {
+    final codeCtrl = _homeCareCustomerCtrl(item);
+    final nameCtrl = _homeCareCustomerNameCtrl(item);
+    final qtyCtrl = _homeCareCustomerOrderQtyCtrl(item);
+    final orders = _homeCareCustomerOrdersForItem(item);
+    final total = _homeCareCustomerOrderTotalForItem(item);
+    final deliveredTotal = _homeCareCustomerDeliveredTotalForItem(item);
+    final pendingTotal = max(0, total - deliveredTotal);
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.green.shade50,
+        border: Border.all(color: Colors.green.shade200),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.people_alt_outlined, color: Colors.green.shade700),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '顧客別 仮発注',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.green.shade900,
+                  ),
+                ),
+              ),
+              Text(
+                '期間合計 $total 個 / 未引渡し $pendingTotal 個',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.green.shade900,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (item.isInSalesPeriod) ...[
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: codeCtrl,
+                    decoration: const InputDecoration(
+                      labelText: '顧客コード',
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(
+                      labelText: '顧客名',
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 92,
+                  child: TextField(
+                    controller: qtyCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: '数量',
+                      suffixText: '個',
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ElevatedButton.icon(
+              onPressed: () => _placeHomeCareCustomerOrder(item),
+              icon: const Icon(Icons.add_shopping_cart),
+              label: const Text('顧客別に仮発注'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green,
+                foregroundColor: Colors.white,
+              ),
+            ),
+          ] else
+            Text(
+              item.isBeforeSales ? '発注期間前のため入力できません' : '発注期間終了のため入力できません',
+              style: TextStyle(color: Colors.grey.shade700),
+            ),
+          const Divider(height: 18),
+          if (orders.isEmpty)
+            Text(
+              '顧客別の仮発注はまだありません',
+              style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+            )
+          else
+            for (final entry in orders)
+              _buildHomeCareCustomerOrderRow(item, entry),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHomeCareCustomerOrderRow(
+    SpecialOrderItem item,
+    _HomeCareCustomerOrderEntry entry,
+  ) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: entry.delivered ? Colors.grey.shade100 : Colors.white,
+        border: Border.all(
+          color: entry.delivered ? Colors.grey.shade300 : Colors.green.shade100,
+        ),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '顧客コード: ${entry.customerCode} / 顧客名: ${entry.customerName.isEmpty ? '-' : entry.customerName}',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  '発注数: ${entry.qty}個 / ${_formatDateTime(entry.orderedAt)}',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                ),
+              ],
+            ),
+          ),
+          Checkbox(
+            value: entry.delivered,
+            onChanged: (value) =>
+                _toggleHomeCareCustomerDelivered(item, entry, value == true),
+          ),
+          const Text('引渡し済み'),
+        ],
+      ),
+    );
+  }
+
   Widget _buildHomeCareLotPanel(SpecialOrderItem item) {
     final lot = _homeCareLotFor(item);
     final customerCtrl = _homeCareCustomerCtrl(item);
@@ -1543,7 +1968,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    if (AppSession.isSuperAdmin) ...[
+                    if (AppSession.isAdmin || AppSession.isSuperAdmin) ...[
                       const SizedBox(width: 8),
                       InkWell(
                         onTap: () => _editRemaining(item),
@@ -1963,7 +2388,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '商品コードごとに、今お客様へ納品できる在庫数を表示しています。',
+                  '実際に納品した数量から、スタッフの引渡し済み数量を差し引いた在庫数です。',
                   style: TextStyle(
                     fontSize: 12,
                     color: Colors.blueGrey.shade700,
@@ -2039,10 +2464,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
 
   Widget _buildItemCard(SpecialOrderItem item) {
     final c = _typeColor(item.type);
-    final totalOrdered = (_orders[item.id] ?? {}).values.fold(
-      0,
-      (a, b) => a + b,
-    );
+    final totalOrdered = _isHomeCareSet(item)
+        ? _homeCareCustomerOrderTotalForItem(item)
+        : (_orders[item.id] ?? {}).values.fold(0, (a, b) => a + b);
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -2170,19 +2594,24 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         ),
         children: [
           const Divider(height: 1),
-          if (_isHomeCareSet(item)) _buildHomeCareOrderLotBox(item),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
-            child: Text(
-              '各店舗 仮発注数',
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey,
-                fontWeight: FontWeight.bold,
+          if (_isHomeCareSet(item)) ...[
+            if (AppSession.isAdmin || AppSession.isSuperAdmin)
+              _buildHomeCareOrderLotBox(item),
+            _buildHomeCareCustomerOrderBox(item),
+          ] else ...[
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: Text(
+                '各店舗 仮発注数',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
-          ),
-          for (final store in _stores) _buildStoreRow(item, store),
+            for (final store in _stores) _buildStoreRow(item, store),
+          ],
           const SizedBox(height: 4),
         ],
       ),
@@ -2332,6 +2761,88 @@ class _HomeCareLotStock {
       name: name ?? this.name,
       lotSize: lotSize ?? this.lotSize,
       remaining: remaining ?? this.remaining,
+    );
+  }
+}
+
+class _HomeCareCustomerOrderEntry {
+  const _HomeCareCustomerOrderEntry({
+    required this.id,
+    required this.itemId,
+    required this.lotKey,
+    required this.itemCode,
+    required this.itemName,
+    required this.customerCode,
+    required this.customerName,
+    required this.qty,
+    required this.delivered,
+    required this.orderedAt,
+    required this.deliveredAt,
+  });
+
+  final String id;
+  final String itemId;
+  final String lotKey;
+  final String itemCode;
+  final String itemName;
+  final String customerCode;
+  final String customerName;
+  final int qty;
+  final bool delivered;
+  final DateTime orderedAt;
+  final DateTime? deliveredAt;
+
+  factory _HomeCareCustomerOrderEntry.fromMap(
+    String fallbackId,
+    Map<String, dynamic> map,
+  ) {
+    return _HomeCareCustomerOrderEntry(
+      id: (map['id'] ?? fallbackId).toString(),
+      itemId: (map['itemId'] ?? '').toString(),
+      lotKey: (map['lotKey'] ?? map['key'] ?? '').toString(),
+      itemCode: (map['itemCode'] ?? map['code'] ?? '').toString(),
+      itemName: (map['itemName'] ?? map['name'] ?? '').toString(),
+      customerCode: (map['customerCode'] ?? '').toString(),
+      customerName: (map['customerName'] ?? '').toString(),
+      qty: max(0, inventoryIntValue(map['qty'])),
+      delivered: map['delivered'] == true,
+      orderedAt: _readLogTimestamp(map['orderedAt'] ?? map['at']),
+      deliveredAt: map['deliveredAt'] == null
+          ? null
+          : _readLogTimestamp(map['deliveredAt']),
+    );
+  }
+
+  Map<String, dynamic> toMap() => {
+    'id': id,
+    'itemId': itemId,
+    'lotKey': lotKey,
+    'itemCode': itemCode,
+    'itemName': itemName,
+    'customerCode': customerCode,
+    'customerName': customerName,
+    'qty': qty,
+    'delivered': delivered,
+    'orderedAt': Timestamp.fromDate(orderedAt),
+    if (deliveredAt != null) 'deliveredAt': Timestamp.fromDate(deliveredAt!),
+  };
+
+  _HomeCareCustomerOrderEntry copyWith({
+    bool? delivered,
+    DateTime? deliveredAt,
+  }) {
+    return _HomeCareCustomerOrderEntry(
+      id: id,
+      itemId: itemId,
+      lotKey: lotKey,
+      itemCode: itemCode,
+      itemName: itemName,
+      customerCode: customerCode,
+      customerName: customerName,
+      qty: qty,
+      delivered: delivered ?? this.delivered,
+      orderedAt: orderedAt,
+      deliveredAt: deliveredAt,
     );
   }
 }
