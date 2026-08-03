@@ -19,6 +19,7 @@ class _BillingPageState extends State<BillingPage> {
   String _selectedStoreId = '';
   DateTime _selectedMonth = DateTime(DateTime.now().year, DateTime.now().month);
   final Set<String> _selectedBillingTypes = <String>{'商品', 'テスター', '備品'};
+  List<LegacyStore> _orgStores = [];
   final List<_BillingLine> _lines = [];
   final List<_BillingInvoiceSummary> _invoices = [];
   final Set<String> _billedKeys = <String>{};
@@ -94,10 +95,14 @@ class _BillingPageState extends State<BillingPage> {
             .orderBy('createdAt', descending: true)
             .limit(60)
             .get(),
+        AppSession.doc('stores').get(),
       ]);
       final invoiceSnap = loadResults[0] as QuerySnapshot<Map<String, dynamic>>;
       final priceDoc = loadResults[1] as DocumentSnapshot<Map<String, dynamic>>;
       final batchSnap = loadResults[2] as QuerySnapshot<Map<String, dynamic>>;
+      final storesDoc =
+          loadResults[3] as DocumentSnapshot<Map<String, dynamic>>;
+      final orgStores = _parseStores(storesDoc.data() ?? <String, dynamic>{});
       final billedKeys = <String>{};
       final issuedMonthStoreKeys = <String>{};
       final invoices = <_BillingInvoiceSummary>[];
@@ -258,6 +263,7 @@ class _BillingPageState extends State<BillingPage> {
           ..clear()
           ..addAll(storeRecipients);
         _repaymentEnabled = repaymentEnabled;
+        _orgStores = orgStores;
         _lines
           ..clear()
           ..addAll(lines);
@@ -305,6 +311,23 @@ class _BillingPageState extends State<BillingPage> {
 
   String _monthKey(DateTime month) {
     return '${month.year}${month.month.toString().padLeft(2, '0')}';
+  }
+
+  String _monthInputText(DateTime month) {
+    return '${month.year}-${month.month.toString().padLeft(2, '0')}';
+  }
+
+  // 任意請求書・任意受領書の「対象月」欄用。空欄なら対象月なし（null）として扱う。
+  DateTime? _parseOptionalMonth(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty) return null;
+    final normalized = text.replaceAll('/', '-');
+    final parts = normalized.split('-');
+    if (parts.length < 2) return null;
+    final year = int.tryParse(parts[0].trim());
+    final month = int.tryParse(parts[1].trim());
+    if (year == null || month == null || month < 1 || month > 12) return null;
+    return DateTime(year, month);
   }
 
   DateTime _monthStart(DateTime month) => DateTime(month.year, month.month, 1);
@@ -368,6 +391,18 @@ class _BillingPageState extends State<BillingPage> {
         map[invoice.storeId] = invoice.storeName;
       }
     }
+    final entries = map.entries.toList()
+      ..sort((a, b) => a.value.compareTo(b.value));
+    return Map<String, String>.fromEntries(entries);
+  }
+
+  // 任意請求書・任意受領書の店舗選択用。請求実績（_lines/_invoices）ではなく
+  // 実際の店舗マスタ（org_{orgId}__stores）から取得するため、請求実績がまだ
+  // 一件も無い店舗・組織でも選択できる。
+  Map<String, String> _manualIssuanceStoreOptions() {
+    final map = <String, String>{
+      for (final store in _orgStores) store.id: store.name,
+    };
     final entries = map.entries.toList()
       ..sort((a, b) => a.value.compareTo(b.value));
     return Map<String, String>.fromEntries(entries);
@@ -1130,7 +1165,7 @@ class _BillingPageState extends State<BillingPage> {
     required _BillingPdfAssets assets,
     required String no,
     required DateTime date,
-    required DateTime billingMonth,
+    required DateTime? billingMonth,
     required String storeName,
     required String billingTypeText,
     required _BillingRecipient recipient,
@@ -1140,6 +1175,9 @@ class _BillingPageState extends State<BillingPage> {
     required int repaymentTotal,
     required int repaymentMonthlyAmount,
     required List<_BillingLine> lines,
+    // 任意請求書・任意受領書のみ、毎月返済額を合計に上乗せする
+    // （自動集計の月次請求は現状維持のため既定はfalse）。
+    bool includeRepaymentInTotal = false,
   }) async {
     final pdf = pw.Document();
     final isInvoice = kind == _BillingPdfKind.invoice;
@@ -1148,7 +1186,10 @@ class _BillingPageState extends State<BillingPage> {
     final subtotal = subtotal10 + subtotal8;
     final tax10 = _taxForLines(lines, 10);
     final tax8 = _taxForLines(lines, 8);
-    final total = subtotal + tax10 + tax8;
+    final repaymentAddition = includeRepaymentInTotal && repaymentEnabled
+        ? repaymentMonthlyAmount
+        : 0;
+    final total = subtotal + tax10 + tax8 + repaymentAddition;
     final title = isInvoice ? 'ご請求書' : '受領書';
     final mascot = isInvoice ? assets.mascotInvoice : assets.mascotReceipt;
 
@@ -1303,7 +1344,9 @@ class _BillingPageState extends State<BillingPage> {
                           isInvoice ? 'お支払期限' : '受領日',
                           isInvoice
                               ? (paymentDueTextOverride ??
-                                    _paymentDueTextForMonth(billingMonth))
+                                    (billingMonth != null
+                                        ? _paymentDueTextForMonth(billingMonth)
+                                        : '-'))
                               : _dateText(date),
                           assets.boldFont,
                         ),
@@ -1315,8 +1358,8 @@ class _BillingPageState extends State<BillingPage> {
                     padding: const pw.EdgeInsets.symmetric(horizontal: 8),
                     child: pw.Text(
                       repaymentEnabled
-                          ? '対象店舗：$storeName　種別：$billingTypeText　対象期間：${_periodText(billingMonth)}　定期返済：第$repaymentCurrent回 / 全$repaymentTotal回　毎月 ￥${_yen(repaymentMonthlyAmount)}'
-                          : '対象店舗：$storeName　種別：$billingTypeText　対象期間：${_periodText(billingMonth)}',
+                          ? '対象店舗：$storeName　種別：$billingTypeText　対象期間：${billingMonth != null ? _periodText(billingMonth) : '指定なし'}　定期返済：第$repaymentCurrent回 / 全$repaymentTotal回　毎月 ￥${_yen(repaymentMonthlyAmount)}'
+                          : '対象店舗：$storeName　種別：$billingTypeText　対象期間：${billingMonth != null ? _periodText(billingMonth) : '指定なし'}',
                       style: pw.TextStyle(font: assets.boldFont, fontSize: 9.0),
                     ),
                   ),
@@ -1332,6 +1375,7 @@ class _BillingPageState extends State<BillingPage> {
                         tax8,
                         total,
                         assets.boldFont,
+                        repaymentAddition: repaymentAddition,
                       ),
                     ],
                   ),
@@ -1707,8 +1751,9 @@ class _BillingPageState extends State<BillingPage> {
     int tax10,
     int tax8,
     int total,
-    pw.Font fontBold,
-  ) {
+    pw.Font fontBold, {
+    int repaymentAddition = 0,
+  }) {
     pw.Widget row(
       String label,
       int value, {
@@ -1744,6 +1789,7 @@ class _BillingPageState extends State<BillingPage> {
           row('小計', subtotal),
           row('消費税(10%)', tax10),
           row('消費税(8%)', tax8),
+          if (repaymentAddition > 0) row('定期返済（毎月返済額）', repaymentAddition),
           row('合計', total, bold: true, fill: true),
         ],
       ),
@@ -2229,23 +2275,49 @@ class _BillingPageState extends State<BillingPage> {
     }
   }
 
-  DateTime _manualDueDate(DateTime baseMonth, String raw) {
+  DateTime? _parseOptionalDateInput(String raw) {
     final text = raw.trim();
-    if (text.isEmpty) return DateTime(baseMonth.year, baseMonth.month + 1, 0);
+    if (text.isEmpty) return null;
     final normalized = text.replaceAll('/', '-').replaceAll('.', '-');
-    return DateTime.tryParse(normalized) ??
+    final strict = DateTime.tryParse(normalized);
+    if (strict != null) return strict;
+
+    final match = RegExp(
+      r'^(\d{4})-(\d{1,2})-(\d{1,2})$',
+    ).firstMatch(normalized);
+    if (match == null) return null;
+    final year = int.tryParse(match.group(1)!);
+    final month = int.tryParse(match.group(2)!);
+    final day = int.tryParse(match.group(3)!);
+    if (year == null || month == null || day == null) return null;
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    final parsed = DateTime(year, month, day);
+    if (parsed.year != year || parsed.month != month || parsed.day != day) {
+      return null;
+    }
+    return parsed;
+  }
+
+  DateTime _manualDueDate(DateTime baseMonth, String raw) {
+    return _parseOptionalDateInput(raw) ??
         DateTime(baseMonth.year, baseMonth.month + 1, 0);
   }
 
   DateTime _manualIssueDate(String raw) {
+    return _parseOptionalDateInput(raw) ?? DateTime.now();
+  }
+
+  // 空欄は許容（当日／末日として扱う）が、何か入力されているのに
+  // 解釈できない場合は不正とみなす。2026-7-31 のような月日1桁も許容する。
+  bool _isValidOptionalDateInput(String raw) {
     final text = raw.trim();
-    if (text.isEmpty) return DateTime.now();
-    final normalized = text.replaceAll('/', '-').replaceAll('.', '-');
-    return DateTime.tryParse(normalized) ?? DateTime.now();
+    if (text.isEmpty) return true;
+    return _parseOptionalDateInput(text) != null;
   }
 
   List<_BillingLine> _manualLinesFromRows(
     List<_ManualBillingLineControllers> rows,
+    String storeId,
     String storeName,
   ) {
     final nowMicros = DateTime.now().microsecondsSinceEpoch;
@@ -2269,7 +2341,7 @@ class _BillingPageState extends State<BillingPage> {
           batchId: 'manual',
           batchTitle: '任意項目',
           orderDate: DateTime.now(),
-          storeId: _selectedStoreId,
+          storeId: storeId,
           storeName: storeName,
           itemType: row.type.text.trim().isEmpty ? '任意' : row.type.text.trim(),
           itemCode: row.code.text.trim(),
@@ -2936,183 +3008,315 @@ class _BillingPageState extends State<BillingPage> {
   }
 
   Future<void> _createManualInvoice() async {
-    if (_selectedStoreId.isEmpty) {
+    final availableStores = _manualIssuanceStoreOptions();
+    if (availableStores.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('先に店舗を選択してください'),
+          content: Text('店舗が登録されていません（店舗一覧画面から店舗を追加してください）'),
           backgroundColor: Colors.orange,
         ),
       );
       return;
     }
+    var dialogStoreId = availableStores.containsKey(_selectedStoreId)
+        ? _selectedStoreId
+        : availableStores.keys.first;
     final dueController = TextEditingController();
+    final monthController = TextEditingController(
+      text: _monthInputText(_selectedMonth),
+    );
+    var dialogRepaymentEnabled = false;
+    final repaymentCurrentController = TextEditingController();
+    final repaymentTotalController = TextEditingController();
+    final repaymentAmountController = TextEditingController();
     final rows = List.generate(8, (_) => _ManualBillingLineControllers());
     final result = await showDialog<_ManualInvoiceInput>(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, dialogSetState) => AlertDialog(
-          title: const Text('任意請求書を作成'),
-          content: SizedBox(
-            width: 720,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    '店舗: ${_selectedStoreName()} / 宛名: ${_recipientNameController.text}',
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: dueController,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      labelText: '支払い期限（未入力なら同月末日）',
-                      hintText: '例：2026-08-31',
+        builder: (ctx, dialogSetState) {
+          final dialogRecipient = _recipientForStoreWithName(
+            dialogStoreId,
+            availableStores[dialogStoreId] ?? '',
+          );
+          return AlertDialog(
+            title: const Text('任意請求書を作成'),
+            content: SizedBox(
+              width: 720,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    DropdownButtonFormField<String>(
+                      initialValue: dialogStoreId,
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        labelText: '店舗',
+                      ),
+                      items: [
+                        for (final entry in availableStores.entries)
+                          DropdownMenuItem(
+                            value: entry.key,
+                            child: Text(entry.value),
+                          ),
+                      ],
+                      onChanged: (value) => dialogSetState(() {
+                        if (value != null) dialogStoreId = value;
+                      }),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  for (int i = 0; i < rows.length; i++)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                    const SizedBox(height: 8),
+                    Text('宛名: ${dialogRecipient.name}'),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: monthController,
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        labelText: '対象月（空欄可、例：2026-08）',
+                        hintText: '空欄の場合は対象月なしとして扱われます',
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: dueController,
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        labelText: '支払い期限（未入力なら対象月の末日）',
+                        hintText: '例：2026-08-31',
+                      ),
+                    ),
+                    const Divider(height: 20),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      value: dialogRepaymentEnabled,
+                      title: const Text('定期返済あり'),
+                      onChanged: (value) =>
+                          dialogSetState(() => dialogRepaymentEnabled = value),
+                    ),
+                    if (dialogRepaymentEnabled)
+                      Row(
                         children: [
-                          Text(
-                            '${i + 1}行目',
-                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          Expanded(
+                            child: TextField(
+                              controller: repaymentCurrentController,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                border: OutlineInputBorder(),
+                                labelText: '何回目',
+                              ),
+                            ),
                           ),
-                          Row(
-                            children: [
-                              Expanded(
-                                flex: 3,
-                                child: TextField(
-                                  controller: rows[i].name,
-                                  decoration: const InputDecoration(
-                                    border: OutlineInputBorder(),
-                                    labelText: '商品名欄',
-                                  ),
-                                ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              controller: repaymentTotalController,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                border: OutlineInputBorder(),
+                                labelText: '全何回',
                               ),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: TextField(
-                                  controller: rows[i].qty,
-                                  keyboardType: TextInputType.number,
-                                  onChanged: (_) => dialogSetState(() {}),
-                                  decoration: const InputDecoration(
-                                    border: OutlineInputBorder(),
-                                    labelText: '数量',
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                flex: 2,
-                                child: TextField(
-                                  controller: rows[i].unitPrice,
-                                  keyboardType: TextInputType.number,
-                                  onChanged: (_) => dialogSetState(() {}),
-                                  decoration: const InputDecoration(
-                                    border: OutlineInputBorder(),
-                                    labelText: '単価',
-                                  ),
-                                ),
-                              ),
-                            ],
+                            ),
                           ),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: DropdownButtonFormField<int>(
-                                  initialValue: rows[i].taxRate,
-                                  decoration: const InputDecoration(
-                                    labelText: '税率',
-                                  ),
-                                  items: const [
-                                    DropdownMenuItem(
-                                      value: 10,
-                                      child: Text('10%'),
-                                    ),
-                                    DropdownMenuItem(
-                                      value: 8,
-                                      child: Text('8%'),
-                                    ),
-                                  ],
-                                  onChanged: (value) => dialogSetState(() {
-                                    rows[i].taxRate = value ?? 10;
-                                  }),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: CheckboxListTile(
-                                  contentPadding: EdgeInsets.zero,
-                                  controlAffinity:
-                                      ListTileControlAffinity.leading,
-                                  dense: true,
-                                  title: const Text('税込単価'),
-                                  value: rows[i].taxIncluded,
-                                  onChanged: (value) => dialogSetState(() {
-                                    rows[i].taxIncluded = value == true;
-                                  }),
-                                ),
-                              ),
-                            ],
-                          ),
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: Container(
-                              width: 240,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 8,
-                              ),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFEAF6FF),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(
-                                  color: const Color(0xFF64B5F6),
-                                ),
-                              ),
-                              child: Text(
-                                '金額（税抜） ￥${_yen(_manualPreviewAmount(rows[i]))}',
-                                textAlign: TextAlign.right,
-                                style: const TextStyle(
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.bold,
-                                ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              controller: repaymentAmountController,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                border: OutlineInputBorder(),
+                                labelText: '毎月返済額',
+                                prefixText: '￥',
                               ),
                             ),
                           ),
                         ],
                       ),
-                    ),
-                ],
+                    const SizedBox(height: 8),
+                    for (int i = 0; i < rows.length; i++)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${i + 1}行目',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Row(
+                              children: [
+                                Expanded(
+                                  flex: 3,
+                                  child: TextField(
+                                    controller: rows[i].name,
+                                    decoration: const InputDecoration(
+                                      border: OutlineInputBorder(),
+                                      labelText: '商品名欄',
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: TextField(
+                                    controller: rows[i].qty,
+                                    keyboardType: TextInputType.number,
+                                    onChanged: (_) => dialogSetState(() {}),
+                                    decoration: const InputDecoration(
+                                      border: OutlineInputBorder(),
+                                      labelText: '数量',
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  flex: 2,
+                                  child: TextField(
+                                    controller: rows[i].unitPrice,
+                                    keyboardType: TextInputType.number,
+                                    onChanged: (_) => dialogSetState(() {}),
+                                    decoration: const InputDecoration(
+                                      border: OutlineInputBorder(),
+                                      labelText: '単価',
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: DropdownButtonFormField<int>(
+                                    initialValue: rows[i].taxRate,
+                                    decoration: const InputDecoration(
+                                      labelText: '税率',
+                                    ),
+                                    items: const [
+                                      DropdownMenuItem(
+                                        value: 10,
+                                        child: Text('10%'),
+                                      ),
+                                      DropdownMenuItem(
+                                        value: 8,
+                                        child: Text('8%'),
+                                      ),
+                                    ],
+                                    onChanged: (value) => dialogSetState(() {
+                                      rows[i].taxRate = value ?? 10;
+                                    }),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: CheckboxListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    controlAffinity:
+                                        ListTileControlAffinity.leading,
+                                    dense: true,
+                                    title: const Text('税込単価'),
+                                    value: rows[i].taxIncluded,
+                                    onChanged: (value) => dialogSetState(() {
+                                      rows[i].taxIncluded = value == true;
+                                    }),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: Container(
+                                width: 240,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 8,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFEAF6FF),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: const Color(0xFF64B5F6),
+                                  ),
+                                ),
+                                child: Text(
+                                  '金額（税抜） ￥${_yen(_manualPreviewAmount(rows[i]))}',
+                                  textAlign: TextAlign.right,
+                                  style: const TextStyle(
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
               ),
             ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('キャンセル'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.of(ctx).pop(
-                  _ManualInvoiceInput(dueText: dueController.text, rows: rows),
-                );
-              },
-              child: const Text('作成する'),
-            ),
-          ],
-        ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('キャンセル'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.of(ctx).pop(
+                    _ManualInvoiceInput(
+                      storeId: dialogStoreId,
+                      monthText: monthController.text,
+                      dueText: dueController.text,
+                      repaymentEnabled: dialogRepaymentEnabled,
+                      repaymentCurrentText: repaymentCurrentController.text,
+                      repaymentTotalText: repaymentTotalController.text,
+                      repaymentAmountText: repaymentAmountController.text,
+                      rows: rows,
+                    ),
+                  );
+                },
+                child: const Text('作成する'),
+              ),
+            ],
+          );
+        },
       ),
     );
-    if (result == null) return;
+    if (result == null) {
+      dueController.dispose();
+      monthController.dispose();
+      repaymentCurrentController.dispose();
+      repaymentTotalController.dispose();
+      repaymentAmountController.dispose();
+      for (final row in rows) {
+        row.dispose();
+      }
+      return;
+    }
+    if (!_isValidOptionalDateInput(result.dueText)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('支払い期限の形式が正しくありません（例：2026-08-31）'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      dueController.dispose();
+      monthController.dispose();
+      repaymentCurrentController.dispose();
+      repaymentTotalController.dispose();
+      repaymentAmountController.dispose();
+      for (final row in result.rows) {
+        row.dispose();
+      }
+      return;
+    }
 
-    final dueDate = _manualDueDate(_selectedMonth, result.dueText);
-    final storeName = _selectedStoreName();
-    final recipient = _currentRecipientFromControllers();
+    final storeId = result.storeId;
+    final storeName = availableStores[storeId] ?? '';
+    final recipient = _recipientForStoreWithName(storeId, storeName);
+    final billingMonth = _parseOptionalMonth(result.monthText);
+    final dueBaseMonth =
+        billingMonth ?? DateTime(DateTime.now().year, DateTime.now().month);
+    final dueDate = _manualDueDate(dueBaseMonth, result.dueText);
     final lines = <_BillingLine>[];
     for (int i = 0; i < result.rows.length; i++) {
       final row = result.rows[i];
@@ -3133,7 +3337,7 @@ class _BillingPageState extends State<BillingPage> {
           batchId: 'manual',
           batchTitle: '任意請求',
           orderDate: DateTime.now(),
-          storeId: _selectedStoreId,
+          storeId: storeId,
           storeName: storeName,
           itemType: '任意',
           itemCode: '',
@@ -3163,21 +3367,30 @@ class _BillingPageState extends State<BillingPage> {
       final invoiceSeq = _nextInvoiceSequence();
       final invoiceNo = _invoiceNo(invoiceSeq);
       final assets = await _loadPdfAssets();
+      final billingMonthKey = billingMonth == null
+          ? ''
+          : _monthKey(billingMonth);
+      final repaymentCurrent = inventoryIntValue(result.repaymentCurrentText);
+      final repaymentTotal = inventoryIntValue(result.repaymentTotalText);
+      final repaymentMonthlyAmount = inventoryIntValue(
+        result.repaymentAmountText,
+      );
       final pdfBytes = await _buildBillingPdf(
         kind: _BillingPdfKind.invoice,
         assets: assets,
         no: invoiceNo,
         date: issuedAt,
-        billingMonth: _selectedMonth,
+        billingMonth: billingMonth,
         storeName: storeName,
         billingTypeText: '任意',
         recipient: recipient,
         paymentDueTextOverride: _dateText(dueDate),
-        repaymentEnabled: false,
-        repaymentCurrent: 0,
-        repaymentTotal: 0,
-        repaymentMonthlyAmount: 0,
+        repaymentEnabled: result.repaymentEnabled,
+        repaymentCurrent: repaymentCurrent,
+        repaymentTotal: repaymentTotal,
+        repaymentMonthlyAmount: repaymentMonthlyAmount,
         lines: lines,
+        includeRepaymentInTotal: true,
       );
       final invoiceRef = AppSession.billingInvoices.doc();
       final subtotal = lines.fold<int>(0, (total, line) => total + line.amount);
@@ -3185,6 +3398,9 @@ class _BillingPageState extends State<BillingPage> {
       final subtotal8 = _subtotalForRate(lines, 8);
       final tax10 = _taxFor(subtotal10, 10);
       final tax8 = _taxFor(subtotal8, 8);
+      final repaymentAddition = result.repaymentEnabled
+          ? repaymentMonthlyAmount
+          : 0;
       await invoiceRef.set({
         'id': invoiceRef.id,
         'invoiceNo': invoiceNo,
@@ -3195,10 +3411,10 @@ class _BillingPageState extends State<BillingPage> {
         'status': 'issued',
         'billingMode': 'manual',
         'billingItemTypes': ['任意'],
-        'billingMonth': _monthKey(_selectedMonth),
+        'billingMonth': billingMonthKey,
         'paymentDueDateLocal': dueDate.toIso8601String(),
         'paymentDueText': _dateText(dueDate),
-        'storeId': _selectedStoreId,
+        'storeId': storeId,
         'storeName': storeName,
         'recipient': recipient.toMap(),
         'lineKeys': <String>[],
@@ -3207,7 +3423,11 @@ class _BillingPageState extends State<BillingPage> {
         'subtotal8': subtotal8,
         'tax10': tax10,
         'tax8': tax8,
-        'total': subtotal + tax10 + tax8,
+        'total': subtotal + tax10 + tax8 + repaymentAddition,
+        'repaymentEnabled': result.repaymentEnabled,
+        'repaymentCurrent': repaymentCurrent,
+        'repaymentTotal': repaymentTotal,
+        'repaymentMonthlyAmount': repaymentMonthlyAmount,
         'items': lines
             .map((line) => line.toInvoiceMap(line.unitPrice))
             .toList(),
@@ -3216,8 +3436,8 @@ class _BillingPageState extends State<BillingPage> {
       await AppSession.billingInvoicePdfs.doc(invoiceRef.id).set({
         'invoiceId': invoiceRef.id,
         'invoiceNo': invoiceNo,
-        'billingMonth': _monthKey(_selectedMonth),
-        'storeId': _selectedStoreId,
+        'billingMonth': billingMonthKey,
+        'storeId': storeId,
         'storeName': storeName,
         'createdAt': FieldValue.serverTimestamp(),
         'createdAtLocal': issuedAt.toIso8601String(),
@@ -3241,192 +3461,323 @@ class _BillingPageState extends State<BillingPage> {
         row.dispose();
       }
       dueController.dispose();
+      monthController.dispose();
+      repaymentCurrentController.dispose();
+      repaymentTotalController.dispose();
+      repaymentAmountController.dispose();
       if (mounted) setState(() => _saving = false);
     }
   }
 
   Future<void> _createManualReceiptOnly() async {
-    if (_selectedStoreId.isEmpty) {
+    final availableStores = _manualIssuanceStoreOptions();
+    if (availableStores.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('先に店舗を選択してください'),
+          content: Text('店舗が登録されていません（店舗一覧画面から店舗を追加してください）'),
           backgroundColor: Colors.orange,
         ),
       );
       return;
     }
+    var dialogStoreId = availableStores.containsKey(_selectedStoreId)
+        ? _selectedStoreId
+        : availableStores.keys.first;
     final issueDateController = TextEditingController();
+    final monthController = TextEditingController(
+      text: _monthInputText(_selectedMonth),
+    );
+    var dialogRepaymentEnabled = false;
+    final repaymentCurrentController = TextEditingController();
+    final repaymentTotalController = TextEditingController();
+    final repaymentAmountController = TextEditingController();
     final rows = List.generate(8, (_) => _ManualBillingLineControllers());
     final result = await showDialog<_ManualReceiptInput>(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, dialogSetState) => AlertDialog(
-          title: const Text('任意受領書を作成'),
-          content: SizedBox(
-            width: 720,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    '店舗: ${_selectedStoreName()} / 宛名: ${_recipientNameController.text}',
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: issueDateController,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      labelText: '発行日・受領日（未入力なら当日）',
-                      hintText: '例：2026-07-29',
+        builder: (ctx, dialogSetState) {
+          final dialogRecipient = _recipientForStoreWithName(
+            dialogStoreId,
+            availableStores[dialogStoreId] ?? '',
+          );
+          return AlertDialog(
+            title: const Text('任意受領書を作成'),
+            content: SizedBox(
+              width: 720,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    DropdownButtonFormField<String>(
+                      initialValue: dialogStoreId,
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        labelText: '店舗',
+                      ),
+                      items: [
+                        for (final entry in availableStores.entries)
+                          DropdownMenuItem(
+                            value: entry.key,
+                            child: Text(entry.value),
+                          ),
+                      ],
+                      onChanged: (value) => dialogSetState(() {
+                        if (value != null) dialogStoreId = value;
+                      }),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  for (int i = 0; i < rows.length; i++)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                    const SizedBox(height: 8),
+                    Text('宛名: ${dialogRecipient.name}'),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: monthController,
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        labelText: '対象月（空欄可、例：2026-08）',
+                        hintText: '空欄の場合は対象月なしとして扱われます',
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: issueDateController,
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        labelText: '発行日・受領日（未入力なら当日）',
+                        hintText: '例：2026-07-29',
+                      ),
+                    ),
+                    const Divider(height: 20),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      value: dialogRepaymentEnabled,
+                      title: const Text('定期返済あり'),
+                      onChanged: (value) =>
+                          dialogSetState(() => dialogRepaymentEnabled = value),
+                    ),
+                    if (dialogRepaymentEnabled)
+                      Row(
                         children: [
-                          Text(
-                            '${i + 1}行目',
-                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          Expanded(
+                            child: TextField(
+                              controller: repaymentCurrentController,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                border: OutlineInputBorder(),
+                                labelText: '何回目',
+                              ),
+                            ),
                           ),
-                          Row(
-                            children: [
-                              Expanded(
-                                flex: 3,
-                                child: TextField(
-                                  controller: rows[i].name,
-                                  decoration: const InputDecoration(
-                                    border: OutlineInputBorder(),
-                                    labelText: '商品名欄',
-                                  ),
-                                ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              controller: repaymentTotalController,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                border: OutlineInputBorder(),
+                                labelText: '全何回',
                               ),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: TextField(
-                                  controller: rows[i].qty,
-                                  keyboardType: TextInputType.number,
-                                  onChanged: (_) => dialogSetState(() {}),
-                                  decoration: const InputDecoration(
-                                    border: OutlineInputBorder(),
-                                    labelText: '数量',
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                flex: 2,
-                                child: TextField(
-                                  controller: rows[i].unitPrice,
-                                  keyboardType: TextInputType.number,
-                                  onChanged: (_) => dialogSetState(() {}),
-                                  decoration: const InputDecoration(
-                                    border: OutlineInputBorder(),
-                                    labelText: '単価',
-                                  ),
-                                ),
-                              ),
-                            ],
+                            ),
                           ),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: DropdownButtonFormField<int>(
-                                  initialValue: rows[i].taxRate,
-                                  decoration: const InputDecoration(
-                                    labelText: '税率',
-                                  ),
-                                  items: const [
-                                    DropdownMenuItem(
-                                      value: 10,
-                                      child: Text('10%'),
-                                    ),
-                                    DropdownMenuItem(
-                                      value: 8,
-                                      child: Text('8%'),
-                                    ),
-                                  ],
-                                  onChanged: (value) => dialogSetState(() {
-                                    rows[i].taxRate = value ?? 10;
-                                  }),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: CheckboxListTile(
-                                  contentPadding: EdgeInsets.zero,
-                                  controlAffinity:
-                                      ListTileControlAffinity.leading,
-                                  dense: true,
-                                  title: const Text('税込単価'),
-                                  value: rows[i].taxIncluded,
-                                  onChanged: (value) => dialogSetState(() {
-                                    rows[i].taxIncluded = value == true;
-                                  }),
-                                ),
-                              ),
-                            ],
-                          ),
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: Container(
-                              width: 240,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 8,
-                              ),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFEAF6FF),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(
-                                  color: const Color(0xFF64B5F6),
-                                ),
-                              ),
-                              child: Text(
-                                '金額（税抜） ￥${_yen(_manualPreviewAmount(rows[i]))}',
-                                textAlign: TextAlign.right,
-                                style: const TextStyle(
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.bold,
-                                ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              controller: repaymentAmountController,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                border: OutlineInputBorder(),
+                                labelText: '毎月返済額',
+                                prefixText: '￥',
                               ),
                             ),
                           ),
                         ],
                       ),
-                    ),
-                ],
+                    const SizedBox(height: 8),
+                    for (int i = 0; i < rows.length; i++)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${i + 1}行目',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Row(
+                              children: [
+                                Expanded(
+                                  flex: 3,
+                                  child: TextField(
+                                    controller: rows[i].name,
+                                    decoration: const InputDecoration(
+                                      border: OutlineInputBorder(),
+                                      labelText: '商品名欄',
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: TextField(
+                                    controller: rows[i].qty,
+                                    keyboardType: TextInputType.number,
+                                    onChanged: (_) => dialogSetState(() {}),
+                                    decoration: const InputDecoration(
+                                      border: OutlineInputBorder(),
+                                      labelText: '数量',
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  flex: 2,
+                                  child: TextField(
+                                    controller: rows[i].unitPrice,
+                                    keyboardType: TextInputType.number,
+                                    onChanged: (_) => dialogSetState(() {}),
+                                    decoration: const InputDecoration(
+                                      border: OutlineInputBorder(),
+                                      labelText: '単価',
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: DropdownButtonFormField<int>(
+                                    initialValue: rows[i].taxRate,
+                                    decoration: const InputDecoration(
+                                      labelText: '税率',
+                                    ),
+                                    items: const [
+                                      DropdownMenuItem(
+                                        value: 10,
+                                        child: Text('10%'),
+                                      ),
+                                      DropdownMenuItem(
+                                        value: 8,
+                                        child: Text('8%'),
+                                      ),
+                                    ],
+                                    onChanged: (value) => dialogSetState(() {
+                                      rows[i].taxRate = value ?? 10;
+                                    }),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: CheckboxListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    controlAffinity:
+                                        ListTileControlAffinity.leading,
+                                    dense: true,
+                                    title: const Text('税込単価'),
+                                    value: rows[i].taxIncluded,
+                                    onChanged: (value) => dialogSetState(() {
+                                      rows[i].taxIncluded = value == true;
+                                    }),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: Container(
+                                width: 240,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 8,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFEAF6FF),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: const Color(0xFF64B5F6),
+                                  ),
+                                ),
+                                child: Text(
+                                  '金額（税抜） ￥${_yen(_manualPreviewAmount(rows[i]))}',
+                                  textAlign: TextAlign.right,
+                                  style: const TextStyle(
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
               ),
             ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('キャンセル'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.of(ctx).pop(
-                  _ManualReceiptInput(
-                    issueDateText: issueDateController.text,
-                    rows: rows,
-                  ),
-                );
-              },
-              child: const Text('作成する'),
-            ),
-          ],
-        ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('キャンセル'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.of(ctx).pop(
+                    _ManualReceiptInput(
+                      storeId: dialogStoreId,
+                      monthText: monthController.text,
+                      issueDateText: issueDateController.text,
+                      repaymentEnabled: dialogRepaymentEnabled,
+                      repaymentCurrentText: repaymentCurrentController.text,
+                      repaymentTotalText: repaymentTotalController.text,
+                      repaymentAmountText: repaymentAmountController.text,
+                      rows: rows,
+                    ),
+                  );
+                },
+                child: const Text('作成する'),
+              ),
+            ],
+          );
+        },
       ),
     );
-    if (result == null) return;
+    if (result == null) {
+      issueDateController.dispose();
+      monthController.dispose();
+      repaymentCurrentController.dispose();
+      repaymentTotalController.dispose();
+      repaymentAmountController.dispose();
+      for (final row in rows) {
+        row.dispose();
+      }
+      return;
+    }
+    if (!_isValidOptionalDateInput(result.issueDateText)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('発行日・受領日の形式が正しくありません（例：2026-07-29）'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      issueDateController.dispose();
+      monthController.dispose();
+      repaymentCurrentController.dispose();
+      repaymentTotalController.dispose();
+      repaymentAmountController.dispose();
+      for (final row in result.rows) {
+        row.dispose();
+      }
+      return;
+    }
 
-    final storeName = _selectedStoreName();
-    final recipient = _currentRecipientFromControllers();
+    final storeId = result.storeId;
+    final storeName = availableStores[storeId] ?? '';
+    final recipient = _recipientForStoreWithName(storeId, storeName);
+    final billingMonth = _parseOptionalMonth(result.monthText);
     final issuedAt = _manualIssueDate(result.issueDateText);
-    final lines = _manualLinesFromRows(result.rows, storeName);
+    final lines = _manualLinesFromRows(result.rows, storeId, storeName);
     if (lines.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -3443,28 +3794,40 @@ class _BillingPageState extends State<BillingPage> {
       final invoiceSeq = _nextInvoiceSequence();
       final receiptNo = _invoiceNo(invoiceSeq);
       final assets = await _loadPdfAssets();
+      final billingMonthKey = billingMonth == null
+          ? ''
+          : _monthKey(billingMonth);
+      final repaymentCurrent = inventoryIntValue(result.repaymentCurrentText);
+      final repaymentTotal = inventoryIntValue(result.repaymentTotalText);
+      final repaymentMonthlyAmount = inventoryIntValue(
+        result.repaymentAmountText,
+      );
       final pdfBytes = await _buildBillingPdf(
         kind: _BillingPdfKind.receipt,
         assets: assets,
         no: receiptNo,
         date: issuedAt,
-        billingMonth: _selectedMonth,
+        billingMonth: billingMonth,
         storeName: storeName,
         billingTypeText: '任意受領',
         recipient: recipient,
         paymentDueTextOverride: null,
-        repaymentEnabled: false,
-        repaymentCurrent: 0,
-        repaymentTotal: 0,
-        repaymentMonthlyAmount: 0,
+        repaymentEnabled: result.repaymentEnabled,
+        repaymentCurrent: repaymentCurrent,
+        repaymentTotal: repaymentTotal,
+        repaymentMonthlyAmount: repaymentMonthlyAmount,
         lines: lines,
+        includeRepaymentInTotal: true,
       );
       final subtotal = lines.fold<int>(0, (total, line) => total + line.amount);
       final subtotal10 = _subtotalForRate(lines, 10);
       final subtotal8 = _subtotalForRate(lines, 8);
       final tax10 = _taxFor(subtotal10, 10);
       final tax8 = _taxFor(subtotal8, 8);
-      final total = subtotal + tax10 + tax8;
+      final repaymentAddition = result.repaymentEnabled
+          ? repaymentMonthlyAmount
+          : 0;
+      final total = subtotal + tax10 + tax8 + repaymentAddition;
       final receiptRef = AppSession.billingReceipts.doc();
       await receiptRef.set({
         'id': receiptRef.id,
@@ -3473,8 +3836,8 @@ class _BillingPageState extends State<BillingPage> {
         'invoiceSeq': invoiceSeq,
         'billingMode': 'manual_receipt_only',
         'billingItemTypes': ['任意受領'],
-        'billingMonth': _monthKey(_selectedMonth),
-        'storeId': _selectedStoreId,
+        'billingMonth': billingMonthKey,
+        'storeId': storeId,
         'storeName': storeName,
         'recipient': recipient.toMap(),
         'createdAt': FieldValue.serverTimestamp(),
@@ -3487,6 +3850,10 @@ class _BillingPageState extends State<BillingPage> {
         'tax10': tax10,
         'tax8': tax8,
         'total': total,
+        'repaymentEnabled': result.repaymentEnabled,
+        'repaymentCurrent': repaymentCurrent,
+        'repaymentTotal': repaymentTotal,
+        'repaymentMonthlyAmount': repaymentMonthlyAmount,
         'items': lines
             .map((line) => line.toInvoiceMap(line.unitPrice))
             .toList(),
@@ -3498,8 +3865,8 @@ class _BillingPageState extends State<BillingPage> {
         'invoiceNo': receiptNo,
         'invoiceSeq': invoiceSeq,
         'billingMode': 'manual_receipt_only',
-        'billingMonth': _monthKey(_selectedMonth),
-        'storeId': _selectedStoreId,
+        'billingMonth': billingMonthKey,
+        'storeId': storeId,
         'storeName': storeName,
         'recipient': recipient.toMap(),
         'createdAt': FieldValue.serverTimestamp(),
@@ -3519,8 +3886,8 @@ class _BillingPageState extends State<BillingPage> {
         'status': 'issued',
         'billingMode': 'manual_receipt_only',
         'billingItemTypes': ['任意受領'],
-        'billingMonth': _monthKey(_selectedMonth),
-        'storeId': _selectedStoreId,
+        'billingMonth': billingMonthKey,
+        'storeId': storeId,
         'storeName': storeName,
         'recipient': recipient.toMap(),
         'lineKeys': <String>[],
@@ -3530,6 +3897,10 @@ class _BillingPageState extends State<BillingPage> {
         'tax10': tax10,
         'tax8': tax8,
         'total': total,
+        'repaymentEnabled': result.repaymentEnabled,
+        'repaymentCurrent': repaymentCurrent,
+        'repaymentTotal': repaymentTotal,
+        'repaymentMonthlyAmount': repaymentMonthlyAmount,
         'items': lines
             .map((line) => line.toInvoiceMap(line.unitPrice))
             .toList(),
@@ -3552,6 +3923,10 @@ class _BillingPageState extends State<BillingPage> {
         row.dispose();
       }
       issueDateController.dispose();
+      monthController.dispose();
+      repaymentCurrentController.dispose();
+      repaymentTotalController.dispose();
+      repaymentAmountController.dispose();
       if (mounted) setState(() => _saving = false);
     }
   }
@@ -4008,16 +4383,46 @@ class _ManualEditInput {
 }
 
 class _ManualInvoiceInput {
-  const _ManualInvoiceInput({required this.dueText, required this.rows});
+  const _ManualInvoiceInput({
+    required this.storeId,
+    required this.monthText,
+    required this.dueText,
+    required this.repaymentEnabled,
+    required this.repaymentCurrentText,
+    required this.repaymentTotalText,
+    required this.repaymentAmountText,
+    required this.rows,
+  });
 
+  final String storeId;
+  final String monthText;
   final String dueText;
+  final bool repaymentEnabled;
+  final String repaymentCurrentText;
+  final String repaymentTotalText;
+  final String repaymentAmountText;
   final List<_ManualBillingLineControllers> rows;
 }
 
 class _ManualReceiptInput {
-  const _ManualReceiptInput({required this.issueDateText, required this.rows});
+  const _ManualReceiptInput({
+    required this.storeId,
+    required this.monthText,
+    required this.issueDateText,
+    required this.repaymentEnabled,
+    required this.repaymentCurrentText,
+    required this.repaymentTotalText,
+    required this.repaymentAmountText,
+    required this.rows,
+  });
 
+  final String storeId;
+  final String monthText;
   final String issueDateText;
+  final bool repaymentEnabled;
+  final String repaymentCurrentText;
+  final String repaymentTotalText;
+  final String repaymentAmountText;
   final List<_ManualBillingLineControllers> rows;
 }
 
