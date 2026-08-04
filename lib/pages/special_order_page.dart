@@ -378,18 +378,6 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     String storeId,
     int qty,
   ) async {
-    if (qty > 0 && !item.isInSalesPeriod) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            item.isBeforeSales ? '販売期間前のため入力できません' : '販売期間終了のため入力できません',
-          ),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-
     final storeName = _stores
         .firstWhere(
           (s) => s.id == storeId,
@@ -397,6 +385,18 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         )
         .name;
     final oldQty = (_orders[item.id] ?? {})[storeId] ?? 0;
+
+    if (qty > 0 && !item.isInSalesPeriod && oldQty <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            item.isBeforeSales ? '販売期間前のため入力できません' : '販売期間終了のため新規入力できません',
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
 
     if (qty <= 0) {
       final confirmed = await showDialog<bool>(
@@ -2649,7 +2649,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 width: 64,
                 child: TextField(
                   controller: ctrl,
-                  enabled: item.isInSalesPeriod,
+                  enabled: item.isInSalesPeriod || ordered > 0,
                   keyboardType: TextInputType.number,
                   decoration: const InputDecoration(
                     isDense: true,
@@ -2664,7 +2664,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                   style: const TextStyle(fontSize: 13),
                 ),
               ),
-              if (item.isInSalesPeriod) ...[
+              if (item.isInSalesPeriod || ordered > 0) ...[
                 const SizedBox(width: 8),
                 ElevatedButton(
                   onPressed: () {
@@ -2679,7 +2679,10 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                     minimumSize: Size.zero,
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
-                  child: const Text('仮発注', style: TextStyle(fontSize: 13)),
+                  child: Text(
+                    item.isInSalesPeriod ? '仮発注' : '修正',
+                    style: const TextStyle(fontSize: 13),
+                  ),
                 ),
               ],
             ],
