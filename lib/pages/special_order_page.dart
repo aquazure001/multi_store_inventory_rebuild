@@ -761,6 +761,270 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     }
   }
 
+  Future<void> _editHomeCareCustomerOrder(
+    SpecialOrderItem item,
+    _HomeCareCustomerOrderEntry entry,
+  ) async {
+    final codeCtrl = TextEditingController(text: entry.customerCode);
+    final nameCtrl = TextEditingController(text: entry.customerName);
+    final qtyCtrl = TextEditingController(text: '${entry.qty}');
+
+    try {
+      final updatedInput = await showDialog<_HomeCareCustomerOrderEntry?>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('仮発注を編集'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  item.name,
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: codeCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '顧客コード',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '顧客名',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: qtyCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: '発注数',
+                    suffixText: '個',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                if (entry.delivered) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    '※引渡し済みのため、数量を変えると在庫数も自動で調整します。',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.orange.shade800,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              child: const Text('キャンセル'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final customerCode = codeCtrl.text.trim();
+                final customerName = nameCtrl.text.trim();
+                final qty = int.tryParse(qtyCtrl.text.trim()) ?? 0;
+                if (customerCode.isEmpty || qty <= 0) return;
+                Navigator.of(ctx).pop(
+                  entry.copyWith(
+                    customerCode: customerCode,
+                    customerName: customerName,
+                    qty: qty,
+                  ),
+                );
+              },
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      );
+      if (updatedInput == null) return;
+      if (!mounted) return;
+
+      final lot = _homeCareLotFor(item);
+      final stockDelta = entry.delivered ? entry.qty - updatedInput.qty : 0;
+      if (stockDelta < 0 && lot.remaining < stockDelta.abs()) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('在庫が不足しています（在庫 ${lot.remaining} 個）'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+
+      final data = <String, dynamic>{
+        'homeCareCustomerOrders': {entry.id: updatedInput.toMap()},
+      };
+      if (stockDelta != 0) {
+        data['homeCareLots'] = {
+          lot.key: {
+            'code': item.code,
+            'name': item.name,
+            'lotSize': _positiveIntFromController(
+              _homeCareLotCtrl(item),
+              lot.lotSize <= 0 ? 1 : lot.lotSize,
+            ),
+            'remaining': FieldValue.increment(stockDelta),
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        };
+        data['homeCareHandoverLogs'] = FieldValue.arrayUnion([
+          {
+            'key': lot.key,
+            'code': item.code,
+            'name': item.name,
+            'customerCode': updatedInput.customerCode,
+            'qty': stockDelta,
+            'at': Timestamp.now(),
+          },
+        ]);
+      }
+
+      await AppSession.doc('special_orders').set(data, SetOptions(merge: true));
+      setState(() {
+        if (stockDelta != 0) {
+          _homeCareLots[lot.key] = lot.copyWith(
+            code: item.code,
+            name: item.name,
+            remaining: max(0, lot.remaining + stockDelta),
+          );
+          _handoverLogs.add(
+            _HandoverLogEntry(
+              key: lot.key,
+              customerCode: updatedInput.customerCode,
+              qty: stockDelta,
+              at: DateTime.now(),
+            ),
+          );
+        }
+        _homeCareCustomerOrders[entry.id] = updatedInput;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('仮発注を修正しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('修正失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      codeCtrl.dispose();
+      nameCtrl.dispose();
+      qtyCtrl.dispose();
+    }
+  }
+
+  Future<void> _deleteHomeCareCustomerOrder(
+    SpecialOrderItem item,
+    _HomeCareCustomerOrderEntry entry,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('仮発注を削除'),
+        content: Text(
+          '${entry.customerCode} / ${entry.customerName.isEmpty ? '-' : entry.customerName}\n${entry.qty} 個\n\nこの仮発注を削除しますか？${entry.delivered ? '\n※引渡し済み分は在庫へ戻します。' : ''}',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('削除する'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    final lot = _homeCareLotFor(item);
+    final stockDelta = entry.delivered ? entry.qty : 0;
+    try {
+      final data = <String, dynamic>{
+        'homeCareCustomerOrders.${entry.id}': FieldValue.delete(),
+      };
+      if (stockDelta != 0) {
+        data['homeCareLots.${lot.key}.code'] = item.code;
+        data['homeCareLots.${lot.key}.name'] = item.name;
+        data['homeCareLots.${lot.key}.lotSize'] = _positiveIntFromController(
+          _homeCareLotCtrl(item),
+          lot.lotSize <= 0 ? 1 : lot.lotSize,
+        );
+        data['homeCareLots.${lot.key}.remaining'] = FieldValue.increment(
+          stockDelta,
+        );
+        data['homeCareLots.${lot.key}.updatedAt'] =
+            FieldValue.serverTimestamp();
+        data['homeCareHandoverLogs'] = FieldValue.arrayUnion([
+          {
+            'key': lot.key,
+            'code': item.code,
+            'name': item.name,
+            'customerCode': entry.customerCode,
+            'qty': -entry.qty,
+            'at': Timestamp.now(),
+          },
+        ]);
+      }
+
+      await AppSession.doc('special_orders').update(data);
+      setState(() {
+        _homeCareCustomerOrders.remove(entry.id);
+        if (stockDelta != 0) {
+          _homeCareLots[lot.key] = lot.copyWith(
+            code: item.code,
+            name: item.name,
+            remaining: lot.remaining + stockDelta,
+          );
+          _handoverLogs.add(
+            _HandoverLogEntry(
+              key: lot.key,
+              customerCode: entry.customerCode,
+              qty: -entry.qty,
+              at: DateTime.now(),
+            ),
+          );
+        }
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('仮発注を削除しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('削除失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
   Future<void> _deliverHomeCare(SpecialOrderItem item) async {
     final lot = _homeCareLotFor(item);
     final customerCode = _homeCareCustomerCtrl(item).text.trim();
@@ -2035,12 +2299,41 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
               ],
             ),
           ),
-          Checkbox(
-            value: entry.delivered,
-            onChanged: (value) =>
-                _toggleHomeCareCustomerDelivered(item, entry, value == true),
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Checkbox(
+                    value: entry.delivered,
+                    onChanged: (value) => _toggleHomeCareCustomerDelivered(
+                      item,
+                      entry,
+                      value == true,
+                    ),
+                  ),
+                  const Text('引渡し済み'),
+                ],
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextButton(
+                    onPressed: () => _editHomeCareCustomerOrder(item, entry),
+                    child: const Text('編集'),
+                  ),
+                  TextButton(
+                    onPressed: () => _deleteHomeCareCustomerOrder(item, entry),
+                    child: const Text(
+                      '削除',
+                      style: TextStyle(color: Colors.red),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
-          const Text('引渡し済み'),
         ],
       ),
     );
@@ -2967,6 +3260,9 @@ class _HomeCareCustomerOrderEntry {
   };
 
   _HomeCareCustomerOrderEntry copyWith({
+    String? customerCode,
+    String? customerName,
+    int? qty,
     bool? delivered,
     DateTime? deliveredAt,
   }) {
@@ -2976,9 +3272,9 @@ class _HomeCareCustomerOrderEntry {
       lotKey: lotKey,
       itemCode: itemCode,
       itemName: itemName,
-      customerCode: customerCode,
-      customerName: customerName,
-      qty: qty,
+      customerCode: customerCode ?? this.customerCode,
+      customerName: customerName ?? this.customerName,
+      qty: qty ?? this.qty,
       delivered: delivered ?? this.delivered,
       orderedAt: orderedAt,
       deliveredAt: deliveredAt,
