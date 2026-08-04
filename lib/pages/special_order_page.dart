@@ -37,6 +37,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   final Map<String, TextEditingController>
   _homeCareCustomerOrderQtyControllers = {};
   final Map<String, TextEditingController> _homeCareDeliveryControllers = {};
+  final Map<String, DateTime> _homeCareDeliveryDates = {};
 
   static const _kTypes = ['特別発注', '新規発注', 'その他'];
 
@@ -415,6 +416,52 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   String _orderClosedMessage(SpecialOrderItem item) {
     if (_canAddOrderForItem(item)) return '';
     return item.isBeforeSales ? '販売期間前のため入力できません' : '販売期間終了のため新規入力できません';
+  }
+
+  // ホームケア納品日の手動指定：入荷予定日が離れている特定2期間のみ、
+  // 納品日を入荷予定日基準で選び直せるようにする（それ以外は常に現在日時）。
+  DateTime? _homeCareDeliveryDefaultDate(SpecialOrderItem item) {
+    final start = DateTime(
+      item.salesStart.year,
+      item.salesStart.month,
+      item.salesStart.day,
+    );
+    final end = DateTime(
+      item.salesEnd.year,
+      item.salesEnd.month,
+      item.salesEnd.day,
+    );
+    if (start == DateTime(2026, 7, 16) && end == DateTime(2026, 7, 22)) {
+      return DateTime(2026, 8, 5);
+    }
+    if (start == DateTime(2026, 7, 30) && end == DateTime(2026, 8, 6)) {
+      return DateTime(2026, 8, 20);
+    }
+    return null;
+  }
+
+  DateTime _homeCareDeliveryDateFor(SpecialOrderItem item) {
+    final defaultDate = _homeCareDeliveryDefaultDate(item);
+    if (defaultDate == null) return DateTime.now();
+    return _homeCareDeliveryDates.putIfAbsent(item.id, () => defaultDate);
+  }
+
+  Timestamp _homeCareHandoverTimestamp(SpecialOrderItem item) {
+    final defaultDate = _homeCareDeliveryDefaultDate(item);
+    if (defaultDate == null) return Timestamp.now();
+    final selected = _homeCareDeliveryDateFor(item);
+    final now = DateTime.now();
+    return Timestamp.fromDate(
+      DateTime(
+        selected.year,
+        selected.month,
+        selected.day,
+        now.hour,
+        now.minute,
+        now.second,
+        now.millisecond,
+      ),
+    );
   }
 
   bool _matchesSpecialOrderQuery(SpecialOrderItem item) {
@@ -1141,6 +1188,8 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     );
     if (confirmed != true) return;
 
+    final handoverTimestamp = _homeCareHandoverTimestamp(item);
+
     try {
       await AppSession.doc('special_orders').set({
         'homeCareLots': {
@@ -1162,7 +1211,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
             'name': item.name,
             'customerCode': customerCode,
             'qty': qty,
-            'at': Timestamp.now(),
+            'at': handoverTimestamp,
           },
         ]),
       }, SetOptions(merge: true));
@@ -1177,8 +1226,17 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           ),
           remaining: max(0, lot.remaining - qty),
         );
+        _handoverLogs.add(
+          _HandoverLogEntry(
+            key: lot.key,
+            customerCode: customerCode,
+            qty: qty,
+            at: handoverTimestamp.toDate(),
+          ),
+        );
         _homeCareCustomerCtrl(item).clear();
         _homeCareDeliveryQtyCtrl(item).text = '1';
+        _homeCareDeliveryDates.remove(item.id);
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -2537,6 +2595,36 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 ),
               ],
             ),
+            if (_homeCareDeliveryDefaultDate(item) != null) ...[
+              const SizedBox(height: 8),
+              InkWell(
+                onTap: () async {
+                  final picked = await showDatePicker(
+                    context: context,
+                    initialDate: _homeCareDeliveryDateFor(item),
+                    firstDate: DateTime(2020),
+                    lastDate: DateTime(2100),
+                  );
+                  if (picked == null) return;
+                  setState(() {
+                    _homeCareDeliveryDates[item.id] = DateTime(
+                      picked.year,
+                      picked.month,
+                      picked.day,
+                    );
+                  });
+                },
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: '納品日',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                    suffixIcon: Icon(Icons.calendar_today, size: 18),
+                  ),
+                  child: Text(_fmtDate(_homeCareDeliveryDateFor(item))),
+                ),
+              ),
+            ],
             const SizedBox(height: 8),
             ElevatedButton.icon(
               onPressed: lot.remaining <= 0
