@@ -400,6 +400,23 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     return _naturalCompare(a.name, b.name);
   }
 
+  bool _canAddOrderForItem(SpecialOrderItem item) {
+    if (item.isInSalesPeriod) return true;
+    final end = DateTime(
+      item.salesEnd.year,
+      item.salesEnd.month,
+      item.salesEnd.day,
+    );
+    final reopenStart = DateTime(2026, 7, 16);
+    final reopenEnd = DateTime(2026, 7, 22);
+    return !end.isBefore(reopenStart) && !end.isAfter(reopenEnd);
+  }
+
+  String _orderClosedMessage(SpecialOrderItem item) {
+    if (_canAddOrderForItem(item)) return '';
+    return item.isBeforeSales ? '販売期間前のため入力できません' : '販売期間終了のため新規入力できません';
+  }
+
   bool _matchesSpecialOrderQuery(SpecialOrderItem item) {
     if (widget.showExpiredOnly && !item.isExpired) return false;
 
@@ -424,12 +441,10 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         .name;
     final oldQty = (_orders[item.id] ?? {})[storeId] ?? 0;
 
-    if (qty > 0 && !item.isInSalesPeriod && oldQty <= 0) {
+    if (qty > 0 && !_canAddOrderForItem(item) && oldQty <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            item.isBeforeSales ? '販売期間前のため入力できません' : '販売期間終了のため新規入力できません',
-          ),
+          content: Text(_orderClosedMessage(item)),
           backgroundColor: Colors.orange,
         ),
       );
@@ -600,12 +615,10 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   }
 
   Future<void> _placeHomeCareCustomerOrder(SpecialOrderItem item) async {
-    if (!item.isInSalesPeriod) {
+    if (!_canAddOrderForItem(item)) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            item.isBeforeSales ? '販売期間前のため入力できません' : '販売期間終了のため入力できません',
-          ),
+          content: Text(_orderClosedMessage(item)),
           backgroundColor: Colors.orange,
         ),
       );
@@ -2255,7 +2268,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
             ],
           ),
           const SizedBox(height: 8),
-          if (item.isInSalesPeriod) ...[
+          if (_canAddOrderForItem(item)) ...[
             TextField(
               controller: storeCtrl,
               decoration: const InputDecoration(
@@ -2724,7 +2737,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 width: 64,
                 child: TextField(
                   controller: ctrl,
-                  enabled: item.isInSalesPeriod || ordered > 0,
+                  enabled: _canAddOrderForItem(item) || ordered > 0,
                   keyboardType: TextInputType.number,
                   decoration: const InputDecoration(
                     isDense: true,
@@ -2739,7 +2752,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                   style: const TextStyle(fontSize: 13),
                 ),
               ),
-              if (item.isInSalesPeriod || ordered > 0) ...[
+              if (_canAddOrderForItem(item) || ordered > 0) ...[
                 const SizedBox(width: 8),
                 ElevatedButton(
                   onPressed: () {
@@ -2755,7 +2768,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
                   child: Text(
-                    item.isInSalesPeriod ? '仮発注' : '修正',
+                    _canAddOrderForItem(item) ? '仮発注' : '修正',
                     style: const TextStyle(fontSize: 13),
                   ),
                 ),
