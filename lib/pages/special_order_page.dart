@@ -33,6 +33,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   final Map<String, TextEditingController> _homeCareCustomerControllers = {};
   final Map<String, TextEditingController> _homeCareCustomerNameControllers =
       {};
+  final Map<String, TextEditingController> _homeCareStoreNameControllers = {};
   final Map<String, TextEditingController>
   _homeCareCustomerOrderQtyControllers = {};
   final Map<String, TextEditingController> _homeCareDeliveryControllers = {};
@@ -57,6 +58,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       c.dispose();
     }
     for (final c in _homeCareCustomerNameControllers.values) {
+      c.dispose();
+    }
+    for (final c in _homeCareStoreNameControllers.values) {
       c.dispose();
     }
     for (final c in _homeCareCustomerOrderQtyControllers.values) {
@@ -265,6 +269,40 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       key,
       () => TextEditingController(),
     );
+  }
+
+  TextEditingController _homeCareStoreNameCtrl(SpecialOrderItem item) {
+    final key = _homeCareLotKey(item);
+    return _homeCareStoreNameControllers.putIfAbsent(
+      key,
+      () => TextEditingController(),
+    );
+  }
+
+  String _knownCustomerNameForCode(String customerCode) {
+    final code = customerCode.trim();
+    if (code.isEmpty) return '';
+    final matches =
+        _homeCareCustomerOrders.values
+            .where(
+              (entry) =>
+                  entry.customerCode.trim() == code &&
+                  entry.customerName.trim().isNotEmpty,
+            )
+            .toList()
+          ..sort((a, b) => b.orderedAt.compareTo(a.orderedAt));
+    return matches.isEmpty ? '' : matches.first.customerName.trim();
+  }
+
+  void _applyKnownCustomerName(
+    String customerCode,
+    TextEditingController nameCtrl, {
+    bool overwrite = false,
+  }) {
+    final name = _knownCustomerNameForCode(customerCode);
+    if (name.isEmpty) return;
+    if (!overwrite && nameCtrl.text.trim().isNotEmpty) return;
+    nameCtrl.text = name;
   }
 
   TextEditingController _homeCareCustomerOrderQtyCtrl(SpecialOrderItem item) {
@@ -575,6 +613,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     }
     final customerCode = _homeCareCustomerCtrl(item).text.trim();
     final customerName = _homeCareCustomerNameCtrl(item).text.trim();
+    final storeName = _homeCareStoreNameCtrl(item).text.trim();
     final qty =
         int.tryParse(_homeCareCustomerOrderQtyCtrl(item).text.trim()) ?? 0;
     if (customerCode.isEmpty) {
@@ -601,6 +640,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       itemName: item.name,
       customerCode: customerCode,
       customerName: customerName,
+      storeName: storeName,
       qty: qty,
       delivered: false,
       orderedAt: now,
@@ -647,6 +687,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         _homeCareCustomerOrders[entryId] = entry;
         _homeCareCustomerCtrl(item).clear();
         _homeCareCustomerNameCtrl(item).clear();
+        _homeCareStoreNameCtrl(item).clear();
         _homeCareCustomerOrderQtyCtrl(item).text = '1';
       });
       if (mounted) {
@@ -767,6 +808,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   ) async {
     final codeCtrl = TextEditingController(text: entry.customerCode);
     final nameCtrl = TextEditingController(text: entry.customerName);
+    final storeCtrl = TextEditingController(text: entry.storeName);
     final qtyCtrl = TextEditingController(text: '${entry.qty}');
 
     try {
@@ -785,7 +827,17 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 ),
                 const SizedBox(height: 12),
                 TextField(
+                  controller: storeCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '店舗名',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
                   controller: codeCtrl,
+                  onChanged: (value) =>
+                      _applyKnownCustomerName(value, nameCtrl, overwrite: true),
                   decoration: const InputDecoration(
                     labelText: '顧客コード',
                     border: OutlineInputBorder(),
@@ -831,12 +883,14 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
               onPressed: () {
                 final customerCode = codeCtrl.text.trim();
                 final customerName = nameCtrl.text.trim();
+                final storeName = storeCtrl.text.trim();
                 final qty = int.tryParse(qtyCtrl.text.trim()) ?? 0;
                 if (customerCode.isEmpty || qty <= 0) return;
                 Navigator.of(ctx).pop(
                   entry.copyWith(
                     customerCode: customerCode,
                     customerName: customerName,
+                    storeName: storeName,
                     qty: qty,
                   ),
                 );
@@ -926,6 +980,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     } finally {
       codeCtrl.dispose();
       nameCtrl.dispose();
+      storeCtrl.dispose();
       qtyCtrl.dispose();
     }
   }
@@ -2158,6 +2213,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   Widget _buildHomeCareCustomerOrderBox(SpecialOrderItem item) {
     final codeCtrl = _homeCareCustomerCtrl(item);
     final nameCtrl = _homeCareCustomerNameCtrl(item);
+    final storeCtrl = _homeCareStoreNameCtrl(item);
     final qtyCtrl = _homeCareCustomerOrderQtyCtrl(item);
     final orders = _homeCareCustomerOrdersForItem(item);
     final total = _homeCareCustomerOrderTotalForItem(item);
@@ -2200,11 +2256,25 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           ),
           const SizedBox(height: 8),
           if (item.isInSalesPeriod) ...[
+            TextField(
+              controller: storeCtrl,
+              decoration: const InputDecoration(
+                labelText: '店舗名',
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
             Row(
               children: [
                 Expanded(
                   child: TextField(
                     controller: codeCtrl,
+                    onChanged: (value) => _applyKnownCustomerName(
+                      value,
+                      nameCtrl,
+                      overwrite: true,
+                    ),
                     decoration: const InputDecoration(
                       labelText: '顧客コード',
                       isDense: true,
@@ -2288,6 +2358,11 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (entry.storeName.isNotEmpty)
+                  Text(
+                    '店舗名: ${entry.storeName}',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
                 Text(
                   '顧客コード: ${entry.customerCode} / 顧客名: ${entry.customerName.isEmpty ? '-' : entry.customerName}',
                   style: const TextStyle(fontWeight: FontWeight.bold),
@@ -3209,6 +3284,7 @@ class _HomeCareCustomerOrderEntry {
     required this.itemName,
     required this.customerCode,
     required this.customerName,
+    required this.storeName,
     required this.qty,
     required this.delivered,
     required this.orderedAt,
@@ -3222,6 +3298,7 @@ class _HomeCareCustomerOrderEntry {
   final String itemName;
   final String customerCode;
   final String customerName;
+  final String storeName;
   final int qty;
   final bool delivered;
   final DateTime orderedAt;
@@ -3239,6 +3316,7 @@ class _HomeCareCustomerOrderEntry {
       itemName: (map['itemName'] ?? map['name'] ?? '').toString(),
       customerCode: (map['customerCode'] ?? '').toString(),
       customerName: (map['customerName'] ?? '').toString(),
+      storeName: (map['storeName'] ?? '').toString(),
       qty: max(0, inventoryIntValue(map['qty'])),
       delivered: map['delivered'] == true,
       orderedAt: _readLogTimestamp(map['orderedAt'] ?? map['at']),
@@ -3256,6 +3334,7 @@ class _HomeCareCustomerOrderEntry {
     'itemName': itemName,
     'customerCode': customerCode,
     'customerName': customerName,
+    'storeName': storeName,
     'qty': qty,
     'delivered': delivered,
     'orderedAt': Timestamp.fromDate(orderedAt),
@@ -3265,6 +3344,7 @@ class _HomeCareCustomerOrderEntry {
   _HomeCareCustomerOrderEntry copyWith({
     String? customerCode,
     String? customerName,
+    String? storeName,
     int? qty,
     bool? delivered,
     DateTime? deliveredAt,
@@ -3277,6 +3357,7 @@ class _HomeCareCustomerOrderEntry {
       itemName: itemName,
       customerCode: customerCode ?? this.customerCode,
       customerName: customerName ?? this.customerName,
+      storeName: storeName ?? this.storeName,
       qty: qty ?? this.qty,
       delivered: delivered ?? this.delivered,
       orderedAt: orderedAt,
