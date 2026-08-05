@@ -797,11 +797,56 @@ class _PosPageState extends State<PosPage> {
   int _denominationTotal(Map<int, int> counts) =>
       counts.entries.fold(0, (total, e) => total + e.key * e.value);
 
+  // 金種入力の記憶（開店用・閉店用を店舗ごとに別キーでlocalStorageに保存）
+  Map<int, int> _loadSavedDenominations(String storageKey) {
+    final raw = html.window.localStorage[storageKey];
+    if (raw == null) return {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return {};
+      final result = <int, int>{};
+      for (final entry in decoded.entries) {
+        final denom = int.tryParse(entry.key.toString());
+        if (denom == null) continue;
+        result[denom] = inventoryIntValue(entry.value);
+      }
+      return result;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  void _saveDenominations(String storageKey, Map<int, int> counts) {
+    final encoded = jsonEncode(counts.map((k, v) => MapEntry(k.toString(), v)));
+    html.window.localStorage[storageKey] = encoded;
+  }
+
+  // セッション中（sessionIdが一致する）に発生した手入力会計の合計金額を集計する
+  Future<int> _fetchManualSalesTotalForSession(String sessionId) async {
+    final snap = await AppSession.posSales
+        .where('sessionId', isEqualTo: sessionId)
+        .get();
+    var total = 0;
+    for (final doc in snap.docs) {
+      final items = doc.data()['items'];
+      if (items is! List) continue;
+      for (final item in items) {
+        if (item is! Map) continue;
+        if ((item['type'] ?? '').toString() != 'manual') continue;
+        total += inventoryIntValue(item['subtotal']);
+      }
+    }
+    return total;
+  }
+
   Future<Map<int, int>?> _showDenominationDialog({
     required String title,
+    required String storageKey,
   }) async {
+    final saved = _loadSavedDenominations(storageKey);
     final controllers = {
-      for (final d in _kDenominations) d: TextEditingController(text: '0'),
+      for (final d in _kDenominations)
+        d: TextEditingController(text: '${saved[d] ?? 0}'),
     };
     try {
       return await showDialog<Map<int, int>>(
@@ -862,6 +907,7 @@ class _PosPageState extends State<PosPage> {
                       for (final d in _kDenominations)
                         d: int.tryParse(controllers[d]!.text.trim()) ?? 0,
                     };
+                    _saveDenominations(storageKey, counts);
                     Navigator.of(ctx).pop(counts);
                   },
                   child: const Text('確定'),
@@ -958,7 +1004,10 @@ class _PosPageState extends State<PosPage> {
         return;
       }
 
-      final denominations = await _showDenominationDialog(title: '開店 - 釣銭準備金');
+      final denominations = await _showDenominationDialog(
+        title: '開店 - 釣銭準備金',
+        storageKey: 'pos_denom_open_${store.id}',
+      );
       if (denominations == null) return;
       final total = _denominationTotal(denominations);
       if (!mounted) return;
@@ -1031,6 +1080,7 @@ class _PosPageState extends State<PosPage> {
 
       final denominations = await _showDenominationDialog(
         title: '閉店 - レジ内現金確認',
+        storageKey: 'pos_denom_close_${store.id}',
       );
       if (denominations == null) return;
       final closingCashTotal = _denominationTotal(denominations);
@@ -1053,45 +1103,145 @@ class _PosPageState extends State<PosPage> {
         closingSnapshot,
         allProducts,
       );
+      final manualSalesTotal = await _fetchManualSalesTotalForSession(
+        existing.id,
+      );
       final cashSales = closingCashTotal - openingCashTotal;
-      final cardSales = inventoryBasedSales - cashSales;
+      final cardSales = (inventoryBasedSales + manualSalesTotal) - cashSales;
 
       if (!mounted) return;
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('閉店しますか？'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('${store.name}\nレジ内現金合計：￥${_yen(closingCashTotal)}'),
-                const Divider(height: 20),
-                Text('在庫ベース売上：￥${_yen(inventoryBasedSales)}'),
-                Text('現金売上：￥${_yen(cashSales)}'),
-                Text('カード決済推定額：￥${_yen(cardSales)}'),
-                const SizedBox(height: 8),
-                Text(
-                  '※在庫の増減から算出した概算です。値引き・ロス等は考慮されません。',
-                  style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('キャンセル'),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('閉店する'),
-            ),
-          ],
-        ),
-      );
-      if (confirmed != true) return;
+      final manualCashCtrl = TextEditingController(text: '$manualSalesTotal');
+      final manualCardCtrl = TextEditingController(text: '0');
+      int manualCashSales = manualSalesTotal;
+      int manualCardSales = 0;
+      bool confirmed = false;
+      try {
+        confirmed =
+            await showDialog<bool>(
+              context: context,
+              builder: (ctx) => StatefulBuilder(
+                builder: (ctx, setDialogState) {
+                  final enteredCash =
+                      int.tryParse(manualCashCtrl.text.trim()) ?? 0;
+                  final enteredCard =
+                      int.tryParse(manualCardCtrl.text.trim()) ?? 0;
+                  final mismatch =
+                      (enteredCash + enteredCard) != manualSalesTotal;
+                  return AlertDialog(
+                    title: const Text('閉店しますか？'),
+                    content: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${store.name}\nレジ内現金合計：￥${_yen(closingCashTotal)}',
+                          ),
+                          const Divider(height: 20),
+                          Text('商品売上（在庫ベース）：￥${_yen(inventoryBasedSales)}'),
+                          Text('手入力売上合計：￥${_yen(manualSalesTotal)}'),
+                          const SizedBox(height: 12),
+                          const Text(
+                            '手入力売上の内訳',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  controller: manualCashCtrl,
+                                  keyboardType: TextInputType.number,
+                                  inputFormatters: [
+                                    FilteringTextInputFormatter.digitsOnly,
+                                  ],
+                                  onChanged: (_) => setDialogState(() {}),
+                                  decoration: const InputDecoration(
+                                    labelText: '現金分',
+                                    prefixText: '￥',
+                                    isDense: true,
+                                    border: OutlineInputBorder(),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: TextField(
+                                  controller: manualCardCtrl,
+                                  keyboardType: TextInputType.number,
+                                  inputFormatters: [
+                                    FilteringTextInputFormatter.digitsOnly,
+                                  ],
+                                  onChanged: (_) => setDialogState(() {}),
+                                  decoration: const InputDecoration(
+                                    labelText: 'カード分',
+                                    prefixText: '￥',
+                                    isDense: true,
+                                    border: OutlineInputBorder(),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '※この内訳は記録用です。カード売上の計算には使用されません。',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                          if (mismatch) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              '※現金分＋カード分が手入力売上合計と一致していません',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.orange.shade800,
+                              ),
+                            ),
+                          ],
+                          const Divider(height: 20),
+                          Text('現金売上：￥${_yen(cashSales)}'),
+                          Text('カード売上：￥${_yen(cardSales)}'),
+                          const SizedBox(height: 8),
+                          Text(
+                            '※在庫の増減から算出した概算です。値引き・ロス等は考慮されません。',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.of(ctx).pop(false),
+                        child: const Text('キャンセル'),
+                      ),
+                      ElevatedButton(
+                        onPressed: () {
+                          manualCashSales = enteredCash;
+                          manualCardSales = enteredCard;
+                          Navigator.of(ctx).pop(true);
+                        },
+                        child: const Text('閉店する'),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ) ??
+            false;
+      } finally {
+        manualCashCtrl.dispose();
+        manualCardCtrl.dispose();
+      }
+      if (!confirmed) return;
 
       await existing.reference.update({
         'status': 'closed',
@@ -1104,6 +1254,9 @@ class _PosPageState extends State<PosPage> {
         'closingCashTotal': closingCashTotal,
         'closingStockSnapshot': closingSnapshot,
         'inventoryBasedSales': inventoryBasedSales,
+        'manualSalesTotal': manualSalesTotal,
+        'manualCashSales': manualCashSales,
+        'manualCardSales': manualCardSales,
         'cashSales': cashSales,
         'cardSales': cardSales,
       });
@@ -1111,8 +1264,9 @@ class _PosPageState extends State<PosPage> {
       await _refreshOpenSession();
       if (mounted) {
         _showSnack(
-          '閉店しました（在庫ベース売上 ￥${_yen(inventoryBasedSales)} / '
-          '現金 ￥${_yen(cashSales)} / カード推定 ￥${_yen(cardSales)}）',
+          '閉店しました（商品売上 ￥${_yen(inventoryBasedSales)} / '
+          '手入力 ￥${_yen(manualSalesTotal)} / '
+          '現金 ￥${_yen(cashSales)} / カード ￥${_yen(cardSales)}）',
           Colors.green,
         );
       }

@@ -17,6 +17,9 @@ class _PosRegisterSessionRecord {
     required this.openingCashTotal,
     required this.closingCashTotal,
     required this.inventoryBasedSales,
+    required this.manualSalesTotal,
+    required this.manualCashSales,
+    required this.manualCardSales,
     required this.cashSales,
     required this.cardSales,
   });
@@ -32,6 +35,9 @@ class _PosRegisterSessionRecord {
   final int openingCashTotal;
   final int closingCashTotal;
   final int inventoryBasedSales;
+  final int manualSalesTotal;
+  final int manualCashSales;
+  final int manualCardSales;
   final int cashSales;
   final int cardSales;
 
@@ -52,6 +58,9 @@ class _PosRegisterSessionRecord {
       openingCashTotal: inventoryIntValue(data['openingCashTotal']),
       closingCashTotal: inventoryIntValue(data['closingCashTotal']),
       inventoryBasedSales: inventoryIntValue(data['inventoryBasedSales']),
+      manualSalesTotal: inventoryIntValue(data['manualSalesTotal']),
+      manualCashSales: inventoryIntValue(data['manualCashSales']),
+      manualCardSales: inventoryIntValue(data['manualCardSales']),
       cashSales: inventoryIntValue(data['cashSales']),
       cardSales: inventoryIntValue(data['cardSales']),
     );
@@ -81,6 +90,7 @@ class _PosRegisterSessionHistoryPageState
 
   List<_PosRegisterSessionRecord> _sessions = [];
   int _totalInventoryBasedSales = 0;
+  int _totalManualSalesTotal = 0;
   int _totalCashSales = 0;
   int _totalCardSales = 0;
 
@@ -167,6 +177,10 @@ class _PosRegisterSessionHistoryPageState
         0,
         (total, s) => total + s.inventoryBasedSales,
       );
+      final totalManualSalesTotal = sessions.fold<int>(
+        0,
+        (total, s) => total + s.manualSalesTotal,
+      );
       final totalCashSales = sessions.fold<int>(
         0,
         (total, s) => total + s.cashSales,
@@ -179,6 +193,7 @@ class _PosRegisterSessionHistoryPageState
       setState(() {
         _sessions = sessions;
         _totalInventoryBasedSales = totalInventoryBasedSales;
+        _totalManualSalesTotal = totalManualSalesTotal;
         _totalCashSales = totalCashSales;
         _totalCardSales = totalCardSales;
         _hasResult = true;
@@ -259,17 +274,27 @@ class _PosRegisterSessionHistoryPageState
                     pw.Text('件数', style: pw.TextStyle(font: font)),
                     pw.Text(
                       '${_sessions.length} 件',
-                      style: pw.TextStyle(font: bold, fontSize: 18),
+                      style: pw.TextStyle(font: bold, fontSize: 16),
                     ),
                   ],
                 ),
                 pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
-                    pw.Text('在庫ベース売上合計', style: pw.TextStyle(font: font)),
+                    pw.Text('商品売上合計', style: pw.TextStyle(font: font)),
                     pw.Text(
                       '￥${_yen(_totalInventoryBasedSales)}',
-                      style: pw.TextStyle(font: bold, fontSize: 18),
+                      style: pw.TextStyle(font: bold, fontSize: 16),
+                    ),
+                  ],
+                ),
+                pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text('手入力売上合計', style: pw.TextStyle(font: font)),
+                    pw.Text(
+                      '￥${_yen(_totalManualSalesTotal)}',
+                      style: pw.TextStyle(font: bold, fontSize: 16),
                     ),
                   ],
                 ),
@@ -279,17 +304,17 @@ class _PosRegisterSessionHistoryPageState
                     pw.Text('現金売上合計', style: pw.TextStyle(font: font)),
                     pw.Text(
                       '￥${_yen(_totalCashSales)}',
-                      style: pw.TextStyle(font: bold, fontSize: 18),
+                      style: pw.TextStyle(font: bold, fontSize: 16),
                     ),
                   ],
                 ),
                 pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
-                    pw.Text('カード決済推定合計', style: pw.TextStyle(font: font)),
+                    pw.Text('カード売上合計', style: pw.TextStyle(font: font)),
                     pw.Text(
                       '￥${_yen(_totalCardSales)}',
-                      style: pw.TextStyle(font: bold, fontSize: 18),
+                      style: pw.TextStyle(font: bold, fontSize: 16),
                     ),
                   ],
                 ),
@@ -314,14 +339,15 @@ class _PosRegisterSessionHistoryPageState
             pw.Table(
               border: pw.TableBorder.all(color: PdfColors.grey500, width: 0.5),
               columnWidths: const {
-                0: pw.FlexColumnWidth(1.4),
-                1: pw.FlexColumnWidth(1.6),
-                2: pw.FlexColumnWidth(1.6),
-                3: pw.FlexColumnWidth(1.2),
-                4: pw.FlexColumnWidth(1.2),
-                5: pw.FlexColumnWidth(1.4),
-                6: pw.FlexColumnWidth(1.2),
-                7: pw.FlexColumnWidth(1.4),
+                0: pw.FlexColumnWidth(1.3),
+                1: pw.FlexColumnWidth(1.5),
+                2: pw.FlexColumnWidth(1.5),
+                3: pw.FlexColumnWidth(1.1),
+                4: pw.FlexColumnWidth(1.1),
+                5: pw.FlexColumnWidth(1.2),
+                6: pw.FlexColumnWidth(1.7),
+                7: pw.FlexColumnWidth(1.1),
+                8: pw.FlexColumnWidth(1.1),
               },
               children: [
                 pw.TableRow(
@@ -332,9 +358,10 @@ class _PosRegisterSessionHistoryPageState
                     _pdfCell('閉店時刻', bold),
                     _pdfCell('開店釣銭', bold),
                     _pdfCell('閉店現金', bold),
-                    _pdfCell('在庫ベース売上', bold),
+                    _pdfCell('商品売上', bold),
+                    _pdfCell('手入力(現金/カード)', bold),
                     _pdfCell('現金売上', bold),
-                    _pdfCell('カード推定', bold),
+                    _pdfCell('カード売上', bold),
                   ],
                 ),
                 for (final s in _sessions)
@@ -346,6 +373,10 @@ class _PosRegisterSessionHistoryPageState
                       _pdfCell('￥${_yen(s.openingCashTotal)}', font),
                       _pdfCell('￥${_yen(s.closingCashTotal)}', font),
                       _pdfCell('￥${_yen(s.inventoryBasedSales)}', font),
+                      _pdfCell(
+                        '￥${_yen(s.manualCashSales)} / ￥${_yen(s.manualCardSales)}',
+                        font,
+                      ),
                       _pdfCell('￥${_yen(s.cashSales)}', font),
                       _pdfCell('￥${_yen(s.cardSales)}', font),
                     ],
@@ -450,7 +481,13 @@ class _PosRegisterSessionHistoryPageState
                 children: [
                   Expanded(
                     child: Text(
-                      '在庫ベース売上\n￥${_yen(s.inventoryBasedSales)}',
+                      '商品売上\n￥${_yen(s.inventoryBasedSales)}',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      '手入力売上\n￥${_yen(s.manualSalesTotal)}',
                       style: const TextStyle(fontSize: 12),
                     ),
                   ),
@@ -462,11 +499,17 @@ class _PosRegisterSessionHistoryPageState
                   ),
                   Expanded(
                     child: Text(
-                      'カード推定\n￥${_yen(s.cardSales)}',
+                      'カード売上\n￥${_yen(s.cardSales)}',
                       style: const TextStyle(fontSize: 12),
                     ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '手入力内訳：現金 ￥${_yen(s.manualCashSales)} / '
+                'カード ￥${_yen(s.manualCardSales)}（記録用）',
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
               ),
             ],
           ],
@@ -603,19 +646,28 @@ class _PosRegisterSessionHistoryPageState
                       Row(
                         children: [
                           _statTile(
-                            '在庫ベース売上合計',
+                            '商品売上合計',
                             '￥${_yen(_totalInventoryBasedSales)}',
                             color: Colors.green.shade700,
                           ),
                           const SizedBox(width: 8),
-                          _statTile('現金売上合計', '￥${_yen(_totalCashSales)}'),
+                          _statTile(
+                            '手入力売上合計',
+                            '￥${_yen(_totalManualSalesTotal)}',
+                          ),
                         ],
                       ),
                       const SizedBox(height: 8),
                       Row(
                         children: [
-                          _statTile('カード決済推定合計', '￥${_yen(_totalCardSales)}'),
+                          _statTile('現金売上合計', '￥${_yen(_totalCashSales)}'),
                           const SizedBox(width: 8),
+                          _statTile('カード売上合計', '￥${_yen(_totalCardSales)}'),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
                           _statTile('セッション数', '${_sessions.length} 件'),
                         ],
                       ),
