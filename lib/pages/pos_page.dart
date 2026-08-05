@@ -32,6 +32,19 @@ class _PosCartLine {
   int get subtotal => taxIncludedUnitPrice * qty;
 }
 
+const List<int> _kDenominations = [10000, 5000, 1000, 500, 100, 50, 10, 5, 1];
+const Map<int, String> _kDenominationLabels = {
+  10000: '1万円',
+  5000: '5千円',
+  1000: '千円',
+  500: '500円',
+  100: '100円',
+  50: '50円',
+  10: '10円',
+  5: '5円',
+  1: '1円',
+};
+
 class _PosPageState extends State<PosPage> {
   final TextEditingController _codeController = TextEditingController();
   final TextEditingController _qtyController = TextEditingController(text: '1');
@@ -57,6 +70,10 @@ class _PosPageState extends State<PosPage> {
   bool _saving = false;
   bool _manualMode = false;
   int _manualTaxRate = 10;
+
+  DocumentSnapshot<Map<String, dynamic>>? _openSession;
+  bool _sessionLoading = false;
+  bool _sessionSaving = false;
 
   @override
   void initState() {
@@ -124,6 +141,7 @@ class _PosPageState extends State<PosPage> {
             .toString();
         _loading = false;
       });
+      unawaited(_refreshOpenSession());
     } catch (e) {
       setState(() {
         _message = '読み込みエラー: $e';
@@ -339,6 +357,9 @@ class _PosPageState extends State<PosPage> {
 
     setState(() => _saving = true);
     try {
+      final openSession = await _fetchOpenSession(store.id);
+      final sessionId = openSession?.id;
+
       final saleRef = AppSession.posSales.doc();
       final now = DateTime.now();
       final lineResults = <Map<String, dynamic>>[];
@@ -434,6 +455,7 @@ class _PosPageState extends State<PosPage> {
           'received': received,
           'change': change,
           'invoiceNumber': _invoiceNumberController.text.trim(),
+          'sessionId': sessionId,
         });
       });
 
@@ -677,6 +699,7 @@ class _PosPageState extends State<PosPage> {
           padding: const EdgeInsets.all(16),
           children: [
             _buildStoreInvoiceCard(),
+            _buildRegisterSessionCard(),
             _buildAddItemCard(),
             _buildCartAndTotalsCard(),
           ],
@@ -709,7 +732,10 @@ class _PosPageState extends State<PosPage> {
                 .toList(),
             onChanged: _saving
                 ? null
-                : (store) => setState(() => _selectedStore = store),
+                : (store) {
+                    setState(() => _selectedStore = store);
+                    unawaited(_refreshOpenSession());
+                  },
           ),
           const SizedBox(height: 12),
           Row(
@@ -733,6 +759,452 @@ class _PosPageState extends State<PosPage> {
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  Future<DocumentSnapshot<Map<String, dynamic>>?> _fetchOpenSession(
+    String storeId,
+  ) async {
+    final snap = await AppSession.posRegisterSessions
+        .where('storeId', isEqualTo: storeId)
+        .where('status', isEqualTo: 'open')
+        .limit(1)
+        .get();
+    return snap.docs.isEmpty ? null : snap.docs.first;
+  }
+
+  Future<void> _refreshOpenSession() async {
+    final store = _selectedStore;
+    if (store == null) {
+      setState(() => _openSession = null);
+      return;
+    }
+    setState(() => _sessionLoading = true);
+    try {
+      final doc = await _fetchOpenSession(store.id);
+      if (!mounted) return;
+      setState(() {
+        _openSession = doc;
+        _sessionLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _sessionLoading = false);
+    }
+  }
+
+  int _denominationTotal(Map<int, int> counts) =>
+      counts.entries.fold(0, (total, e) => total + e.key * e.value);
+
+  Future<Map<int, int>?> _showDenominationDialog({
+    required String title,
+  }) async {
+    final controllers = {
+      for (final d in _kDenominations) d: TextEditingController(text: '0'),
+    };
+    try {
+      return await showDialog<Map<int, int>>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            int currentTotal() => _denominationTotal({
+              for (final d in _kDenominations)
+                d: int.tryParse(controllers[d]!.text.trim()) ?? 0,
+            });
+            return AlertDialog(
+              title: Text(title),
+              content: SizedBox(
+                width: 340,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (final d in _kDenominations) ...[
+                        TextField(
+                          controller: controllers[d],
+                          keyboardType: TextInputType.number,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly,
+                          ],
+                          onChanged: (_) => setDialogState(() {}),
+                          decoration: InputDecoration(
+                            labelText: _kDenominationLabels[d],
+                            suffixText: '枚',
+                            isDense: true,
+                            border: const OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          '合計：￥${_yen(currentTotal())}',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('キャンセル'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    final counts = {
+                      for (final d in _kDenominations)
+                        d: int.tryParse(controllers[d]!.text.trim()) ?? 0,
+                    };
+                    Navigator.of(ctx).pop(counts);
+                  },
+                  child: const Text('確定'),
+                ),
+              ],
+            );
+          },
+        ),
+      );
+    } finally {
+      for (final c in controllers.values) {
+        c.dispose();
+      }
+    }
+  }
+
+  Future<List<LegacyItem>> _loadAllProductsIncludingDiscontinued() async {
+    final doc = await AppSession.doc('products').get();
+    return _parseItemsFromDoc(doc);
+  }
+
+  Future<Map<String, int>> _buildStockSnapshotByCode(
+    String storeId,
+    List<LegacyItem> allProducts,
+  ) async {
+    final stocksSnap = await AppSession.stocksDoc.get();
+    final stocksData = stocksSnap.data() ?? <String, dynamic>{};
+    final storeStocksRaw = stocksData[storeId];
+    final idToCode = <String, String>{
+      for (final p in allProducts) p.id: p.code,
+    };
+
+    final snapshot = <String, int>{};
+    if (storeStocksRaw is Map) {
+      for (final entry in storeStocksRaw.entries) {
+        final itemId = entry.key.toString();
+        final qty = inventoryIntValue(entry.value);
+        final code = idToCode[itemId];
+        final key = (code != null && code.isNotEmpty) ? code : itemId;
+        snapshot[key] = qty;
+      }
+    }
+    return snapshot;
+  }
+
+  Map<String, int> _parseStockSnapshot(dynamic raw) {
+    final result = <String, int>{};
+    if (raw is Map) {
+      for (final entry in raw.entries) {
+        result[entry.key.toString()] = inventoryIntValue(entry.value);
+      }
+    }
+    return result;
+  }
+
+  // 開店時・閉店時の在庫スナップショットの差分から、概算の在庫ベース売上を算出する。
+  // （レジを通さない値引き・ロス等は考慮されない概算値）
+  int _calcInventoryBasedSales(
+    Map<String, int> openingSnapshot,
+    Map<String, int> closingSnapshot,
+    List<LegacyItem> allProducts,
+  ) {
+    final codeToItem = <String, LegacyItem>{
+      for (final p in allProducts) p.code: p,
+    };
+    final allCodes = {...openingSnapshot.keys, ...closingSnapshot.keys};
+
+    var total = 0;
+    for (final code in allCodes) {
+      final diff = (openingSnapshot[code] ?? 0) - (closingSnapshot[code] ?? 0);
+      if (diff == 0) continue;
+      final item = codeToItem[code];
+      if (item == null) continue;
+      final taxRate = item.reducedTax ? 8 : 10;
+      final unitPriceIncludingTax =
+          (item.taxExcludedPrice * (100 + taxRate) / 100).round();
+      total += diff * unitPriceIncludingTax;
+    }
+    return total;
+  }
+
+  Future<void> _openRegister() async {
+    final store = _selectedStore;
+    if (store == null) {
+      _showSnack('店舗を選択してください', Colors.orange);
+      return;
+    }
+
+    setState(() => _sessionSaving = true);
+    try {
+      final existing = await _fetchOpenSession(store.id);
+      if (existing != null) {
+        _showSnack('この店舗は既に開店中です', Colors.orange);
+        return;
+      }
+
+      final denominations = await _showDenominationDialog(title: '開店 - 釣銭準備金');
+      if (denominations == null) return;
+      final total = _denominationTotal(denominations);
+      if (!mounted) return;
+
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('開店しますか？'),
+          content: Text(
+            '${store.name}\n釣銭準備金：￥${_yen(total)}\n\n現在の在庫をスナップショットとして記録します。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('キャンセル'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('開店する'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+
+      final allProducts = await _loadAllProductsIncludingDiscontinued();
+      final snapshot = await _buildStockSnapshotByCode(store.id, allProducts);
+
+      final docRef = AppSession.posRegisterSessions.doc();
+      await docRef.set({
+        'id': docRef.id,
+        'storeId': store.id,
+        'storeName': store.name,
+        'status': 'open',
+        'openedAt': FieldValue.serverTimestamp(),
+        'openedBy': AppSession.nickname,
+        'openedByUid': AppSession.uid,
+        'openingCashDenominations': denominations.map(
+          (k, v) => MapEntry(k.toString(), v),
+        ),
+        'openingCashTotal': total,
+        'openingStockSnapshot': snapshot,
+      });
+
+      await _refreshOpenSession();
+      if (mounted) {
+        _showSnack('開店しました（釣銭準備金 ￥${_yen(total)}）', Colors.green);
+      }
+    } catch (e) {
+      _showSnack('開店処理に失敗しました: $e', Colors.red);
+    } finally {
+      if (mounted) setState(() => _sessionSaving = false);
+    }
+  }
+
+  Future<void> _closeRegister() async {
+    final store = _selectedStore;
+    if (store == null) {
+      _showSnack('店舗を選択してください', Colors.orange);
+      return;
+    }
+
+    setState(() => _sessionSaving = true);
+    try {
+      final existing = await _fetchOpenSession(store.id);
+      if (existing == null) {
+        _showSnack('開いているセッションがありません', Colors.orange);
+        return;
+      }
+
+      final denominations = await _showDenominationDialog(
+        title: '閉店 - レジ内現金確認',
+      );
+      if (denominations == null) return;
+      final closingCashTotal = _denominationTotal(denominations);
+      if (!mounted) return;
+
+      final allProducts = await _loadAllProductsIncludingDiscontinued();
+      final closingSnapshot = await _buildStockSnapshotByCode(
+        store.id,
+        allProducts,
+      );
+      final openingSnapshot = _parseStockSnapshot(
+        existing.data()?['openingStockSnapshot'],
+      );
+      final openingCashTotal = inventoryIntValue(
+        existing.data()?['openingCashTotal'],
+      );
+
+      final inventoryBasedSales = _calcInventoryBasedSales(
+        openingSnapshot,
+        closingSnapshot,
+        allProducts,
+      );
+      final cashSales = closingCashTotal - openingCashTotal;
+      final cardSales = inventoryBasedSales - cashSales;
+
+      if (!mounted) return;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('閉店しますか？'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${store.name}\nレジ内現金合計：￥${_yen(closingCashTotal)}'),
+                const Divider(height: 20),
+                Text('在庫ベース売上：￥${_yen(inventoryBasedSales)}'),
+                Text('現金売上：￥${_yen(cashSales)}'),
+                Text('カード決済推定額：￥${_yen(cardSales)}'),
+                const SizedBox(height: 8),
+                Text(
+                  '※在庫の増減から算出した概算です。値引き・ロス等は考慮されません。',
+                  style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('キャンセル'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('閉店する'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+
+      await existing.reference.update({
+        'status': 'closed',
+        'closedAt': FieldValue.serverTimestamp(),
+        'closedBy': AppSession.nickname,
+        'closedByUid': AppSession.uid,
+        'closingCashDenominations': denominations.map(
+          (k, v) => MapEntry(k.toString(), v),
+        ),
+        'closingCashTotal': closingCashTotal,
+        'closingStockSnapshot': closingSnapshot,
+        'inventoryBasedSales': inventoryBasedSales,
+        'cashSales': cashSales,
+        'cardSales': cardSales,
+      });
+
+      await _refreshOpenSession();
+      if (mounted) {
+        _showSnack(
+          '閉店しました（在庫ベース売上 ￥${_yen(inventoryBasedSales)} / '
+          '現金 ￥${_yen(cashSales)} / カード推定 ￥${_yen(cardSales)}）',
+          Colors.green,
+        );
+      }
+    } catch (e) {
+      _showSnack('閉店処理に失敗しました: $e', Colors.red);
+    } finally {
+      if (mounted) setState(() => _sessionSaving = false);
+    }
+  }
+
+  Widget _buildRegisterSessionCard() {
+    final isOpen = _openSession != null;
+    final openedAtRaw = _openSession?.data()?['openedAt'];
+    final openedAt = openedAtRaw is Timestamp ? openedAtRaw.toDate() : null;
+    final openingTotal = inventoryIntValue(
+      _openSession?.data()?['openingCashTotal'],
+    );
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.point_of_sale,
+                  color: isOpen ? Colors.green.shade700 : Colors.grey,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    isOpen ? 'レジ開店中' : 'レジ未開店',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: isOpen
+                          ? Colors.green.shade800
+                          : Colors.grey.shade700,
+                    ),
+                  ),
+                ),
+                if (_sessionLoading)
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+              ],
+            ),
+            if (isOpen && openedAt != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                '開店時刻: ${_formatDateTime(openedAt)} / 釣銭準備金 ￥${_yen(openingTotal)}',
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed:
+                        (_saving ||
+                            _sessionSaving ||
+                            _sessionLoading ||
+                            isOpen ||
+                            _selectedStore == null)
+                        ? null
+                        : _openRegister,
+                    icon: const Icon(Icons.login),
+                    label: const Text('開店'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed:
+                        (_saving ||
+                            _sessionSaving ||
+                            _sessionLoading ||
+                            !isOpen)
+                        ? null
+                        : _closeRegister,
+                    icon: const Icon(Icons.logout),
+                    label: const Text('閉店'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

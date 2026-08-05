@@ -750,6 +750,12 @@ class _StoreListPageState extends State<StoreListPage> {
                 Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const PosSummaryPage()),
                 );
+              } else if (value == 'pos_register_history') {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const PosRegisterSessionHistoryPage(),
+                  ),
+                );
               } else if (value == 'stripe_settings') {
                 Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const StripeSettingsPage()),
@@ -917,6 +923,16 @@ class _StoreListPageState extends State<StoreListPage> {
                     Icon(Icons.query_stats),
                     SizedBox(width: 12),
                     Text('レジ実績集計'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'pos_register_history',
+                child: Row(
+                  children: [
+                    Icon(Icons.history_toggle_off),
+                    SizedBox(width: 12),
+                    Text('レジ開店・閉店履歴'),
                   ],
                 ),
               ),

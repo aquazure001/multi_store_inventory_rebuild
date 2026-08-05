@@ -59,6 +59,9 @@ class AppSession {
   static CollectionReference<Map<String, dynamic>> get posSales =>
       doc('pos_sales').collection('entries');
 
+  static CollectionReference<Map<String, dynamic>> get posRegisterSessions =>
+      doc('pos_register_sessions').collection('entries');
+
   static CollectionReference<Map<String, dynamic>> get posReceiptPdfs =>
       doc('pos_receipt_pdfs').collection('entries');
 
