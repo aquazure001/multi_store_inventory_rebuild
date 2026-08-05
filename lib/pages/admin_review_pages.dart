@@ -688,6 +688,6 @@ class _SuperAdminPageState extends State<SuperAdminPage> {
 }
 
 // ─────────────────────────────────────────────
-// 特別発注・新規発注ページ
+// 特別発注・新商品発注ページ
 // 実装は lib/pages/special_order_page.dart に分離
 // ─────────────────────────────────────────────

@@ -158,7 +158,7 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
           : '',
     );
     var reducedTax = initialReducedTax;
-    final isProduct = widget.label == '商品';
+    final showPriceFields = widget.label == '商品' || widget.label == 'テスター';
     final isNew = initialName == null;
     return showDialog<Map<String, dynamic>>(
       context: context,
@@ -185,7 +185,7 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
                     border: OutlineInputBorder(),
                   ),
                 ),
-                if (isProduct) ...[
+                if (showPriceFields) ...[
                   const SizedBox(height: 12),
                   TextField(
                     controller: priceCtrl,
@@ -257,6 +257,74 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
     );
   }
 
+  String _normalizeMasterCode(String s) => String.fromCharCodes(
+    s.runes.map((r) {
+      if (r >= 0xFF01 && r <= 0xFF5E) return r - 0xFEE0;
+      if (r == 0x3000) return 0x20;
+      return r;
+    }),
+  ).toLowerCase().trim();
+
+  // 商品⇄テスターの価格同期：
+  // 自分側が未入力(0)で反対側に価格があれば反対側の値を取り込む。
+  // 自分側に価格があり反対側が未入力(0)なら反対側のドキュメントを更新する。
+  // 両方に価格が入っている場合はどちらも上書きしない。
+  Future<({int price, bool reducedTax})> _resolvePriceWithOppositeMaster(
+    String code,
+    int ownPrice,
+    bool ownReducedTax,
+  ) async {
+    final oppositeDocKey = switch (widget.label) {
+      '商品' => 'testers',
+      'テスター' => 'products',
+      _ => null,
+    };
+    if (oppositeDocKey == null) {
+      return (price: ownPrice, reducedTax: ownReducedTax);
+    }
+
+    final normalized = _normalizeMasterCode(code);
+    if (normalized.isEmpty) {
+      return (price: ownPrice, reducedTax: ownReducedTax);
+    }
+
+    final oppositeDocRef = AppSession.doc(oppositeDocKey);
+    final snap = await oppositeDocRef.get();
+    final rawItems = (snap.data()?['items'] as List? ?? [])
+        .whereType<Map>()
+        .map(
+          (e) => Map<String, dynamic>.from(
+            e.map((k, v) => MapEntry(k.toString(), v)),
+          ),
+        )
+        .toList();
+
+    final idx = rawItems.indexWhere(
+      (m) => _normalizeMasterCode((m['code'] ?? '').toString()) == normalized,
+    );
+    if (idx < 0) return (price: ownPrice, reducedTax: ownReducedTax);
+
+    final oppositeItem = LegacyItem.fromMap(rawItems[idx]);
+
+    if (ownPrice == 0 && oppositeItem.taxExcludedPrice != 0) {
+      return (
+        price: oppositeItem.taxExcludedPrice,
+        reducedTax: oppositeItem.reducedTax,
+      );
+    }
+
+    if (ownPrice != 0 && oppositeItem.taxExcludedPrice == 0) {
+      rawItems[idx] = Map<String, dynamic>.from(rawItems[idx])
+        ..['taxExcludedPrice'] = ownPrice
+        ..['reducedTax'] = ownReducedTax
+        ..['taxRate'] = ownReducedTax ? 8 : 10;
+      await oppositeDocRef.update({'items': rawItems});
+      _clearMasterDataCache();
+    }
+
+    return (price: ownPrice, reducedTax: ownReducedTax);
+  }
+
   Future<void> _addItem() async {
     if (_rawItems.length >= _maxItems) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -270,15 +338,27 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
     final result = await _showItemDialog();
     if (result == null) return;
 
+    final hasPriceFields = widget.label == '商品' || widget.label == 'テスター';
+    var resolvedPrice = inventoryIntValue(result['taxExcludedPrice']);
+    var resolvedReducedTax = result['reducedTax'] == true;
+    if (hasPriceFields) {
+      final resolved = await _resolvePriceWithOppositeMaster(
+        result['code']!,
+        resolvedPrice,
+        resolvedReducedTax,
+      );
+      resolvedPrice = resolved.price;
+      resolvedReducedTax = resolved.reducedTax;
+    }
+
     final newId = FirebaseFirestore.instance.collection('_').doc().id;
     setState(() {
       _rawItems.add({
         'id': newId,
         'code': result['code']!,
         'name': result['name']!,
-        if (widget.label == '商品')
-          'taxExcludedPrice': inventoryIntValue(result['taxExcludedPrice']),
-        if (widget.label == '商品') 'reducedTax': result['reducedTax'] == true,
+        if (hasPriceFields) 'taxExcludedPrice': resolvedPrice,
+        if (hasPriceFields) 'reducedTax': resolvedReducedTax,
       });
       _items = _sorted(_rawItems);
     });
@@ -318,14 +398,27 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
     final idx = _rawItems.indexWhere((m) => m['id'] == item.id);
     if (idx < 0) return;
 
+    final hasPriceFields = widget.label == '商品' || widget.label == 'テスター';
+    var resolvedPrice = inventoryIntValue(result['taxExcludedPrice']);
+    var resolvedReducedTax = result['reducedTax'] == true;
+    if (hasPriceFields) {
+      final resolved = await _resolvePriceWithOppositeMaster(
+        result['code']!,
+        resolvedPrice,
+        resolvedReducedTax,
+      );
+      resolvedPrice = resolved.price;
+      resolvedReducedTax = resolved.reducedTax;
+    }
+
     final oldMap = Map<String, dynamic>.from(_rawItems[idx]);
     setState(() {
       _rawItems[idx] = Map<String, dynamic>.from(_rawItems[idx])
         ..['code'] = result['code']!
         ..['name'] = result['name']!
-        ..['taxExcludedPrice'] = inventoryIntValue(result['taxExcludedPrice'])
-        ..['reducedTax'] = result['reducedTax'] == true
-        ..['taxRate'] = result['reducedTax'] == true ? 8 : 10;
+        ..['taxExcludedPrice'] = resolvedPrice
+        ..['reducedTax'] = resolvedReducedTax
+        ..['taxRate'] = resolvedReducedTax ? 8 : 10;
       _items = _sorted(_rawItems);
     });
 
@@ -395,6 +488,7 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
   }
 
   Future<void> _exportCsv() async {
+    final hasPriceFields = widget.label == '商品' || widget.label == 'テスター';
     final rows = <List<Object?>>[
       [
         '種別',
@@ -415,11 +509,11 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
         item.id,
         item.code,
         item.name,
-        widget.label == '商品' && item.taxExcludedPrice > 0
+        hasPriceFields && item.taxExcludedPrice > 0
             ? item.taxExcludedPrice
             : '',
-        widget.label == '商品' ? (item.reducedTax ? '8%' : '10%') : '',
-        widget.label == '商品' && item.taxExcludedPrice > 0
+        hasPriceFields ? (item.reducedTax ? '8%' : '10%') : '',
+        hasPriceFields && item.taxExcludedPrice > 0
             ? (item.taxExcludedPrice * (100 + (item.reducedTax ? 8 : 10)) / 100)
                   .round()
             : '',
@@ -635,7 +729,7 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
                     ],
                   ),
                   subtitle: Text(
-                    widget.label == '商品'
+                    (widget.label == '商品' || widget.label == 'テスター')
                         ? 'コード: ${item.code} / 税抜: ${item.taxExcludedPrice > 0 ? '￥${item.taxExcludedPrice}' : '未設定'} / 税率: ${item.reducedTax ? '8%' : '10%'}'
                         : 'コード: ${item.code}',
                   ),

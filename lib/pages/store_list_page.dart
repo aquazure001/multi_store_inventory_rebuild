@@ -864,7 +864,7 @@ class _StoreListPageState extends State<StoreListPage> {
                   children: [
                     Icon(Icons.star_border),
                     SizedBox(width: 12),
-                    Text('特別発注・新規発注'),
+                    Text('特別発注・新商品発注'),
                   ],
                 ),
               ),

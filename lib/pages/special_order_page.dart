@@ -1,7 +1,7 @@
 part of '../main.dart';
 
 // ─────────────────────────────────────────────
-// 特別発注・新規発注ページ
+// 特別発注・新商品発注ページ
 // ─────────────────────────────────────────────
 
 enum _MasterAddResult { added, alreadyExists, skipped }
@@ -329,9 +329,8 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   List<_HomeCareCustomerOrderEntry> _homeCareCustomerOrdersForItem(
     SpecialOrderItem item,
   ) {
-    final lotKey = _homeCareLotKey(item);
     final result = _homeCareCustomerOrders.values
-        .where((entry) => entry.itemId == item.id || entry.lotKey == lotKey)
+        .where((entry) => entry.itemId == item.id)
         .toList();
     result.sort((a, b) => b.orderedAt.compareTo(a.orderedAt));
     return result;
@@ -352,6 +351,35 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   String _fmtDate(DateTime d) =>
       '${d.year}年${d.month.toString().padLeft(2, '0')}月'
       '${d.day.toString().padLeft(2, '0')}日';
+
+  String _fmtDateSlash(DateTime d) =>
+      '${d.year}/${d.month.toString().padLeft(2, '0')}/'
+      '${d.day.toString().padLeft(2, '0')}';
+
+  // ホームケア顧客別仮発注一覧の「納品日」表示：
+  // 対象2期間はデフォルト日（8/5, 8/20）を基準にし、
+  // orderedAtの日付がsalesEndより後であれば編集ダイアログで
+  // 個別に変更された値とみなしてそちらを表示する。
+  DateTime _homeCareCustomerDeliveryDisplayDate(
+    SpecialOrderItem item,
+    _HomeCareCustomerOrderEntry entry,
+  ) {
+    final defaultDate = _homeCareDeliveryDefaultDate(item);
+    if (defaultDate == null) return item.arrival;
+    final orderedDateOnly = DateTime(
+      entry.orderedAt.year,
+      entry.orderedAt.month,
+      entry.orderedAt.day,
+    );
+    final salesEndOnly = DateTime(
+      item.salesEnd.year,
+      item.salesEnd.month,
+      item.salesEnd.day,
+    );
+    return orderedDateOnly.isAfter(salesEndOnly)
+        ? orderedDateOnly
+        : defaultDate;
+  }
 
   int _specialNameGroup(String value) {
     final text = value.trim();
@@ -446,21 +474,26 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     return _homeCareDeliveryDates.putIfAbsent(item.id, () => defaultDate);
   }
 
+  // 選択された「日付」部分と、現在の「時刻」部分を組み合わせる
+  // （ユーザーは日付だけ選べればよく、時刻はその場の操作時刻でよいため）。
+  DateTime _combineDateWithNowTime(DateTime date) {
+    final now = DateTime.now();
+    return DateTime(
+      date.year,
+      date.month,
+      date.day,
+      now.hour,
+      now.minute,
+      now.second,
+      now.millisecond,
+    );
+  }
+
   Timestamp _homeCareHandoverTimestamp(SpecialOrderItem item) {
     final defaultDate = _homeCareDeliveryDefaultDate(item);
     if (defaultDate == null) return Timestamp.now();
-    final selected = _homeCareDeliveryDateFor(item);
-    final now = DateTime.now();
     return Timestamp.fromDate(
-      DateTime(
-        selected.year,
-        selected.month,
-        selected.day,
-        now.hour,
-        now.minute,
-        now.second,
-        now.millisecond,
-      ),
+      _combineDateWithNowTime(_homeCareDeliveryDateFor(item)),
     );
   }
 
@@ -870,94 +903,133 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     final nameCtrl = TextEditingController(text: entry.customerName);
     final storeCtrl = TextEditingController(text: entry.storeName);
     final qtyCtrl = TextEditingController(text: '${entry.qty}');
+    DateTime? selectedOrderedDate = _homeCareDeliveryDefaultDate(item);
 
     try {
       final updatedInput = await showDialog<_HomeCareCustomerOrderEntry?>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('仮発注を編集'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  item.name,
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: storeCtrl,
-                  decoration: const InputDecoration(
-                    labelText: '店舗名',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: codeCtrl,
-                  onChanged: (value) =>
-                      _applyKnownCustomerName(value, nameCtrl, overwrite: true),
-                  decoration: const InputDecoration(
-                    labelText: '顧客コード',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: nameCtrl,
-                  decoration: const InputDecoration(
-                    labelText: '顧客名',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: qtyCtrl,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: '発注数',
-                    suffixText: '個',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                if (entry.delivered) ...[
-                  const SizedBox(height: 8),
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setDialogState) => AlertDialog(
+            title: const Text('仮発注を編集'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                   Text(
-                    '※引渡し済みのため、数量を変えると在庫数も自動で調整します。',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.orange.shade800,
+                    item.name,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: storeCtrl,
+                    decoration: const InputDecoration(
+                      labelText: '店舗名',
+                      border: OutlineInputBorder(),
                     ),
                   ),
-                ],
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(null),
-              child: const Text('キャンセル'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final customerCode = codeCtrl.text.trim();
-                final customerName = nameCtrl.text.trim();
-                final storeName = storeCtrl.text.trim();
-                final qty = int.tryParse(qtyCtrl.text.trim()) ?? 0;
-                if (customerCode.isEmpty || qty <= 0) return;
-                Navigator.of(ctx).pop(
-                  entry.copyWith(
-                    customerCode: customerCode,
-                    customerName: customerName,
-                    storeName: storeName,
-                    qty: qty,
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: codeCtrl,
+                    onChanged: (value) => _applyKnownCustomerName(
+                      value,
+                      nameCtrl,
+                      overwrite: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: '顧客コード',
+                      border: OutlineInputBorder(),
+                    ),
                   ),
-                );
-              },
-              child: const Text('保存'),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(
+                      labelText: '顧客名',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: qtyCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: '発注数',
+                      suffixText: '個',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  if (selectedOrderedDate != null) ...[
+                    const SizedBox(height: 8),
+                    InkWell(
+                      onTap: () async {
+                        final picked = await showDatePicker(
+                          context: ctx,
+                          initialDate: selectedOrderedDate!,
+                          firstDate: DateTime(2020),
+                          lastDate: DateTime(2100),
+                        );
+                        if (picked == null) return;
+                        setDialogState(() {
+                          selectedOrderedDate = DateTime(
+                            picked.year,
+                            picked.month,
+                            picked.day,
+                          );
+                        });
+                      },
+                      child: InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: '日付',
+                          isDense: true,
+                          border: OutlineInputBorder(),
+                          suffixIcon: Icon(Icons.calendar_today, size: 18),
+                        ),
+                        child: Text(_fmtDate(selectedOrderedDate!)),
+                      ),
+                    ),
+                  ],
+                  if (entry.delivered) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      '※引渡し済みのため、数量を変えると在庫数も自動で調整します。',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.orange.shade800,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ),
-          ],
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(null),
+                child: const Text('キャンセル'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  final customerCode = codeCtrl.text.trim();
+                  final customerName = nameCtrl.text.trim();
+                  final storeName = storeCtrl.text.trim();
+                  final qty = int.tryParse(qtyCtrl.text.trim()) ?? 0;
+                  if (customerCode.isEmpty || qty <= 0) return;
+                  Navigator.of(ctx).pop(
+                    entry.copyWith(
+                      customerCode: customerCode,
+                      customerName: customerName,
+                      storeName: storeName,
+                      qty: qty,
+                      orderedAt: selectedOrderedDate == null
+                          ? null
+                          : _combineDateWithNowTime(selectedOrderedDate!),
+                    ),
+                  );
+                },
+                child: const Text('保存'),
+              ),
+            ],
+          ),
         ),
       );
       if (updatedInput == null) return;
@@ -1494,6 +1566,8 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       salesEnd: result['salesEnd'] as DateTime,
       arrival: result['arrival'] as DateTime,
       createdAt: DateTime.now(),
+      taxExcludedPrice: result['taxExcludedPrice'] as int,
+      reducedTax: result['reducedTax'] as bool,
     );
 
     try {
@@ -1559,7 +1633,13 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     }
 
     final masterId = existingProduct?.id ?? existingTester?.id ?? item.id;
-    final masterItem = {'id': masterId, 'code': item.code, 'name': item.name};
+    final masterItem = {
+      'id': masterId,
+      'code': item.code,
+      'name': item.name,
+      'taxExcludedPrice': item.taxExcludedPrice,
+      'reducedTax': item.reducedTax,
+    };
 
     final writes = <Future<void>>[];
     if (existingProduct == null) {
@@ -1606,7 +1686,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       builder: (ctx) => AlertDialog(
         title: const Text('既存分をマスタへ反映'),
         content: Text(
-          '特別発注・新規発注の既存登録 ${targetItems.length} 件を確認し、\n'
+          '特別発注・新商品発注の既存登録 ${targetItems.length} 件を確認し、\n'
           '商品マスタ・テスターマスタに未登録のコードだけ追加します。\n\n'
           '同一コードがあるものは追加しません。',
         ),
@@ -1659,6 +1739,8 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           'id': masterId,
           'code': item.code,
           'name': item.name,
+          'taxExcludedPrice': item.taxExcludedPrice,
+          'reducedTax': item.reducedTax,
         };
 
         if (existingProduct == null && !productAddCodes.contains(code)) {
@@ -1728,6 +1810,8 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       salesEnd: result['salesEnd'] as DateTime,
       arrival: result['arrival'] as DateTime,
       createdAt: item.createdAt,
+      taxExcludedPrice: result['taxExcludedPrice'] as int,
+      reducedTax: result['reducedTax'] as bool,
     );
 
     try {
@@ -1831,6 +1915,12 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     String selectedType = initial?.type ?? '特別発注';
     final nameCtrl = TextEditingController(text: initial?.name ?? '');
     final codeCtrl = TextEditingController(text: initial?.code ?? '');
+    final priceCtrl = TextEditingController(
+      text: (initial != null && initial.taxExcludedPrice > 0)
+          ? initial.taxExcludedPrice.toString()
+          : '',
+    );
+    bool reducedTax = initial?.reducedTax ?? false;
     DateTime salesStart = initial?.salesStart ?? DateTime.now();
     DateTime salesEnd =
         initial?.salesEnd ?? DateTime.now().add(const Duration(days: 90));
@@ -1869,11 +1959,50 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
               '${d.year}/${d.month.toString().padLeft(2, '0')}/'
               '${d.day.toString().padLeft(2, '0')}';
 
+          Future<void> autoFillPriceFromCode(String rawCode) async {
+            final normalized = _normalizeCode(rawCode);
+            if (normalized.isEmpty) return;
+
+            final masterData = await _loadMasterData();
+            LegacyItem? matchedProduct;
+            for (final product in masterData.products) {
+              if (_normalizeCode(product.code) == normalized) {
+                matchedProduct = product;
+                break;
+              }
+            }
+
+            int? foundPrice;
+            bool? foundReducedTax;
+            if (matchedProduct != null) {
+              foundPrice = matchedProduct.taxExcludedPrice;
+              foundReducedTax = matchedProduct.reducedTax;
+            } else {
+              SpecialOrderItem? matchedSpecialItem;
+              for (final existingItem in _items) {
+                if (_normalizeCode(existingItem.code) == normalized) {
+                  matchedSpecialItem = existingItem;
+                  break;
+                }
+              }
+              if (matchedSpecialItem != null) {
+                foundPrice = matchedSpecialItem.taxExcludedPrice;
+                foundReducedTax = matchedSpecialItem.reducedTax;
+              }
+            }
+
+            if (foundPrice == null) return;
+            setS(() {
+              priceCtrl.text = foundPrice! > 0 ? foundPrice.toString() : '';
+              reducedTax = foundReducedTax ?? false;
+            });
+          }
+
           return AlertDialog(
             title: Text(
               isEdit
                   ? '発注情報を編集'
-                  : (duplicateMode ? '複製して新規登録' : '特別発注・新規発注 登録'),
+                  : (duplicateMode ? '複製して新規登録' : '特別発注・新商品発注 登録'),
             ),
             content: SizedBox(
               width: 340,
@@ -1914,6 +2043,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                     const SizedBox(height: 8),
                     TextField(
                       controller: codeCtrl,
+                      onChanged: autoFillPriceFromCode,
                       decoration: const InputDecoration(
                         labelText: '商品コード',
                         border: OutlineInputBorder(),
@@ -1921,6 +2051,52 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                       ),
                     ),
                     const SizedBox(height: 12),
+                    TextField(
+                      controller: priceCtrl,
+                      keyboardType: TextInputType.number,
+                      onChanged: (_) => setS(() {}),
+                      decoration: const InputDecoration(
+                        labelText: '税抜価格',
+                        prefixText: '￥',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Builder(
+                      builder: (_) {
+                        final price = inventoryIntValue(priceCtrl.text);
+                        final taxRate = reducedTax ? 8 : 10;
+                        final included = (price * (100 + taxRate) / 100)
+                            .round();
+                        return Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            price > 0
+                                ? '税込価格：￥${included.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',')}（$taxRate%）'
+                                : '税込価格：未設定',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade700,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      value: reducedTax,
+                      onChanged: (value) {
+                        setS(() {
+                          reducedTax = value == true;
+                        });
+                      },
+                      title: const Text('軽減税率（8%）'),
+                      subtitle: const Text('チェックなしは10%で計算'),
+                      controlAffinity: ListTileControlAffinity.leading,
+                    ),
+                    const SizedBox(height: 4),
                     const Text(
                       '販売期間',
                       style: TextStyle(
@@ -2017,6 +2193,8 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                     'salesStart': salesStart,
                     'salesEnd': salesEnd,
                     'arrival': arrival,
+                    'taxExcludedPrice': inventoryIntValue(priceCtrl.text),
+                    'reducedTax': reducedTax,
                   });
                 },
                 child: Text(isEdit ? '保存' : '新規登録'),
@@ -2439,7 +2617,14 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                   style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
                 Text(
-                  '発注数: ${entry.qty}個 / ${_formatDateTime(entry.orderedAt)}',
+                  '発注数: ${entry.qty}個',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                ),
+                Text(
+                  '発注期間: ${_fmtDateSlash(item.salesStart)}〜'
+                  '${_fmtDateSlash(item.salesEnd)} / '
+                  '納品日: '
+                  '${_fmtDateSlash(_homeCareCustomerDeliveryDisplayDate(item, entry))}',
                   style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
                 ),
               ],
@@ -3169,8 +3354,8 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                   item.isBeforeSales ? '期間前' : '期間終了',
                   style: const TextStyle(fontSize: 10, color: Colors.grey),
                 ),
-              )
-            else if (totalOrdered > 0)
+              ),
+            if (totalOrdered > 0)
               Container(
                 margin: const EdgeInsets.only(right: 4),
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -3278,12 +3463,12 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     final scaffold = Scaffold(
       backgroundColor: const Color(0xFFFFF7FF),
       appBar: AppBar(
-        title: Text(widget.showExpiredOnly ? '販売終了' : '特別発注・新規発注'),
+        title: Text(widget.showExpiredOnly ? '販売終了' : '特別発注・新商品発注'),
         bottom: widget.showExpiredOnly
             ? null
             : const TabBar(
                 tabs: [
-                  Tab(text: '通常発注'),
+                  Tab(text: '新商品'),
                   Tab(text: 'ホームケアセット'),
                 ],
               ),
@@ -3448,6 +3633,7 @@ class _HomeCareCustomerOrderEntry {
     String? storeName,
     int? qty,
     bool? delivered,
+    DateTime? orderedAt,
     DateTime? deliveredAt,
   }) {
     return _HomeCareCustomerOrderEntry(
@@ -3461,7 +3647,7 @@ class _HomeCareCustomerOrderEntry {
       storeName: storeName ?? this.storeName,
       qty: qty ?? this.qty,
       delivered: delivered ?? this.delivered,
-      orderedAt: orderedAt,
+      orderedAt: orderedAt ?? this.orderedAt,
       deliveredAt: deliveredAt,
     );
   }

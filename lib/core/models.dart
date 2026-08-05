@@ -156,6 +156,8 @@ class SpecialOrderItem {
     required this.salesEnd,
     required this.arrival,
     required this.createdAt,
+    this.taxExcludedPrice = 0,
+    this.reducedTax = false,
   });
 
   final String id;
@@ -166,6 +168,8 @@ class SpecialOrderItem {
   final DateTime salesEnd;
   final DateTime arrival;
   final DateTime createdAt;
+  final int taxExcludedPrice;
+  final bool reducedTax;
 
   DateTime get _todayOnly {
     final now = DateTime.now();
@@ -198,6 +202,8 @@ class SpecialOrderItem {
     'salesEnd': _fmt(salesEnd),
     'arrival': _fmt(arrival),
     'createdAt': Timestamp.fromDate(createdAt),
+    'taxExcludedPrice': taxExcludedPrice,
+    'reducedTax': reducedTax,
   };
 
   factory SpecialOrderItem.fromMap(Map<String, dynamic> map) {
@@ -228,6 +234,8 @@ class SpecialOrderItem {
       createdAt: map['createdAt'] is Timestamp
           ? (map['createdAt'] as Timestamp).toDate()
           : DateTime.now(),
+      taxExcludedPrice: inventoryIntValue(map['taxExcludedPrice']),
+      reducedTax: map['reducedTax'] == true,
     );
   }
 }
