@@ -72,6 +72,38 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     return items;
   }
 
+  // フィルタ前の、発注バッチ全件から導出した全店舗（storeId → storeName）。
+  Map<String, String> _rawPastOrderStores() {
+    final stores = <String, String>{};
+    for (final batch in _batches) {
+      final rawItems = batch.data()['items'];
+      if (rawItems is! List) continue;
+      for (final raw in rawItems.whereType<Map>()) {
+        final item = Map<String, dynamic>.from(
+          raw.map((k, v) => MapEntry(k.toString(), v)),
+        );
+        final storeId = (item['storeId'] ?? '').toString();
+        final storeName = (item['storeName'] ?? '').toString();
+        if (storeId.isNotEmpty && storeName.isNotEmpty) {
+          stores[storeId] = storeName;
+        }
+      }
+    }
+    return stores;
+  }
+
+  // 閲覧が許可されている店舗のみに絞り込んだ店舗一覧。
+  Map<String, String> _viewablePastOrderStores() {
+    final all = _rawPastOrderStores();
+    final viewableIds = AppSession.viewableStoreIds(all.keys.toList()).toSet();
+    final filtered = Map<String, String>.fromEntries(
+      all.entries.where((e) => viewableIds.contains(e.key)),
+    );
+    final entries = filtered.entries.toList()
+      ..sort((a, b) => a.value.compareTo(b.value));
+    return Map<String, String>.fromEntries(entries);
+  }
+
   Future<void> _load() async {
     if (!_canViewPastOrders) {
       setState(() {
@@ -262,7 +294,12 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     QueryDocumentSnapshot<Map<String, dynamic>> batch,
   ) async {
     final data = batch.data();
-    final items = _batchItems(data);
+    final viewableIds = _viewablePastOrderStores().keys.toSet();
+    final items = _batchItems(data)
+        .where(
+          (item) => viewableIds.contains((item['storeId'] ?? '').toString()),
+        )
+        .toList();
     if (items.isEmpty) return;
 
     final font = await PdfGoogleFonts.notoSansJPRegular();
@@ -720,6 +757,13 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
 
   @override
   Widget build(BuildContext context) {
+    final allPastOrderStores = _rawPastOrderStores();
+    final visiblePastOrderStores = _viewablePastOrderStores();
+    final isRestricted =
+        visiblePastOrderStores.length < allPastOrderStores.length;
+    final noViewableStores =
+        allPastOrderStores.isNotEmpty && visiblePastOrderStores.isEmpty;
+
     return Scaffold(
       backgroundColor: const Color(0xFFFFF7FF),
       appBar: AppBar(
@@ -738,49 +782,110 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
               )
             : _batches.isEmpty
             ? const Center(child: Text('過去の発注表はありません'))
-            : Builder(
-                builder: (context) {
-                  final visibleBatches = _batches.take(_visibleCount).toList();
-                  final hasMore = visibleBatches.length < _batches.length;
-                  return ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: 2 + visibleBatches.length + (hasMore ? 1 : 0),
-                    itemBuilder: (context, index) {
-                      if (index == 0) {
-                        return const Card(
-                          child: Padding(
-                            padding: EdgeInsets.all(12),
+            : noViewableStores
+            ? Padding(
+                padding: const EdgeInsets.all(24),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.error_outline,
+                        size: 40,
+                        color: Colors.red.shade400,
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        '閲覧できる店舗がありません。\n管理者にお問い合わせください。',
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            : Column(
+                children: [
+                  if (isRestricted)
+                    Container(
+                      width: double.infinity,
+                      color: Colors.orange.shade50,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.info_outline,
+                            size: 18,
+                            color: Colors.orange.shade800,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
                             child: Text(
-                              '発注確定PDFを出した時点の発注表を再出力できます。ここでは在庫や発注数は変更しません。',
+                              '閲覧が許可されている店舗のみ対象にしています：'
+                              '${visiblePastOrderStores.values.join('、')}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.orange.shade900,
+                              ),
                             ),
                           ),
-                        );
-                      }
-                      if (index == 1) return const SizedBox(height: 12);
-                      final batchIndex = index - 2;
-                      if (batchIndex < visibleBatches.length) {
-                        return _buildBatchCard(visibleBatches[batchIndex]);
-                      }
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        child: OutlinedButton.icon(
-                          onPressed: () {
-                            setState(() {
-                              _visibleCount = min(
-                                _visibleCount + 20,
-                                _batches.length,
+                        ],
+                      ),
+                    ),
+                  Expanded(
+                    child: Builder(
+                      builder: (context) {
+                        final visibleBatches = _batches
+                            .take(_visibleCount)
+                            .toList();
+                        final hasMore = visibleBatches.length < _batches.length;
+                        return ListView.builder(
+                          padding: const EdgeInsets.all(16),
+                          itemCount:
+                              2 + visibleBatches.length + (hasMore ? 1 : 0),
+                          itemBuilder: (context, index) {
+                            if (index == 0) {
+                              return const Card(
+                                child: Padding(
+                                  padding: EdgeInsets.all(12),
+                                  child: Text(
+                                    '発注確定PDFを出した時点の発注表を再出力できます。ここでは在庫や発注数は変更しません。',
+                                  ),
+                                ),
                               );
-                            });
+                            }
+                            if (index == 1) return const SizedBox(height: 12);
+                            final batchIndex = index - 2;
+                            if (batchIndex < visibleBatches.length) {
+                              return _buildBatchCard(
+                                visibleBatches[batchIndex],
+                              );
+                            }
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              child: OutlinedButton.icon(
+                                onPressed: () {
+                                  setState(() {
+                                    _visibleCount = min(
+                                      _visibleCount + 20,
+                                      _batches.length,
+                                    );
+                                  });
+                                },
+                                icon: const Icon(Icons.expand_more),
+                                label: Text(
+                                  'もっと見る（${visibleBatches.length}/${_batches.length}件）',
+                                ),
+                              ),
+                            );
                           },
-                          icon: const Icon(Icons.expand_more),
-                          label: Text(
-                            'もっと見る（${visibleBatches.length}/${_batches.length}件）',
-                          ),
-                        ),
-                      );
-                    },
-                  );
-                },
+                        );
+                      },
+                    ),
+                  ),
+                ],
               ),
       ),
     );

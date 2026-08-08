@@ -11,13 +11,17 @@ class _AllStoresData {
     required this.testers,
     required this.equipments,
     required this.stocksByStore,
+    required this.isRestricted,
   });
 
+  // 閲覧可能な店舗のみに絞り込み済み
   final List<LegacyStore> stores;
   final List<LegacyItem> products;
   final List<LegacyItem> testers;
   final List<LegacyItem> equipments;
   final Map<String, Map<String, int>> stocksByStore;
+  // 全店舗ではなく、一部の店舗のみに絞り込まれているかどうか（案内バナー表示用）
+  final bool isRestricted;
 }
 
 class AllStoresInventoryPage extends StatelessWidget {
@@ -32,7 +36,13 @@ class AllStoresInventoryPage extends StatelessWidget {
     final masterData = await masterDataFuture;
 
     // Firestore配列順のまま（ソートなし）
-    final stores = List<LegacyStore>.from(masterData.stores);
+    final allStores = List<LegacyStore>.from(masterData.stores);
+    final allStoreIds = allStores.map((s) => s.id).toList();
+    final viewableIds = AppSession.viewableStoreIds(allStoreIds).toSet();
+    final visibleStores = allStores
+        .where((s) => viewableIds.contains(s.id))
+        .toList();
+    final isRestricted = visibleStores.length < allStores.length;
 
     final stocksData = results[0].data() ?? {};
     final v2Raw = results[1].data() ?? {};
@@ -42,7 +52,7 @@ class AllStoresInventoryPage extends StatelessWidget {
         : {};
 
     final stocksByStore = <String, Map<String, int>>{};
-    for (final store in stores) {
+    for (final store in visibleStores) {
       stocksByStore[store.id] = _parseMergedStocksForStore(
         stocksData,
         v2TMap,
@@ -52,11 +62,12 @@ class AllStoresInventoryPage extends StatelessWidget {
     }
 
     return _AllStoresData(
-      stores: stores,
+      stores: visibleStores,
       products: masterData.products,
       testers: masterData.testers,
       equipments: masterData.equipments,
       stocksByStore: stocksByStore,
+      isRestricted: isRestricted,
     );
   }
 
@@ -96,22 +107,80 @@ class AllStoresInventoryPage extends StatelessWidget {
                 return const Center(child: Text('データなし'));
               }
 
-              return TabBarView(
+              if (data.stores.isEmpty) {
+                return Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.error_outline,
+                          size: 40,
+                          color: Colors.red.shade400,
+                        ),
+                        const SizedBox(height: 12),
+                        const Text(
+                          '閲覧できる店舗がありません。\n管理者にお問い合わせください。',
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }
+
+              return Column(
                 children: [
-                  _AllStoresItemList(
-                    items: data.products,
-                    stores: data.stores,
-                    stocksByStore: data.stocksByStore,
-                  ),
-                  _AllStoresItemList(
-                    items: data.testers,
-                    stores: data.stores,
-                    stocksByStore: data.stocksByStore,
-                  ),
-                  _AllStoresItemList(
-                    items: data.equipments,
-                    stores: data.stores,
-                    stocksByStore: data.stocksByStore,
+                  if (data.isRestricted)
+                    Container(
+                      width: double.infinity,
+                      color: Colors.orange.shade50,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.info_outline,
+                            size: 18,
+                            color: Colors.orange.shade800,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '閲覧が許可されている店舗のみ表示しています：'
+                              '${data.stores.map((s) => s.name).join('、')}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.orange.shade900,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  Expanded(
+                    child: TabBarView(
+                      children: [
+                        _AllStoresItemList(
+                          items: data.products,
+                          stores: data.stores,
+                          stocksByStore: data.stocksByStore,
+                        ),
+                        _AllStoresItemList(
+                          items: data.testers,
+                          stores: data.stores,
+                          stocksByStore: data.stocksByStore,
+                        ),
+                        _AllStoresItemList(
+                          items: data.equipments,
+                          stores: data.stores,
+                          stocksByStore: data.stocksByStore,
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               );

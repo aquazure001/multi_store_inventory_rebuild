@@ -98,6 +98,10 @@ service cloud.firestore {
     //           別のメンバーのorgId/roleは、そのメンバーが現在所属する
     //           組織のadmin（または統括管理者）だけがリセット可能
     //           （メンバー削除処理用、orgId/role以外は変更不可）。
+    //           別のメンバーの storeIds（所属店舗・閲覧権限範囲）も、
+    //           同様に組織admin（または統括管理者）だけが変更可能
+    //           （このメンバー管理画面の店舗閲覧設定用、他フィールドは
+    //           一切変更不可）。
     match /users/{uid} {
       allow read: if isSignedIn();
 
@@ -115,9 +119,13 @@ service cloud.firestore {
         ||
         (request.auth.uid != uid &&
          (isOrgAdmin(resource.data.orgId) || isSuperAdmin()) &&
-         request.resource.data.orgId == '' &&
-         request.resource.data.role == 'admin' &&
-         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['orgId', 'role']))
+         (
+           (request.resource.data.orgId == '' &&
+            request.resource.data.role == 'admin' &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['orgId', 'role']))
+           ||
+           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['storeIds'])
+         ))
       );
 
       allow delete: if isSignedIn() && request.auth.uid == uid;

@@ -11,6 +11,9 @@ class _OrderListPageState extends State<OrderListPage> {
   List<_OrderEntry> _entries = [];
   bool _loading = true;
   String? _error;
+  bool _isRestricted = false;
+  bool _noViewableStores = false;
+  List<String> _visibleStoreNames = [];
   final Set<String> _selectedTypes = {'商品', 'テスター', '備品'};
   // key: "${storeId}_${itemType}_${itemId}"
   final Map<String, int> _orderedQtys = {};
@@ -80,7 +83,13 @@ class _OrderListPageState extends State<OrderListPage> {
         AppSession.ordersDoc.get(),
       ]);
 
-      final stores = master.stores;
+      final allStores = master.stores;
+      final allStoreIds = allStores.map((s) => s.id).toList();
+      final viewableIds = AppSession.viewableStoreIds(allStoreIds).toSet();
+      final stores = allStores
+          .where((s) => viewableIds.contains(s.id))
+          .toList();
+      final isRestricted = stores.length < allStores.length;
       final products = master.products;
       final testers = master.testers;
       final equipments = master.equipments;
@@ -204,6 +213,9 @@ class _OrderListPageState extends State<OrderListPage> {
         _orderMetas
           ..clear()
           ..addAll(orderMetas);
+        _isRestricted = isRestricted;
+        _noViewableStores = stores.isEmpty;
+        _visibleStoreNames = stores.map((s) => s.name).toList();
         _loading = false;
       });
     } catch (e) {
@@ -1730,6 +1742,27 @@ class _OrderListPageState extends State<OrderListPage> {
         ),
       );
     }
+    if (_noViewableStores) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('発注リスト')),
+        body: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.error_outline, size: 40, color: Colors.red.shade400),
+                const SizedBox(height: 12),
+                const Text(
+                  '閲覧できる店舗がありません。\n管理者にお問い合わせください。',
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
 
     return DefaultTabController(
       length: 2,
@@ -1751,27 +1784,65 @@ class _OrderListPageState extends State<OrderListPage> {
             ],
           ),
         ),
-        body: _entries.isEmpty
-            ? const Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
+        body: Column(
+          children: [
+            if (_isRestricted)
+              Container(
+                width: double.infinity,
+                color: Colors.orange.shade50,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
+                child: Row(
                   children: [
                     Icon(
-                      Icons.check_circle_outline,
-                      size: 64,
-                      color: Colors.green,
+                      Icons.info_outline,
+                      size: 18,
+                      color: Colors.orange.shade800,
                     ),
-                    SizedBox(height: 16),
-                    Text('発注が必要な商品はありません', style: TextStyle(fontSize: 16)),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '閲覧が許可されている店舗のみ表示しています：'
+                        '${_visibleStoreNames.join('、')}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.orange.shade900,
+                        ),
+                      ),
+                    ),
                   ],
                 ),
-              )
-            : TabBarView(
-                children: [
-                  _buildByStore(context, _entries),
-                  _buildByItem(context, _entries),
-                ],
               ),
+            Expanded(
+              child: _entries.isEmpty
+                  ? const Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.check_circle_outline,
+                            size: 64,
+                            color: Colors.green,
+                          ),
+                          SizedBox(height: 16),
+                          Text(
+                            '発注が必要な商品はありません',
+                            style: TextStyle(fontSize: 16),
+                          ),
+                        ],
+                      ),
+                    )
+                  : TabBarView(
+                      children: [
+                        _buildByStore(context, _entries),
+                        _buildByItem(context, _entries),
+                      ],
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }

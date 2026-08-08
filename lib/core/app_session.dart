@@ -16,6 +16,7 @@ class AppSession {
   static List<AdEntry> distributedAds = [];
   static bool approved = true; // 既存組織はデフォルト承認済み
   static bool adViewEnabled = true; // 広告表示（デフォルトON）
+  static List<String> storeIds = []; // 閲覧を許可されている店舗（空＝閲覧可能な店舗なし）
 
   static bool get isAdmin => role == 'admin';
   static bool get hasOrg => orgId.isNotEmpty;
@@ -27,6 +28,15 @@ class AppSession {
     distributedAds = [];
     approved = true;
     adViewEnabled = true;
+    storeIds = [];
+  }
+
+  // 閲覧可能な店舗IDの一覧を返す。
+  // 管理者・統括管理者はstoreIdsの設定に関わらず全店舗（allStoreIds）を閲覧可能。
+  // それ以外は自分のstoreIdsのみ（空なら閲覧できる店舗なし）。
+  static List<String> viewableStoreIds(List<String> allStoreIds) {
+    if (isAdmin || isSuperAdmin) return allStoreIds;
+    return storeIds;
   }
 
   static DocumentReference<Map<String, dynamic>> doc(String suffix) =>

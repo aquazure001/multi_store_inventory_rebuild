@@ -61,6 +61,10 @@ class _UserLoaderState extends State<_UserLoader> {
         AppSession.orgId = (data['orgId'] ?? '').toString();
         AppSession.role = (data['role'] ?? '').toString();
         AppSession.nickname = (data['nickname'] ?? '').toString();
+        final rawStoreIds = data['storeIds'];
+        AppSession.storeIds = rawStoreIds is List
+            ? rawStoreIds.map((e) => e.toString()).toList()
+            : <String>[];
       } else {
         // 旧システムの organizations コレクションから自動移行
         await _tryMigrateFromOrganizations(user.uid, fs);

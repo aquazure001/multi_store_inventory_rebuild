@@ -28,6 +28,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       {};
   bool _loading = true;
   String? _error;
+  bool _isRestricted = false;
+  bool _noViewableStores = false;
+  List<String> _visibleStoreNames = [];
   String _query = '';
   final Map<String, TextEditingController> _homeCareLotControllers = {};
   final Map<String, TextEditingController> _homeCareCustomerControllers = {};
@@ -101,7 +104,12 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       final specialOrdersFuture = AppSession.doc('special_orders').get();
       final masterData = await masterDataFuture;
       final doc = await specialOrdersFuture;
-      final stores = List<LegacyStore>.from(masterData.stores);
+      final allStores = List<LegacyStore>.from(masterData.stores);
+      final allStoreIds = allStores.map((s) => s.id).toList();
+      final viewableIds = AppSession.viewableStoreIds(allStoreIds).toSet();
+      final stores = allStores
+          .where((s) => viewableIds.contains(s.id))
+          .toList();
       final raw = doc.exists
           ? (doc.data() ?? <String, dynamic>{})
           : <String, dynamic>{};
@@ -221,6 +229,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       setState(() {
         _items = items;
         _stores = stores;
+        _isRestricted = stores.length < allStores.length;
+        _noViewableStores = stores.isEmpty;
+        _visibleStoreNames = stores.map((s) => s.name).toList();
         _orders = parseNestedQty(raw['orders']);
         _deliveries = parseNestedQty(raw['deliveries']);
         _homeCareLots = homeCareLots;
@@ -2510,9 +2521,13 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   }
 
   Widget _buildHomeCareLegacyOrderBox(SpecialOrderItem item) {
+    final viewableStoreIds = _stores.map((store) => store.id).toSet();
     final storeOrders =
         (_orders[item.id] ?? {}).entries
-            .where((entry) => entry.value > 0)
+            .where(
+              (entry) =>
+                  entry.value > 0 && viewableStoreIds.contains(entry.key),
+            )
             .toList()
           ..sort((a, b) {
             final storeA = _stores.firstWhere(
@@ -3572,6 +3587,24 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           child: Text('読み込みエラー: $_error'),
         );
       }
+      if (_noViewableStores) {
+        return Padding(
+          padding: const EdgeInsets.all(24),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.error_outline, size: 40, color: Colors.red.shade400),
+                const SizedBox(height: 12),
+                const Text(
+                  '閲覧できる店舗がありません。\n管理者にお問い合わせください。',
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        );
+      }
       if (_items.isEmpty) {
         return Center(
           child: Text(
@@ -3633,7 +3666,40 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           ),
         ],
       ),
-      body: buildBody(),
+      body: Column(
+        children: [
+          if (!_loading &&
+              _error == null &&
+              _isRestricted &&
+              !_noViewableStores)
+            Container(
+              width: double.infinity,
+              color: Colors.orange.shade50,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.info_outline,
+                    size: 18,
+                    color: Colors.orange.shade800,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '閲覧が許可されている店舗のみ対象にしています：'
+                      '${_visibleStoreNames.join('、')}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.orange.shade900,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          Expanded(child: buildBody()),
+        ],
+      ),
       floatingActionButton: widget.showExpiredOnly
           ? null
           : FloatingActionButton(

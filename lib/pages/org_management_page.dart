@@ -13,6 +13,7 @@ class OrgManagementPage extends StatefulWidget {
 
 class _OrgManagementPageState extends State<OrgManagementPage> {
   List<Map<String, dynamic>> _members = [];
+  List<LegacyStore> _stores = [];
   String _orgName = '';
   String _logoUrl = '';
   String _inviteCode = '';
@@ -46,6 +47,9 @@ class _OrgManagementPageState extends State<OrgManagementPage> {
           .where('orgId', isEqualTo: AppSession.orgId)
           .get();
 
+      final storesDoc = await AppSession.doc('stores').get();
+      final stores = _parseStores(storesDoc.data() ?? <String, dynamic>{});
+
       setState(() {
         _members =
             membersSnap.docs.map((d) {
@@ -57,6 +61,7 @@ class _OrgManagementPageState extends State<OrgManagementPage> {
               if (a['role'] != 'admin' && b['role'] == 'admin') return 1;
               return (a['email'] ?? '').compareTo(b['email'] ?? '');
             });
+        _stores = stores;
         _loading = false;
       });
     } catch (e) {
@@ -376,6 +381,130 @@ class _OrgManagementPageState extends State<OrgManagementPage> {
     }
   }
 
+  List<String> _storeIdsOf(Map<String, dynamic> member) {
+    final raw = member['storeIds'];
+    if (raw is! List) return [];
+    return raw.map((e) => e.toString()).where((e) => e.isNotEmpty).toList();
+  }
+
+  String _storeAssignmentLabel(List<String> storeIds) {
+    if (storeIds.isEmpty) return '所属店舗：未設定';
+    final names = storeIds.map((id) {
+      final match = _stores.where((s) => s.id == id).toList();
+      return match.isNotEmpty ? match.first.name : id;
+    }).toList();
+    return '所属店舗：${names.join('、')}';
+  }
+
+  Future<void> _showStoreAssignmentInfo() async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('所属店舗について'),
+        content: const Text(
+          'ここで選んだ店舗が、そのスタッフの閲覧可能範囲になります'
+          '（在庫・発注リスト・棚卸し等）。未選択の場合は閲覧できる店舗が'
+          'ありません。\n\n'
+          '管理者・統括管理者は、この設定に関わらず常に全店舗を閲覧できます。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('閉じる'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _editMemberStores(Map<String, dynamic> member) async {
+    final uid = member['uid'].toString();
+    final label = member['nickname']?.toString().isNotEmpty == true
+        ? member['nickname'].toString()
+        : member['email']?.toString() ?? uid;
+    final selected = _storeIdsOf(member).toSet();
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('所属店舗を設定'),
+          content: SizedBox(
+            width: 340,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  if (_stores.isEmpty)
+                    const Text(
+                      '店舗が登録されていません',
+                      style: TextStyle(color: Colors.grey),
+                    )
+                  else
+                    for (final store in _stores)
+                      CheckboxListTile(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        value: selected.contains(store.id),
+                        onChanged: (checked) {
+                          setDialogState(() {
+                            if (checked == true) {
+                              selected.add(store.id);
+                            } else {
+                              selected.remove(store.id);
+                            }
+                          });
+                        },
+                        title: Text(store.name),
+                      ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('キャンセル'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (result != true) return;
+
+    try {
+      await FirebaseFirestore.instance.collection('users').doc(uid).update({
+        'storeIds': selected.toList(),
+      });
+      _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('所属店舗を更新しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('エラー: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
   Future<void> _removeMember(String uid, String email) async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -631,44 +760,111 @@ class _OrgManagementPageState extends State<OrgManagementPage> {
                 const SizedBox(height: 8),
                 for (final m in _members)
                   Card(
-                    child: ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: m['role'] == 'admin'
-                            ? Colors.deepPurple.shade100
-                            : Colors.grey.shade200,
-                        child: Text(
-                          m['role'] == 'admin' ? '管' : '員',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: m['role'] == 'admin'
-                                ? Colors.deepPurple
-                                : Colors.grey.shade700,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              CircleAvatar(
+                                backgroundColor: m['role'] == 'admin'
+                                    ? Colors.deepPurple.shade100
+                                    : Colors.grey.shade200,
+                                child: Text(
+                                  m['role'] == 'admin' ? '管' : '員',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: m['role'] == 'admin'
+                                        ? Colors.deepPurple
+                                        : Colors.grey.shade700,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      m['nickname']?.toString().isNotEmpty ==
+                                              true
+                                          ? m['nickname'].toString()
+                                          : m['email']?.toString() ??
+                                                m['uid'].toString(),
+                                      style: const TextStyle(fontSize: 14),
+                                    ),
+                                    Text(
+                                      '${m['role'] == 'admin' ? '管理者' : 'メンバー'}　${m['email'] ?? ''}',
+                                      style: const TextStyle(fontSize: 12),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              m['uid'] == AppSession.uid
+                                  ? const Chip(label: Text('自分'))
+                                  : IconButton(
+                                      icon: const Icon(
+                                        Icons.person_remove,
+                                        color: Colors.red,
+                                      ),
+                                      tooltip: 'メンバーを削除',
+                                      onPressed: () => _removeMember(
+                                        m['uid'].toString(),
+                                        m['email']?.toString() ?? '',
+                                      ),
+                                    ),
+                            ],
                           ),
-                        ),
-                      ),
-                      title: Text(
-                        m['nickname']?.toString().isNotEmpty == true
-                            ? m['nickname'].toString()
-                            : m['email']?.toString() ?? m['uid'].toString(),
-                        style: const TextStyle(fontSize: 14),
-                      ),
-                      subtitle: Text(
-                        '${m['role'] == 'admin' ? '管理者' : 'メンバー'}　${m['email'] ?? ''}',
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                      trailing: m['uid'] == AppSession.uid
-                          ? const Chip(label: Text('自分'))
-                          : IconButton(
-                              icon: const Icon(
-                                Icons.person_remove,
-                                color: Colors.red,
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  _storeAssignmentLabel(_storeIdsOf(m)),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey.shade700,
+                                  ),
+                                ),
                               ),
-                              tooltip: 'メンバーを削除',
-                              onPressed: () => _removeMember(
-                                m['uid'].toString(),
-                                m['email']?.toString() ?? '',
-                              ),
-                            ),
+                              if (AppSession.isAdmin ||
+                                  AppSession.isSuperAdmin) ...[
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.info_outline,
+                                    size: 16,
+                                  ),
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(),
+                                  tooltip: '説明を見る',
+                                  onPressed: _showStoreAssignmentInfo,
+                                ),
+                                const SizedBox(width: 8),
+                                TextButton.icon(
+                                  onPressed: () => _editMemberStores(m),
+                                  icon: const Icon(Icons.store, size: 16),
+                                  label: const Text(
+                                    '設定',
+                                    style: TextStyle(fontSize: 12),
+                                  ),
+                                  style: TextButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                    ),
+                                    minimumSize: Size.zero,
+                                    tapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 const SizedBox(height: 32),

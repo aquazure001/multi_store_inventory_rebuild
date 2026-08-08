@@ -15,6 +15,9 @@ class _StoreListPageState extends State<StoreListPage> {
   List<LegacyStore> _stores = [];
   bool _loading = true;
   String? _error;
+  bool _isRestricted = false;
+  bool _noViewableStores = false;
+  List<String> _visibleStoreNames = [];
   Timer? _adReloadTimer;
 
   @override
@@ -57,8 +60,17 @@ class _StoreListPageState extends State<StoreListPage> {
     });
     try {
       final masterData = await _loadMasterData();
+      final allStores = List<LegacyStore>.from(masterData.stores);
+      final allStoreIds = allStores.map((s) => s.id).toList();
+      final viewableIds = AppSession.viewableStoreIds(allStoreIds).toSet();
+      final visibleStores = allStores
+          .where((s) => viewableIds.contains(s.id))
+          .toList();
       setState(() {
-        _stores = List<LegacyStore>.from(masterData.stores);
+        _stores = visibleStores;
+        _isRestricted = visibleStores.length < allStores.length;
+        _noViewableStores = visibleStores.isEmpty;
+        _visibleStoreNames = visibleStores.map((s) => s.name).toList();
         _loading = false;
       });
     } catch (e) {
@@ -1057,6 +1069,35 @@ class _StoreListPageState extends State<StoreListPage> {
       body: SafeArea(
         child: Column(
           children: [
+            if (!_loading && _error == null && _isRestricted)
+              Container(
+                width: double.infinity,
+                color: Colors.orange.shade50,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      size: 18,
+                      color: Colors.orange.shade800,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '閲覧が許可されている店舗のみ表示しています：'
+                        '${_visibleStoreNames.join('、')}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.orange.shade900,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             Expanded(
               child: _loading
                   ? const Center(child: CircularProgressIndicator())
@@ -1064,6 +1105,27 @@ class _StoreListPageState extends State<StoreListPage> {
                   ? Padding(
                       padding: const EdgeInsets.all(24),
                       child: SelectableText('読み取りエラー\n\n$_error'),
+                    )
+                  : _noViewableStores
+                  ? Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.error_outline,
+                              size: 40,
+                              color: Colors.red.shade400,
+                            ),
+                            const SizedBox(height: 12),
+                            const Text(
+                              '閲覧できる店舗がありません。\n管理者にお問い合わせください。',
+                              textAlign: TextAlign.center,
+                            ),
+                          ],
+                        ),
+                      ),
                     )
                   : ListView.builder(
                       padding: const EdgeInsets.all(16),
@@ -1132,7 +1194,6 @@ class _StoreListPageState extends State<StoreListPage> {
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
-                            subtitle: Text(store.id),
                             trailing: const Icon(Icons.chevron_right),
                             onTap: () async {
                               final navigator = Navigator.of(context);

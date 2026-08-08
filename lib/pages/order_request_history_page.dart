@@ -17,6 +17,9 @@ class _OrderRequestHistoryPageState extends State<OrderRequestHistoryPage> {
   String? _error;
   List<Map<String, dynamic>> _entries = [];
   int _visibleCount = 50;
+  bool _isRestricted = false;
+  bool _noViewableStores = false;
+  List<String> _visibleStoreNames = [];
 
   bool get _canView => AppSession.isAdmin || AppSession.isSuperAdmin;
 
@@ -123,8 +126,34 @@ class _OrderRequestHistoryPageState extends State<OrderRequestHistoryPage> {
         return bd.compareTo(ad);
       });
 
+      // 発注ボタン履歴データから導出した全店舗を、閲覧が許可されている
+      // 店舗のみに絞り込む。
+      final allStores = <String, String>{};
+      for (final e in result) {
+        final storeId = (e['storeId'] ?? '').toString();
+        final storeName = (e['storeName'] ?? '').toString();
+        if (storeId.isNotEmpty && storeName.isNotEmpty) {
+          allStores[storeId] = storeName;
+        }
+      }
+      final viewableIds = AppSession.viewableStoreIds(
+        allStores.keys.toList(),
+      ).toSet();
+      final filteredResult = result
+          .where((e) => viewableIds.contains((e['storeId'] ?? '').toString()))
+          .toList();
+      final visibleStoreNames =
+          allStores.entries
+              .where((e) => viewableIds.contains(e.key))
+              .map((e) => e.value)
+              .toList()
+            ..sort();
+
       setState(() {
-        _entries = result;
+        _entries = filteredResult;
+        _isRestricted = viewableIds.length < allStores.length;
+        _noViewableStores = allStores.isNotEmpty && viewableIds.isEmpty;
+        _visibleStoreNames = visibleStoreNames;
         _visibleCount = 50;
         _loading = false;
       });
@@ -190,61 +219,119 @@ class _OrderRequestHistoryPageState extends State<OrderRequestHistoryPage> {
                 padding: const EdgeInsets.all(24),
                 child: SelectableText('読み取りエラー\n\n$_error'),
               )
-            : Builder(
-                builder: (context) {
-                  final visibleEntries = _entries.take(_visibleCount).toList();
-                  final hasMore = visibleEntries.length < _entries.length;
-                  return ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount:
-                        2 +
-                        (_entries.isEmpty ? 1 : visibleEntries.length) +
-                        (hasMore ? 1 : 0),
-                    itemBuilder: (context, index) {
-                      if (index == 0) {
-                        return const Card(
-                          child: Padding(
-                            padding: EdgeInsets.all(12),
+            : _noViewableStores
+            ? Padding(
+                padding: const EdgeInsets.all(24),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.error_outline,
+                        size: 40,
+                        color: Colors.red.shade400,
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        '閲覧できる店舗がありません。\n管理者にお問い合わせください。',
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            : Column(
+                children: [
+                  if (_isRestricted)
+                    Container(
+                      width: double.infinity,
+                      color: Colors.orange.shade50,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.info_outline,
+                            size: 18,
+                            color: Colors.orange.shade800,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
                             child: Text(
-                              '発注ボタンを押した履歴です。今後の発注は1回ごとに保存されます。旧形式・残存データは、以前から残っている現在の発注予定情報です。',
+                              '閲覧が許可されている店舗のみ対象にしています：'
+                              '${_visibleStoreNames.join('、')}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.orange.shade900,
+                              ),
                             ),
                           ),
-                        );
-                      }
-                      if (index == 1) return const SizedBox(height: 12);
-                      if (_entries.isEmpty) {
-                        return const Padding(
-                          padding: EdgeInsets.all(24),
-                          child: Text(
-                            '発注ボタン履歴はまだありません',
-                            textAlign: TextAlign.center,
-                          ),
-                        );
-                      }
-                      final entryIndex = index - 2;
-                      if (entryIndex < visibleEntries.length) {
-                        return _buildEntry(visibleEntries[entryIndex]);
-                      }
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        child: OutlinedButton.icon(
-                          onPressed: () {
-                            setState(() {
-                              _visibleCount = min(
-                                _visibleCount + 50,
-                                _entries.length,
+                        ],
+                      ),
+                    ),
+                  Expanded(
+                    child: Builder(
+                      builder: (context) {
+                        final visibleEntries = _entries
+                            .take(_visibleCount)
+                            .toList();
+                        final hasMore = visibleEntries.length < _entries.length;
+                        return ListView.builder(
+                          padding: const EdgeInsets.all(16),
+                          itemCount:
+                              2 +
+                              (_entries.isEmpty ? 1 : visibleEntries.length) +
+                              (hasMore ? 1 : 0),
+                          itemBuilder: (context, index) {
+                            if (index == 0) {
+                              return const Card(
+                                child: Padding(
+                                  padding: EdgeInsets.all(12),
+                                  child: Text(
+                                    '発注ボタンを押した履歴です。今後の発注は1回ごとに保存されます。旧形式・残存データは、以前から残っている現在の発注予定情報です。',
+                                  ),
+                                ),
                               );
-                            });
+                            }
+                            if (index == 1) return const SizedBox(height: 12);
+                            if (_entries.isEmpty) {
+                              return const Padding(
+                                padding: EdgeInsets.all(24),
+                                child: Text(
+                                  '発注ボタン履歴はまだありません',
+                                  textAlign: TextAlign.center,
+                                ),
+                              );
+                            }
+                            final entryIndex = index - 2;
+                            if (entryIndex < visibleEntries.length) {
+                              return _buildEntry(visibleEntries[entryIndex]);
+                            }
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              child: OutlinedButton.icon(
+                                onPressed: () {
+                                  setState(() {
+                                    _visibleCount = min(
+                                      _visibleCount + 50,
+                                      _entries.length,
+                                    );
+                                  });
+                                },
+                                icon: const Icon(Icons.expand_more),
+                                label: Text(
+                                  'もっと見る（${visibleEntries.length}/${_entries.length}件）',
+                                ),
+                              ),
+                            );
                           },
-                          icon: const Icon(Icons.expand_more),
-                          label: Text(
-                            'もっと見る（${visibleEntries.length}/${_entries.length}件）',
-                          ),
-                        ),
-                      );
-                    },
-                  );
-                },
+                        );
+                      },
+                    ),
+                  ),
+                ],
               ),
       ),
     );

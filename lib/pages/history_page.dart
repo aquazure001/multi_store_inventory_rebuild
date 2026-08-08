@@ -12,12 +12,30 @@ class HistoryPage extends StatefulWidget {
 }
 
 class _HistoryPageState extends State<HistoryPage> {
+  static const int _pageSize = 50;
+  // 1回の読み込み操作で目指す「フィルタ後の表示件数」の目安。
+  static const int _visibleTargetPerLoad = 50;
+  // 閲覧可能店舗が少ないユーザーでも読み込みが暴走しないよう、
+  // 1回の読み込み操作で読む生ドキュメント数の上限を設ける。
+  static const int _maxRawDocsPerLoad = 500;
+
   List<HistoryEntry> _entries = <HistoryEntry>[];
   DocumentSnapshot<Map<String, dynamic>>? _lastDoc;
   bool _loading = true;
   bool _loadingMore = false;
   bool _hasMore = true;
   Object? _error;
+
+  List<LegacyStore> _allStores = [];
+  Set<String> _viewableStoreIds = {};
+  bool _isRestricted = false;
+
+  bool get _hasAnyViewableStore => _viewableStoreIds.isNotEmpty;
+
+  List<String> get _visibleStoreNames => _allStores
+      .where((s) => _viewableStoreIds.contains(s.id))
+      .map((s) => s.name)
+      .toList();
 
   @override
   void initState() {
@@ -41,19 +59,64 @@ class _HistoryPageState extends State<HistoryPage> {
     }
 
     try {
-      var query = AppSession.doc(
-        'history',
-      ).collection('entries').orderBy('at', descending: true).limit(50);
-      final lastDoc = _lastDoc;
-      if (!reset && lastDoc != null) {
-        query = query.startAfterDocument(lastDoc);
+      if (reset) {
+        final masterData = await _loadMasterData();
+        final allStores = List<LegacyStore>.from(masterData.stores);
+        final allStoreIds = allStores.map((s) => s.id).toList();
+        final viewableIds = AppSession.viewableStoreIds(allStoreIds).toSet();
+        _allStores = allStores;
+        _viewableStoreIds = viewableIds;
+        _isRestricted = viewableIds.length < allStoreIds.length;
       }
-      final snap = await query.get();
-      final loaded = snap.docs.map((doc) => HistoryEntry.fromDoc(doc)).toList();
+
+      if (_viewableStoreIds.isEmpty) {
+        setState(() {
+          _entries = <HistoryEntry>[];
+          _hasMore = false;
+          _loading = false;
+          _loadingMore = false;
+        });
+        return;
+      }
+
+      final newlyVisible = <HistoryEntry>[];
+      var cursor = reset ? null : _lastDoc;
+      var hasMoreRaw = true;
+      var fetchedRaw = 0;
+
+      // フィルタ後の件数が少なくなりすぎないよう、目標件数に届くか
+      // 生データが尽きる（または上限に達する）まで内部で連続取得する。
+      while (newlyVisible.length < _visibleTargetPerLoad &&
+          hasMoreRaw &&
+          fetchedRaw < _maxRawDocsPerLoad) {
+        var query = AppSession.doc('history')
+            .collection('entries')
+            .orderBy('at', descending: true)
+            .limit(_pageSize);
+        if (cursor != null) {
+          query = query.startAfterDocument(cursor);
+        }
+        final snap = await query.get();
+        if (snap.docs.isEmpty) {
+          hasMoreRaw = false;
+          break;
+        }
+        fetchedRaw += snap.docs.length;
+        cursor = snap.docs.last;
+        hasMoreRaw = snap.docs.length == _pageSize;
+
+        final loaded = snap.docs
+            .map((doc) => HistoryEntry.fromDoc(doc))
+            .toList();
+        newlyVisible.addAll(
+          loaded.where((e) => _viewableStoreIds.contains(e.storeId)),
+        );
+      }
+
       setState(() {
-        _entries = reset ? loaded : [..._entries, ...loaded];
-        _lastDoc = snap.docs.isEmpty ? _lastDoc : snap.docs.last;
-        _hasMore = snap.docs.length == 50;
+        _entries = reset ? newlyVisible : [..._entries, ...newlyVisible];
+        _lastDoc = cursor ?? _lastDoc;
+        _hasMore = hasMoreRaw;
         _loading = false;
         _loadingMore = false;
       });
@@ -81,66 +144,122 @@ class _HistoryPageState extends State<HistoryPage> {
         ],
       ),
       body: SafeArea(
-        child: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : _error != null
-            ? Padding(
-                padding: const EdgeInsets.all(24),
-                child: SelectableText('読み取りエラー\n\n$_error'),
-              )
-            : _entries.isEmpty
-            ? const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(32),
-                  child: Text(
-                    '履歴がありません\n在庫を変更すると記録されます',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.grey),
-                  ),
+        child: Column(
+          children: [
+            if (!_loading &&
+                _error == null &&
+                _isRestricted &&
+                _hasAnyViewableStore)
+              Container(
+                width: double.infinity,
+                color: Colors.orange.shade50,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
                 ),
-              )
-            : ListView.builder(
-                padding: const EdgeInsets.all(16),
-                itemCount: _entries.length + 1 + (_hasMore ? 1 : 0),
-                itemBuilder: (context, index) {
-                  if (index == 0) {
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Card(
-                        child: ListTile(
-                          title: const Text('件数'),
-                          subtitle: const Text('直近から50件ずつ読み込みます'),
-                          trailing: Text(
-                            '${_entries.length} 件',
-                            style: const TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      size: 18,
+                      color: Colors.orange.shade800,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '閲覧が許可されている店舗のみ対象にしています：'
+                        '${_visibleStoreNames.join('、')}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.orange.shade900,
                         ),
                       ),
-                    );
-                  }
-                  final entryIndex = index - 1;
-                  if (entryIndex < _entries.length) {
-                    return _buildEntryCard(_entries[entryIndex]);
-                  }
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    child: OutlinedButton.icon(
-                      onPressed: _loadingMore ? null : () => _load(),
-                      icon: _loadingMore
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.expand_more),
-                      label: Text(_loadingMore ? '読み込み中...' : 'もっと見る'),
                     ),
-                  );
-                },
+                  ],
+                ),
               ),
+            Expanded(
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _error != null
+                  ? Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: SelectableText('読み取りエラー\n\n$_error'),
+                    )
+                  : _entries.isEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(32),
+                        child: _hasAnyViewableStore
+                            ? const Text(
+                                '履歴がありません\n在庫を変更すると記録されます',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: Colors.grey),
+                              )
+                            : Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.error_outline,
+                                    size: 40,
+                                    color: Colors.red.shade400,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  const Text(
+                                    '閲覧できる店舗がありません。\n管理者にお問い合わせください。',
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
+                              ),
+                      ),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.all(16),
+                      itemCount: _entries.length + 1 + (_hasMore ? 1 : 0),
+                      itemBuilder: (context, index) {
+                        if (index == 0) {
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: Card(
+                              child: ListTile(
+                                title: const Text('件数'),
+                                subtitle: const Text('直近から50件ずつ読み込みます'),
+                                trailing: Text(
+                                  '${_entries.length} 件',
+                                  style: const TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        }
+                        final entryIndex = index - 1;
+                        if (entryIndex < _entries.length) {
+                          return _buildEntryCard(_entries[entryIndex]);
+                        }
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          child: OutlinedButton.icon(
+                            onPressed: _loadingMore ? null : () => _load(),
+                            icon: _loadingMore
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.expand_more),
+                            label: Text(_loadingMore ? '読み込み中...' : 'もっと見る'),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -30,7 +30,8 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
 
   int _toInt(dynamic value) => inventoryIntValue(value);
 
-  Map<String, String> _deliveryStores() {
+  // フィルタ前の、発注データから導出した全店舗（storeId → storeName）。
+  Map<String, String> _rawDeliveryStores() {
     final stores = <String, String>{};
     for (final batch in _batches) {
       final rawItems = batch.data()['items'];
@@ -46,7 +47,17 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         }
       }
     }
-    final entries = stores.entries.toList()
+    return stores;
+  }
+
+  // 閲覧が許可されている店舗のみに絞り込んだ店舗一覧。
+  Map<String, String> _deliveryStores() {
+    final all = _rawDeliveryStores();
+    final viewableIds = AppSession.viewableStoreIds(all.keys.toList()).toSet();
+    final filtered = Map<String, String>.fromEntries(
+      all.entries.where((e) => viewableIds.contains(e.key)),
+    );
+    final entries = filtered.entries.toList()
       ..sort((a, b) => a.value.compareTo(b.value));
     return Map<String, String>.fromEntries(entries);
   }
@@ -665,6 +676,13 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         ),
       );
     }
+    final allDeliveryStores = _rawDeliveryStores();
+    final visibleDeliveryStores = _deliveryStores();
+    final isRestricted =
+        visibleDeliveryStores.length < allDeliveryStores.length;
+    final noViewableStores =
+        allDeliveryStores.isNotEmpty && visibleDeliveryStores.isEmpty;
+
     return Scaffold(
       backgroundColor: const Color(0xFFFFF7FF),
       appBar: AppBar(
@@ -675,8 +693,58 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
       ),
       body: _batches.isEmpty
           ? const Center(child: Text('納品処理待ちの発注はありません'))
+          : noViewableStores
+          ? Padding(
+              padding: const EdgeInsets.all(24),
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.error_outline,
+                      size: 40,
+                      color: Colors.red.shade400,
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      '閲覧できる店舗がありません。\n管理者にお問い合わせください。',
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            )
           : Column(
               children: [
+                if (isRestricted)
+                  Container(
+                    width: double.infinity,
+                    color: Colors.orange.shade50,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.info_outline,
+                          size: 18,
+                          color: Colors.orange.shade800,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            '閲覧が許可されている店舗のみ対象にしています：'
+                            '${visibleDeliveryStores.values.join('、')}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.orange.shade900,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 _buildStoreSelector(),
                 Expanded(
                   child: _selectedDeliveryStoreId.isEmpty

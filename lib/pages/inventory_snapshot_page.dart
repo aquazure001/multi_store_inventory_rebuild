@@ -19,6 +19,40 @@ class _InventorySnapshotPageState extends State<InventorySnapshotPage> {
   bool _includeEquipments = false;
   String? _message;
 
+  bool _loadingAccess = true;
+  bool _isRestricted = false;
+  bool _noViewableStores = false;
+  List<String> _visibleStoreNames = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStoreAccess();
+  }
+
+  Future<void> _loadStoreAccess() async {
+    try {
+      final masterData = await _loadMasterData();
+      final allStores = masterData.stores;
+      final allStoreIds = allStores.map((s) => s.id).toList();
+      final viewableIds = AppSession.viewableStoreIds(allStoreIds).toSet();
+      final visibleStores = allStores
+          .where((s) => viewableIds.contains(s.id))
+          .toList();
+      setState(() {
+        _isRestricted = visibleStores.length < allStores.length;
+        _noViewableStores = visibleStores.isEmpty;
+        _visibleStoreNames = visibleStores.map((s) => s.name).toList();
+        _loadingAccess = false;
+      });
+    } catch (e) {
+      setState(() {
+        _message = '店舗情報の読み込みに失敗しました: $e';
+        _loadingAccess = false;
+      });
+    }
+  }
+
   int _toInt(dynamic value) => inventoryIntValue(value);
 
   DateTime? _toDateTime(dynamic value) {
@@ -112,11 +146,23 @@ class _InventorySnapshotPageState extends State<InventorySnapshotPage> {
       final stocksV2Doc = results[1];
       final ordersDoc = results[2];
 
-      final stores = List<LegacyStore>.from(masterData.stores)
-        ..sort((a, b) {
-          final c = _naturalCompare(a.code, b.code);
-          return c != 0 ? c : _naturalCompare(a.name, b.name);
+      final allStoreIds = masterData.stores.map((s) => s.id).toList();
+      final viewableIds = AppSession.viewableStoreIds(allStoreIds).toSet();
+      final stores =
+          List<LegacyStore>.from(
+            masterData.stores.where((s) => viewableIds.contains(s.id)),
+          )..sort((a, b) {
+            final c = _naturalCompare(a.code, b.code);
+            return c != 0 ? c : _naturalCompare(a.name, b.name);
+          });
+
+      if (stores.isEmpty) {
+        setState(() {
+          _message = '閲覧できる店舗がありません。管理者にお問い合わせください。';
+          _loading = false;
         });
+        return;
+      }
 
       final itemsByType = <String, List<LegacyItem>>{
         'products': masterData.products
@@ -321,6 +367,33 @@ class _InventorySnapshotPageState extends State<InventorySnapshotPage> {
   Widget build(BuildContext context) {
     final label =
         '${_targetDate.year}年${_targetDate.month}月${_targetDate.day}日 23:59時点';
+
+    if (_loadingAccess) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    if (_noViewableStores) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('棚卸し一覧出力')),
+        body: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.error_outline, size: 40, color: Colors.red.shade400),
+                const SizedBox(height: 12),
+                const Text(
+                  '閲覧できる店舗がありません。\n管理者にお問い合わせください。',
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFFFFF7FF),
       appBar: AppBar(title: const Text('棚卸し一覧出力')),
@@ -328,6 +401,36 @@ class _InventorySnapshotPageState extends State<InventorySnapshotPage> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            if (_isRestricted)
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 16),
+                color: Colors.orange.shade50,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      size: 18,
+                      color: Colors.orange.shade800,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '閲覧が許可されている店舗のみ対象にしています：'
+                        '${_visibleStoreNames.join('、')}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.orange.shade900,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
