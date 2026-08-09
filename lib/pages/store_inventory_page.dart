@@ -35,9 +35,22 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
     super.dispose();
   }
 
+  // showDialog は useRootNavigator:true でルートNavigatorにpushされるため、
+  // ダイアログを閉じる操作も RouteObserver からは「ページ復帰」として見える。
+  // ダイアログ表示直前にこのフラグを立てておき、didPopNext の誤発火を1回だけ無視する。
+  bool _suppressNextPopRefresh = false;
+
+  void _suppressNextPopRefreshOnce() {
+    _suppressNextPopRefresh = true;
+  }
+
   @override
   void didPopNext() {
     // 上に重なっていたページがポップされ、このページが再表示されたとき自動リフレッシュ
+    if (_suppressNextPopRefresh) {
+      _suppressNextPopRefresh = false;
+      return;
+    }
     _refresh();
   }
 
@@ -55,6 +68,10 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
     final baseStocksData = results[1].exists
         ? (results[1].data() ?? <String, dynamic>{})
         : <String, dynamic>{};
+    debugPrint(
+      '[基準在庫DEBUG] baselineDoc読込直後: exists=${results[1].exists} '
+      'store=${widget.store.id} raw=${baseStocksData[widget.store.id]}',
+    );
     final v2Raw = results[2].data() ?? {};
 
     final v2TMap = (v2Raw['testers'] is Map)
@@ -152,6 +169,15 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
       }
     }
 
+    final parsedBaseStocks = _parseStocksForStore(
+      baseStocksData,
+      widget.store.id,
+    );
+    debugPrint(
+      '[基準在庫DEBUG] _parseStocksForStore後: store=${widget.store.id} '
+      'parsedBaseStocks=$parsedBaseStocks',
+    );
+
     return _InventoryData(
       products: master.products,
       testers: master.testers,
@@ -159,7 +185,7 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
       productStocks: _parseStocksForStore(stocksData, widget.store.id),
       testerStocks: _parseStocksForStore(v2TMap, widget.store.id),
       equipmentStocks: _parseStocksForStore(v2EMap, widget.store.id),
-      baseStocks: _parseStocksForStore(baseStocksData, widget.store.id),
+      baseStocks: parsedBaseStocks,
       orderedProductStocks: orderedProducts,
       orderedTesterStocks: orderedTesters,
       orderedEquipmentStocks: orderedEquipments,
@@ -247,6 +273,7 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
                     storeName: widget.store.name,
                     quantityLimit: data.quantityLimits.products,
                     onDelivered: _refresh,
+                    onWillShowDialog: _suppressNextPopRefreshOnce,
                   ),
                   _InventoryList(
                     title: 'テスター',
@@ -259,6 +286,7 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
                     storeName: widget.store.name,
                     quantityLimit: data.quantityLimits.testers,
                     onDelivered: _refresh,
+                    onWillShowDialog: _suppressNextPopRefreshOnce,
                   ),
                   _InventoryList(
                     title: '備品',
@@ -271,6 +299,7 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
                     storeName: widget.store.name,
                     quantityLimit: data.quantityLimits.equipments,
                     onDelivered: _refresh,
+                    onWillShowDialog: _suppressNextPopRefreshOnce,
                   ),
                 ],
               );
@@ -298,6 +327,7 @@ class _InventoryList extends StatefulWidget {
     this.orderMetas = const {},
     this.quantityLimit = 0,
     this.onDelivered,
+    this.onWillShowDialog,
   });
 
   final String title;
@@ -310,6 +340,8 @@ class _InventoryList extends StatefulWidget {
   final Map<String, _OrderMeta> orderMetas;
   final int quantityLimit;
   final VoidCallback? onDelivered;
+  // ダイアログ表示直前に呼ばれる。親の RouteObserver による誤リフレッシュ抑制に使う。
+  final VoidCallback? onWillShowDialog;
 
   @override
   State<_InventoryList> createState() => _InventoryListState();
@@ -336,6 +368,10 @@ class _InventoryListState extends State<_InventoryList> {
     _localBaseStocks = Map.from(widget.baseStocks);
     _localOrderedStocks = Map.from(widget.orderedStocks);
     _localOrderMetas = Map.from(widget.orderMetas);
+    debugPrint(
+      '[基準在庫DEBUG] _InventoryListState.initState(${widget.title}): '
+      '_localBaseStocks=$_localBaseStocks',
+    );
     _subscribeOrders();
   }
 
@@ -351,6 +387,11 @@ class _InventoryListState extends State<_InventoryList> {
       for (final entry in _pendingBaseUpdates.entries) {
         merged[entry.key] = entry.value;
       }
+      debugPrint(
+        '[基準在庫DEBUG] _InventoryListState.didUpdateWidget(${widget.title}): '
+        'widget.baseStocks=${widget.baseStocks} _pendingBaseUpdates=$_pendingBaseUpdates '
+        '-> merged=$merged',
+      );
       setState(() => _localBaseStocks = merged);
     }
 
@@ -482,6 +523,7 @@ class _InventoryListState extends State<_InventoryList> {
         .toList();
     if (targetIds.isEmpty) return;
 
+    widget.onWillShowDialog?.call();
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -547,6 +589,7 @@ class _InventoryListState extends State<_InventoryList> {
     final controller = TextEditingController(
       text: '${_localBaseStocks[item.id] ?? 0}',
     );
+    widget.onWillShowDialog?.call();
     final result = await showDialog<int>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -577,27 +620,46 @@ class _InventoryListState extends State<_InventoryList> {
     );
     if (result == null || result < 0) return;
 
+    debugPrint(
+      '[基準在庫DEBUG] 保存開始: store=${widget.storeId} item=${item.id}(${item.name}) '
+      '旧値=${_localBaseStocks[item.id] ?? 0} -> 新値=$result',
+    );
+
     // 楽観的更新: 書き込み完了前でも画面に即時反映する。
     // _pendingBaseUpdates に登録し、Firestore 書き込み中に didUpdateWidget が
     // 走っても古い値で上書きされないよう保護する。
     setState(() => _localBaseStocks[item.id] = result);
     _pendingBaseUpdates[item.id] = result;
+    debugPrint(
+      '[基準在庫DEBUG] 楽観的更新後: _localBaseStocks[${item.id}]=${_localBaseStocks[item.id]} '
+      '_pendingBaseUpdates=$_pendingBaseUpdates',
+    );
 
     final docRef = AppSession.baselineDoc;
     final updates = <String, dynamic>{'${widget.storeId}.${item.id}': result};
+    debugPrint('[基準在庫DEBUG] Firestore書き込み開始: updates=$updates');
     try {
       await docRef.update(updates);
+      debugPrint('[基準在庫DEBUG] Firestore書き込み成功: updates=$updates');
     } on FirebaseException catch (e) {
+      debugPrint(
+        '[基準在庫DEBUG] Firestore書き込みエラー: code=${e.code} message=${e.message}',
+      );
       if (e.code == 'not-found') {
         await docRef.set({
           widget.storeId: {item.id: result},
         });
+        debugPrint('[基準在庫DEBUG] not-found のため docRef.set() でフォールバック書き込み完了');
       } else {
         rethrow;
       }
     } finally {
       // 書き込み完了（成功・失敗どちらでも）後に保護を解除する。
       _pendingBaseUpdates.remove(item.id);
+      debugPrint(
+        '[基準在庫DEBUG] 保護解除後: _pendingBaseUpdates=$_pendingBaseUpdates '
+        '_localBaseStocks[${item.id}]=${_localBaseStocks[item.id]}',
+      );
     }
   }
 
@@ -626,6 +688,7 @@ class _InventoryListState extends State<_InventoryList> {
     final controller = TextEditingController(
       text: '${_localStocks[item.id] ?? 0}',
     );
+    widget.onWillShowDialog?.call();
     final result = await showDialog<int>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -696,6 +759,7 @@ class _InventoryListState extends State<_InventoryList> {
       return;
     }
 
+    widget.onWillShowDialog?.call();
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(

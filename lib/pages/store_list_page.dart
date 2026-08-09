@@ -108,44 +108,72 @@ class _StoreListPageState extends State<StoreListPage> {
     final nameCtrl = TextEditingController();
     final codeCtrl = TextEditingController();
     final idCtrl = TextEditingController();
+    String? dialogError;
+    final storeIdPattern = RegExp(r'^[A-Za-z0-9_-]+$');
 
     if (!mounted) return;
 
     final result = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('店舗を追加'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameCtrl,
-              decoration: const InputDecoration(labelText: '店舗名'),
-              autofocus: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: const Text('店舗を追加'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(labelText: '店舗名'),
+                autofocus: true,
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: codeCtrl,
+                decoration: const InputDecoration(labelText: 'コード（表示用）'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: idCtrl,
+                decoration: const InputDecoration(
+                  labelText: '店舗ID（半角英数字・ハイフン・アンダースコアのみ）',
+                ),
+                autocorrect: false,
+              ),
+              if (dialogError != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  dialogError!,
+                  style: const TextStyle(color: Colors.red, fontSize: 13),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('キャンセル'),
             ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: codeCtrl,
-              decoration: const InputDecoration(labelText: 'コード（表示用）'),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: idCtrl,
-              decoration: const InputDecoration(labelText: '店舗ID（英数字）'),
-              autocorrect: false,
+            TextButton(
+              onPressed: () {
+                final id = idCtrl.text.trim();
+                if (id.isEmpty) {
+                  setS(() => dialogError = '店舗IDを入力してください');
+                  return;
+                }
+                if (!storeIdPattern.hasMatch(id)) {
+                  setS(() => dialogError = '店舗IDは半角英数字・ハイフン・アンダースコアのみ使用できます');
+                  return;
+                }
+                if (_stores.any((s) => s.id == id)) {
+                  setS(() => dialogError = 'この店舗IDは既に使用されています');
+                  return;
+                }
+                Navigator.pop(ctx, true);
+              },
+              child: const Text('追加'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('キャンセル'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('追加'),
-          ),
-        ],
       ),
     );
     if (result != true) return;
