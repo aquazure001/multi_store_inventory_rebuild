@@ -325,6 +325,10 @@ class _InventoryListState extends State<_InventoryList> {
   bool _saving = false;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _ordersSub;
 
+  // Firestoreへの書き込みが完了していない基準在庫の楽観的更新値。
+  // didUpdateWidget で親から来た古い値で上書きされるのを防ぐ。
+  final Map<String, int> _pendingBaseUpdates = {};
+
   @override
   void initState() {
     super.initState();
@@ -333,6 +337,31 @@ class _InventoryListState extends State<_InventoryList> {
     _localOrderedStocks = Map.from(widget.orderedStocks);
     _localOrderMetas = Map.from(widget.orderMetas);
     _subscribeOrders();
+  }
+
+  @override
+  void didUpdateWidget(covariant _InventoryList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    // 基準在庫: 親から新しいデータが来たら更新する。
+    // ただし Firestore への書き込みが完了していない項目（_pendingBaseUpdates）は
+    // 楽観的更新値を優先し、古い値で巻き戻らないようにする。
+    if (oldWidget.baseStocks != widget.baseStocks) {
+      final merged = Map<String, int>.from(widget.baseStocks);
+      for (final entry in _pendingBaseUpdates.entries) {
+        merged[entry.key] = entry.value;
+      }
+      setState(() => _localBaseStocks = merged);
+    }
+
+    // 現在庫数: 未保存の変更がある項目（_changedIds）は上書きしない。
+    if (oldWidget.stocks != widget.stocks) {
+      final merged = Map<String, int>.from(widget.stocks);
+      for (final id in _changedIds) {
+        merged[id] = _localStocks[id] ?? 0;
+      }
+      setState(() => _localStocks = merged);
+    }
   }
 
   void _subscribeOrders() {
@@ -548,7 +577,11 @@ class _InventoryListState extends State<_InventoryList> {
     );
     if (result == null || result < 0) return;
 
+    // 楽観的更新: 書き込み完了前でも画面に即時反映する。
+    // _pendingBaseUpdates に登録し、Firestore 書き込み中に didUpdateWidget が
+    // 走っても古い値で上書きされないよう保護する。
     setState(() => _localBaseStocks[item.id] = result);
+    _pendingBaseUpdates[item.id] = result;
 
     final docRef = AppSession.baselineDoc;
     final updates = <String, dynamic>{'${widget.storeId}.${item.id}': result};
@@ -562,6 +595,9 @@ class _InventoryListState extends State<_InventoryList> {
       } else {
         rethrow;
       }
+    } finally {
+      // 書き込み完了（成功・失敗どちらでも）後に保護を解除する。
+      _pendingBaseUpdates.remove(item.id);
     }
   }
 
