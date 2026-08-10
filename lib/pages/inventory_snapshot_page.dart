@@ -114,6 +114,7 @@ class _InventorySnapshotPageState extends State<InventorySnapshotPage> {
       ),
       firstDate: DateTime(2020, 1, 1),
       lastDate: DateTime.now().add(const Duration(days: 365)),
+      locale: const Locale('ja'),
     );
     if (picked == null) return;
     setState(() {

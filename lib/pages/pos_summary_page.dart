@@ -69,6 +69,7 @@ class _PosSummaryPageState extends State<PosSummaryPage> {
       initialDate: initial,
       firstDate: DateTime(2020, 1, 1),
       lastDate: DateTime.now().add(const Duration(days: 365)),
+      locale: const Locale('ja'),
     );
     if (picked == null) return;
     setState(() {

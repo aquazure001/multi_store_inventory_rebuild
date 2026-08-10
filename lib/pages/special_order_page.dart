@@ -961,6 +961,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                           initialDate: selectedOrderedDate!,
                           firstDate: DateTime(2020),
                           lastDate: DateTime(2100),
+                          locale: const Locale('ja'),
                         );
                         if (picked == null) return;
                         setDialogState(() {
@@ -2123,6 +2124,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
               initialDate: init,
               firstDate: DateTime(2020),
               lastDate: DateTime(2035),
+              locale: const Locale('ja'),
             );
             if (picked == null) return;
             setS(() {
