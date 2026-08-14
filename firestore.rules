@@ -43,6 +43,15 @@ service cloud.firestore {
         : '';
     }
 
+    // 自分の所属店舗ID一覧（請求非開示の解除など、店舗スタッフ本人の
+    // 所属店舗に限定した操作の判定に使う）。未設定なら空リスト。
+    function myStoreIds() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.storeIds is list
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.storeIds
+        : [];
+    }
+
     // 管理者判定は role だけでなく orgId が空でないことも必須にする
     // （脱退・削除直後は role:'admin' のまま orgId が空になるため）
     function isOrgAdmin(orgId) {
@@ -77,6 +86,23 @@ service cloud.firestore {
              id.matches('.*__billing_receipt_pdfs$');
     }
 
+    // "org_{orgId}__billing_invoices" 等から、対応する
+    // "org_{orgId}__stores" のドキュメントIDを求める
+    // (統括管理者は自分の所属組織に関わらず任意の組織のbillingドキュメントを
+    // 扱えるため、request側のmyOrgId()ではなく対象ドキュメントIDから
+    // 組織を特定する必要がある)。
+    function billingStoresDocId(billingDocId) {
+      return billingDocId.split('__')[0] + '__stores';
+    }
+
+    // 請求・受領entries 1件が、非開示店舗に属していないか(=閲覧してよいか)。
+    // billing_visibilityドキュメントが無い店舗は非開示ではない(デフォルト)。
+    function billingEntryVisible(billingDocId, storeId) {
+      return storeId == '' ||
+        !exists(/databases/$(database)/documents/inventory_shared_v1/$(billingStoresDocId(billingDocId))/billing_visibility/$(storeId)) ||
+        get(/databases/$(database)/documents/inventory_shared_v1/$(billingStoresDocId(billingDocId))/billing_visibility/$(storeId)).data.hidden != true;
+    }
+
     // 書き込みは組織admin以上に限定するドキュメント
     // （orders自体・納品処理・既存発注表の更新は全員に開放し、
     //   ここでは「発注確定」に相当する新規バッチ作成のみを別途battchesで扱う）
@@ -84,6 +110,10 @@ service cloud.firestore {
       return id.matches('.*__pos_stripe_settings$') ||
              id.matches('.*__store_quantity_limits$') ||
              id.matches('.*__order_saved_pdfs$');
+    }
+
+    function isStoresDocId(id) {
+      return id.matches('.*__stores$');
     }
 
     // ── users ────────────────────────────────────────────
@@ -173,7 +203,25 @@ service cloud.firestore {
       // order_saved_pdfs / billing_* / pos_sales / pos_receipt_pdfs 等の
       // "entries" サブコレクション
       match /entries/{entryId} {
-        allow read: if isSignedIn() && (
+        // billing_* のentriesは、非開示店舗(billing_visibility.hidden==true)の
+        // ものを統括管理者からも読めなくする。他のentries種別は従来通り。
+        //
+        // get(ドキュメントIDを指定した個別取得)とlist(クエリでの一覧取得)を
+        // 分けているのは、Firestoreルールがlist操作に対しては
+        // ドキュメントごとの絞り込みを保証しない(get()に依存する条件を
+        // list側で使うと、正しいドキュメントも含めてクエリ全体が
+        // 評価エラーで拒否されることを実機検証で確認した)ため。
+        // list側はisSuperAdmin()のみとし、非開示店舗の除外はクライアント側の
+        // where('storeId', whereNotIn: ...)クエリ + 取得後フィルタで行う
+        // (billing_page.dart)。get側はentryごとに正しく非開示チェックが
+        // かかるため、非開示店舗のドキュメントIDを直接指定した個別アクセスは
+        // 統括管理者であっても拒否される。
+        allow get: if isSignedIn() && (
+          isBillingDocId(docId)
+            ? (isSuperAdmin() && billingEntryVisible(docId, resource.data.get('storeId', '')))
+            : (isMyOrgDocId(docId) || isSuperAdmin())
+        );
+        allow list: if isSignedIn() && (
           isBillingDocId(docId) ? isSuperAdmin() : (isMyOrgDocId(docId) || isSuperAdmin())
         );
         allow write: if isSignedIn() && (
@@ -191,6 +239,34 @@ service cloud.firestore {
           (isMyOrgDocId(docId) || isSuperAdmin());
         allow create: if isSignedIn() &&
           (isMyOrgAdminDocId(docId) || isSuperAdmin());
+      }
+
+      // storesドキュメント配下、店舗ごとの請求・受領・領収書の非開示状態。
+      // { hidden: bool, disclosedBySuperAdmin: bool }
+      // stores自体のitems配列に持たせると、配列内の特定1要素だけを検証する
+      // 手段がFirestoreルールに無いため（.all()/.exists()等の反復処理は
+      // 未サポート、実機検証済み）、店舗ごとに独立したドキュメントに分けて
+      // 方向ごとに権限を強制する。
+      match /billing_visibility/{storeId} {
+        allow read: if isSignedIn() && (isMyOrgDocId(docId) || isSuperAdmin());
+
+        // 非開示にする(hidden: 未設定/false → true): 統括管理者のみ。
+        allow create, update: if isSignedIn() && isStoresDocId(docId) &&
+          isSuperAdmin() &&
+          request.resource.data.hidden == true &&
+          request.resource.data.disclosedBySuperAdmin == false &&
+          request.resource.data.keys().hasOnly(['hidden', 'disclosedBySuperAdmin']);
+
+        // 開示する(hidden: true → false): その店舗の所属メンバーのみ
+        // (3番で実装予定の店舗側UI用に、ルールを先行して用意する)。
+        allow update: if isSignedIn() && isStoresDocId(docId) &&
+          isMyOrgDocId(docId) && storeId in myStoreIds() &&
+          resource.data.hidden == true &&
+          request.resource.data.hidden == false &&
+          request.resource.data.disclosedBySuperAdmin == false &&
+          request.resource.data.keys().hasOnly(['hidden', 'disclosedBySuperAdmin']);
+
+        allow delete: if false;
       }
     }
 

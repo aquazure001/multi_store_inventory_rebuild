@@ -39,6 +39,8 @@ part 'pages/ad_pages.dart';
 part 'pages/admin_review_pages.dart';
 part 'pages/legal_page.dart';
 part 'pages/item_master_page.dart';
+part 'pages/discontinued_testers_page.dart';
+part 'pages/discontinued_products_page.dart';
 part 'pages/billing_page.dart';
 part 'pages/pos_page.dart';
 part 'pages/pos_summary_page.dart';

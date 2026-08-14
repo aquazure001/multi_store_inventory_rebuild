@@ -60,7 +60,14 @@ class _StoreListPageState extends State<StoreListPage> {
     });
     try {
       final masterData = await _loadMasterData();
-      final allStores = List<LegacyStore>.from(masterData.stores);
+      final billingVisibility = await _loadBillingVisibility();
+      final allStores = masterData.stores.map((s) {
+        final v = billingVisibility[s.id];
+        return s.copyWithBillingVisibility(
+          hidden: v?['hidden'] == true,
+          disclosedBySuperAdmin: v?['disclosedBySuperAdmin'] == true,
+        );
+      }).toList();
       final allStoreIds = allStores.map((s) => s.id).toList();
       final viewableIds = AppSession.viewableStoreIds(allStoreIds).toSet();
       final visibleStores = allStores
@@ -78,6 +85,139 @@ class _StoreListPageState extends State<StoreListPage> {
         _error = e.toString();
         _loading = false;
       });
+    }
+  }
+
+  // org_{orgId}__stores/billing_visibility/{storeId} を全件読み込み、
+  // storeId => {hidden, disclosedBySuperAdmin} のマップを返す。
+  // ドキュメントが存在しない店舗は非開示ではない(デフォルト)として扱う。
+  Future<Map<String, Map<String, dynamic>>> _loadBillingVisibility() async {
+    final snap = await AppSession.doc(
+      'stores',
+    ).collection('billing_visibility').get();
+    return {for (final doc in snap.docs) doc.id: doc.data()};
+  }
+
+  Future<void> _showBillingHiddenInfo() async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('請求情報の非開示について'),
+        content: const Text(
+          'オンにすると、この店舗の請求・受領・領収書情報が統括管理者からも'
+          '見えなくなります。解除は、その店舗に所属するスタッフが行う必要が'
+          'あります。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('閉じる'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 非開示ON→OFFはここでは行わない(店舗側スタッフの開示操作のみが解除できる、
+  // 誤操作防止のための一方向設計)。呼び出し元のSwitchもbillingHiddenが
+  // trueの間はonChangedをnullにして無効化している。
+  Future<void> _confirmAndHideBilling(LegacyStore store) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('請求情報を非開示にしますか？'),
+        content: Text(
+          '${store.name} の請求・受領・領収書情報が、統括管理者からも'
+          '見えなくなります。\n\n'
+          'この操作は統括管理者側からは元に戻せません。解除には、'
+          'その店舗に所属するスタッフによる開示操作が必要です。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('非開示にする', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _setBillingHidden(store);
+  }
+
+  Future<void> _setBillingHidden(LegacyStore store) async {
+    try {
+      await AppSession.doc('stores')
+          .collection('billing_visibility')
+          .doc(store.id)
+          .set({'hidden': true, 'disclosedBySuperAdmin': false});
+      await _loadStores();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${store.name} の請求情報を非開示にしました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('エラー: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  // 開示(hidden: true→false)は、その店舗に所属するメンバー(storeIds)のみが
+  // 行える(Firestoreルールでも同様に制限)。統括管理者側からは解除できない。
+  Future<void> _confirmAndDiscloseBilling(LegacyStore store) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('請求情報を開示しますか？'),
+        content: Text(
+          '${store.name} の請求・受領・領収書情報を、統括管理者が再び'
+          '閲覧できるようになります。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('開示する'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await AppSession.doc('stores')
+          .collection('billing_visibility')
+          .doc(store.id)
+          .update({'hidden': false, 'disclosedBySuperAdmin': false});
+      await _loadStores();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${store.name} の請求情報を開示しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('エラー: $e'), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -771,6 +911,18 @@ class _StoreListPageState extends State<StoreListPage> {
                 Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const ItemMasterPage()),
                 );
+              } else if (value == 'discontinued_testers') {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const DiscontinuedTestersPage(),
+                  ),
+                );
+              } else if (value == 'discontinued_products') {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const DiscontinuedProductsPage(),
+                  ),
+                );
               } else if (value == 'special_order') {
                 Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const SpecialOrderPage()),
@@ -889,6 +1041,26 @@ class _StoreListPageState extends State<StoreListPage> {
                     Icon(Icons.inventory_2),
                     SizedBox(width: 12),
                     Text('商品マスタ管理'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'discontinued_testers',
+                child: Row(
+                  children: [
+                    Icon(Icons.block),
+                    SizedBox(width: 12),
+                    Text('販売終了テスター一覧'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'discontinued_products',
+                child: Row(
+                  children: [
+                    Icon(Icons.block),
+                    SizedBox(width: 12),
+                    Text('販売終了商品一覧'),
                   ],
                 ),
               ),
@@ -1222,6 +1394,85 @@ class _StoreListPageState extends State<StoreListPage> {
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
+                            subtitle: AppSession.isSuperAdmin
+                                ? Padding(
+                                    padding: const EdgeInsets.only(top: 6),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            '請求情報を非開示にする',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: store.billingHidden
+                                                  ? Colors.orange.shade800
+                                                  : Colors.grey.shade700,
+                                              fontWeight: store.billingHidden
+                                                  ? FontWeight.bold
+                                                  : FontWeight.normal,
+                                            ),
+                                          ),
+                                        ),
+                                        IconButton(
+                                          icon: const Icon(
+                                            Icons.info_outline,
+                                            size: 18,
+                                          ),
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(),
+                                          visualDensity: VisualDensity.compact,
+                                          onPressed: () =>
+                                              _showBillingHiddenInfo(),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Switch(
+                                          value: store.billingHidden,
+                                          onChanged: store.billingHidden
+                                              ? null
+                                              : (_) => _confirmAndHideBilling(
+                                                  store,
+                                                ),
+                                        ),
+                                      ],
+                                    ),
+                                  )
+                                : (store.billingHidden &&
+                                          AppSession.storeIds.contains(store.id)
+                                      ? Padding(
+                                          padding: const EdgeInsets.only(
+                                            top: 6,
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              Expanded(
+                                                child: Text(
+                                                  '請求情報が非開示になっています',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    color:
+                                                        Colors.orange.shade800,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                              ),
+                                              TextButton(
+                                                style: TextButton.styleFrom(
+                                                  padding: EdgeInsets.zero,
+                                                  minimumSize: const Size(0, 0),
+                                                  tapTargetSize:
+                                                      MaterialTapTargetSize
+                                                          .shrinkWrap,
+                                                ),
+                                                onPressed: () =>
+                                                    _confirmAndDiscloseBilling(
+                                                      store,
+                                                    ),
+                                                child: const Text('開示する'),
+                                              ),
+                                            ],
+                                          ),
+                                        )
+                                      : null),
                             trailing: const Icon(Icons.chevron_right),
                             onTap: () async {
                               final navigator = Navigator.of(context);

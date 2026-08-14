@@ -5,17 +5,50 @@ part of '../main.dart';
 // ─────────────────────────────────────────────
 
 class LegacyStore {
-  const LegacyStore({required this.id, required this.code, required this.name});
+  const LegacyStore({
+    required this.id,
+    required this.code,
+    required this.name,
+    this.billingHidden = false,
+    this.billingDisclosedBySuperAdmin = false,
+  });
 
   final String id;
   final String code;
   final String name;
+
+  // 統括管理者がこの店舗の請求・受領・領収書情報を非開示にしたかどうか。
+  // trueの間、統括管理者からは請求・受領管理画面でこの店舗の情報が
+  // フィルタリングされる(実際のフィルタリングは3・4で実装)。
+  // stores(org_{orgId}__stores)のitems配列ではなく、Firestoreルールで
+  // 店舗単位の権限制御をするために別ドキュメント
+  // (org_{orgId}__stores/billing_visibility/{storeId})で管理しており、
+  // fromMap()では埋まらない。store_list_page.dartの_loadStores()で
+  // 読み込み後にcopyWithBillingVisibility()でマージする。
+  final bool billingHidden;
+
+  // billingHiddenがtrueの店舗について、店舗側スタッフが開示操作を行ったか。
+  // 統括管理者はこれをtrueにする操作はできない(非開示の解除は店舗側のみ)。
+  final bool billingDisclosedBySuperAdmin;
 
   factory LegacyStore.fromMap(Map<String, dynamic> map) {
     return LegacyStore(
       id: (map['id'] ?? '').toString(),
       code: (map['code'] ?? '').toString(),
       name: (map['name'] ?? '').toString(),
+    );
+  }
+
+  LegacyStore copyWithBillingVisibility({
+    required bool hidden,
+    required bool disclosedBySuperAdmin,
+  }) {
+    return LegacyStore(
+      id: id,
+      code: code,
+      name: name,
+      billingHidden: hidden,
+      billingDisclosedBySuperAdmin: disclosedBySuperAdmin,
     );
   }
 }
