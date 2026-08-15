@@ -95,12 +95,14 @@ service cloud.firestore {
       return billingDocId.split('__')[0] + '__stores';
     }
 
-    // 請求・受領entries 1件が、非開示店舗に属していないか(=閲覧してよいか)。
+    // 請求・受領entries 1件が、非開示店舗に属しておらず、かつ
+    // (非開示から開示された場合は)統括管理者の確認済みか(=閲覧してよいか)。
     // billing_visibilityドキュメントが無い店舗は非開示ではない(デフォルト)。
     function billingEntryVisible(billingDocId, storeId) {
       return storeId == '' ||
         !exists(/databases/$(database)/documents/inventory_shared_v1/$(billingStoresDocId(billingDocId))/billing_visibility/$(storeId)) ||
-        get(/databases/$(database)/documents/inventory_shared_v1/$(billingStoresDocId(billingDocId))/billing_visibility/$(storeId)).data.hidden != true;
+        (get(/databases/$(database)/documents/inventory_shared_v1/$(billingStoresDocId(billingDocId))/billing_visibility/$(storeId)).data.hidden != true &&
+         get(/databases/$(database)/documents/inventory_shared_v1/$(billingStoresDocId(billingDocId))/billing_visibility/$(storeId)).data.superAdminAcknowledged == true);
     }
 
     // 書き込みは組織admin以上に限定するドキュメント
@@ -242,7 +244,7 @@ service cloud.firestore {
       }
 
       // storesドキュメント配下、店舗ごとの請求・受領・領収書の非開示状態。
-      // { hidden: bool, disclosedBySuperAdmin: bool }
+      // { hidden: bool, superAdminAcknowledged: bool }
       // stores自体のitems配列に持たせると、配列内の特定1要素だけを検証する
       // 手段がFirestoreルールに無いため（.all()/.exists()等の反復処理は
       // 未サポート、実機検証済み）、店舗ごとに独立したドキュメントに分けて
@@ -251,20 +253,33 @@ service cloud.firestore {
         allow read: if isSignedIn() && (isMyOrgDocId(docId) || isSuperAdmin());
 
         // 非開示にする(hidden: 未設定/false → true): 統括管理者のみ。
+        // superAdminAcknowledgedは常にfalseにリセットする(再度開示された
+        // 際に、統括管理者の確認操作を改めて必要にするため)。
         allow create, update: if isSignedIn() && isStoresDocId(docId) &&
           isSuperAdmin() &&
           request.resource.data.hidden == true &&
-          request.resource.data.disclosedBySuperAdmin == false &&
-          request.resource.data.keys().hasOnly(['hidden', 'disclosedBySuperAdmin']);
+          request.resource.data.superAdminAcknowledged == false &&
+          request.resource.data.keys().hasOnly(['hidden', 'superAdminAcknowledged']);
 
-        // 開示する(hidden: true → false): その店舗の所属メンバーのみ
-        // (3番で実装予定の店舗側UI用に、ルールを先行して用意する)。
+        // 開示する(hidden: true → false): その店舗の所属メンバーのみ。
+        // superAdminAcknowledgedはfalseのまま(統括管理者はまだ未確認)。
         allow update: if isSignedIn() && isStoresDocId(docId) &&
           isMyOrgDocId(docId) && storeId in myStoreIds() &&
           resource.data.hidden == true &&
           request.resource.data.hidden == false &&
-          request.resource.data.disclosedBySuperAdmin == false &&
-          request.resource.data.keys().hasOnly(['hidden', 'disclosedBySuperAdmin']);
+          request.resource.data.superAdminAcknowledged == false &&
+          request.resource.data.keys().hasOnly(['hidden', 'superAdminAcknowledged']);
+
+        // 開示を確認する(superAdminAcknowledged: false → true): 統括管理者のみ。
+        // 店舗側が開示(hidden: false)にした後、初めてその内容を見るための
+        // 確認操作。hiddenはfalseのまま変えない。
+        allow update: if isSignedIn() && isStoresDocId(docId) &&
+          isSuperAdmin() &&
+          resource.data.hidden == false &&
+          resource.data.superAdminAcknowledged == false &&
+          request.resource.data.hidden == false &&
+          request.resource.data.superAdminAcknowledged == true &&
+          request.resource.data.keys().hasOnly(['hidden', 'superAdminAcknowledged']);
 
         allow delete: if false;
       }

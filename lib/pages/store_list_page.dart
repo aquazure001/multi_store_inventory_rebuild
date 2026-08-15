@@ -65,7 +65,7 @@ class _StoreListPageState extends State<StoreListPage> {
         final v = billingVisibility[s.id];
         return s.copyWithBillingVisibility(
           hidden: v?['hidden'] == true,
-          disclosedBySuperAdmin: v?['disclosedBySuperAdmin'] == true,
+          superAdminAcknowledged: v?['superAdminAcknowledged'] == true,
         );
       }).toList();
       final allStoreIds = allStores.map((s) => s.id).toList();
@@ -89,7 +89,7 @@ class _StoreListPageState extends State<StoreListPage> {
   }
 
   // org_{orgId}__stores/billing_visibility/{storeId} を全件読み込み、
-  // storeId => {hidden, disclosedBySuperAdmin} のマップを返す。
+  // storeId => {hidden, superAdminAcknowledged} のマップを返す。
   // ドキュメントが存在しない店舗は非開示ではない(デフォルト)として扱う。
   Future<Map<String, Map<String, dynamic>>> _loadBillingVisibility() async {
     final snap = await AppSession.doc(
@@ -106,7 +106,9 @@ class _StoreListPageState extends State<StoreListPage> {
         content: const Text(
           'オンにすると、この店舗の請求・受領・領収書情報が統括管理者からも'
           '見えなくなります。解除は、その店舗に所属するスタッフが行う必要が'
-          'あります。',
+          'あります。\n\n'
+          'スタッフが解除(開示)した後も、統括管理者が請求・受領管理画面で'
+          '「確認して見る」操作を行うまでは、情報は表示されません。',
         ),
         actions: [
           TextButton(
@@ -151,10 +153,12 @@ class _StoreListPageState extends State<StoreListPage> {
 
   Future<void> _setBillingHidden(LegacyStore store) async {
     try {
+      // 再度非開示にする際は superAdminAcknowledged も false にリセットする。
+      // 次回の開示時に、統括管理者側の確認操作を改めて必要にするため。
       await AppSession.doc('stores')
           .collection('billing_visibility')
           .doc(store.id)
-          .set({'hidden': true, 'disclosedBySuperAdmin': false});
+          .set({'hidden': true, 'superAdminAcknowledged': false});
       await _loadStores();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -175,14 +179,17 @@ class _StoreListPageState extends State<StoreListPage> {
 
   // 開示(hidden: true→false)は、その店舗に所属するメンバー(storeIds)のみが
   // 行える(Firestoreルールでも同様に制限)。統括管理者側からは解除できない。
+  // 開示してもsuperAdminAcknowledgedはfalseのままなので、統括管理者が
+  // 「確認して見る」操作を行うまではデータは自動的には見えない。
   Future<void> _confirmAndDiscloseBilling(LegacyStore store) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('請求情報を開示しますか？'),
         content: Text(
-          '${store.name} の請求・受領・領収書情報を、統括管理者が再び'
-          '閲覧できるようになります。',
+          '${store.name} の請求・受領・領収書情報について、統括管理者に'
+          '開示通知が届きます。統括管理者が内容を確認する操作を行うまでは、'
+          '実際には表示されません。',
         ),
         actions: [
           TextButton(
@@ -202,7 +209,7 @@ class _StoreListPageState extends State<StoreListPage> {
       await AppSession.doc('stores')
           .collection('billing_visibility')
           .doc(store.id)
-          .update({'hidden': false, 'disclosedBySuperAdmin': false});
+          .update({'hidden': false, 'superAdminAcknowledged': false});
       await _loadStores();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1404,19 +1411,14 @@ class _StoreListPageState extends State<StoreListPage> {
                                             '請求情報を非開示にする',
                                             style: TextStyle(
                                               fontSize: 12,
-                                              color: store.billingHidden
-                                                  ? Colors.orange.shade800
-                                                  : Colors.grey.shade700,
-                                              fontWeight: store.billingHidden
-                                                  ? FontWeight.bold
-                                                  : FontWeight.normal,
+                                              color: Colors.grey.shade700,
                                             ),
                                           ),
                                         ),
                                         IconButton(
                                           icon: const Icon(
                                             Icons.info_outline,
-                                            size: 18,
+                                            size: 16,
                                           ),
                                           padding: EdgeInsets.zero,
                                           constraints: const BoxConstraints(),
@@ -1424,7 +1426,7 @@ class _StoreListPageState extends State<StoreListPage> {
                                           onPressed: () =>
                                               _showBillingHiddenInfo(),
                                         ),
-                                        const SizedBox(width: 4),
+                                        const SizedBox(width: 8),
                                         Switch(
                                           value: store.billingHidden,
                                           onChanged: store.billingHidden

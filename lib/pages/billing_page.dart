@@ -23,6 +23,11 @@ class _BillingPageState extends State<BillingPage> {
   // 請求情報が非開示になっている店舗ID。統括管理者からもこの画面上では
   // 店舗選択・請求書一覧・受領書一覧・未請求ライン全てから除外する。
   Set<String> _hiddenStoreIds = <String>{};
+  // 店舗側が開示(hidden: false)にしたものの、統括管理者がまだ
+  // 「確認して見る」操作を行っていない(superAdminAcknowledged: false)店舗。
+  // これらも_hiddenStoreIdsと同様に一覧等からは除外しつつ、専用バナーで
+  // 確認操作を促す。
+  List<LegacyStore> _pendingAckStores = [];
   final List<_BillingLine> _lines = [];
   final List<_BillingInvoiceSummary> _invoices = [];
   final Set<String> _billedKeys = <String>{};
@@ -94,12 +99,12 @@ class _BillingPageState extends State<BillingPage> {
     });
 
     try {
-      // 非開示店舗の一覧を先に読み込み、請求書一覧のクエリ自体に
+      // 非開示店舗・確認待ち店舗の一覧を先に読み込み、請求書一覧のクエリ自体に
       // whereNotInで反映する(取得してからクライアント側で弾くだけでは、
       // 非開示店舗のデータが一度はネットワーク経由で端末に届いてしまう)。
-      // Firestoreのwhere-not-inは10件までの制約があるため、非開示店舗が
+      // Firestoreのwhere-not-inは10件までの制約があるため、対象が
       // 11件以上ある場合はクエリ側の絞り込みを諦め、取得後のクライアント側
-      // フィルタ(下のhiddenStoreIds.contains(...)チェック)のみに頼る。
+      // フィルタ(下のexcludedStoreIds.contains(...)チェック)のみに頼る。
       final billingVisibilitySnap = await AppSession.doc(
         'stores',
       ).collection('billing_visibility').get();
@@ -107,16 +112,29 @@ class _BillingPageState extends State<BillingPage> {
         for (final doc in billingVisibilitySnap.docs)
           if (doc.data()['hidden'] == true) doc.id,
       };
-      final hiddenIdsForQuery = hiddenStoreIds.length <= 10
-          ? hiddenStoreIds.toList()
+      // 店舗側が開示(hidden: false)にしたが、統括管理者がまだ確認操作
+      // (superAdminAcknowledged: true への更新)を行っていない店舗。
+      // hiddenと同様、確認前はこの画面には一切表示しない。
+      final pendingAckStoreIds = <String>{
+        for (final doc in billingVisibilitySnap.docs)
+          if (doc.data()['hidden'] != true &&
+              doc.data()['superAdminAcknowledged'] != true)
+            doc.id,
+      };
+      final excludedStoreIds = <String>{
+        ...hiddenStoreIds,
+        ...pendingAckStoreIds,
+      };
+      final excludedIdsForQuery = excludedStoreIds.length <= 10
+          ? excludedStoreIds.toList()
           : null;
 
       var invoicesQuery = AppSession.billingInvoices
           .orderBy('createdAt', descending: true)
           .limit(30);
-      if (hiddenIdsForQuery != null && hiddenIdsForQuery.isNotEmpty) {
+      if (excludedIdsForQuery != null && excludedIdsForQuery.isNotEmpty) {
         invoicesQuery = AppSession.billingInvoices
-            .where('storeId', whereNotIn: hiddenIdsForQuery)
+            .where('storeId', whereNotIn: excludedIdsForQuery)
             .orderBy('createdAt', descending: true)
             .limit(30);
       }
@@ -135,17 +153,23 @@ class _BillingPageState extends State<BillingPage> {
       final batchSnap = loadResults[2] as QuerySnapshot<Map<String, dynamic>>;
       final storesDoc =
           loadResults[3] as DocumentSnapshot<Map<String, dynamic>>;
-      // 統括管理者からもこの画面では非開示店舗を一切見せない
+      // 統括管理者からもこの画面では非開示店舗・確認待ち店舗を一切見せない
       // (店舗選択・請求書/受領書一覧・未請求ラインの全てから除外する)。
-      final orgStores = _parseStores(
+      final allParsedStores = _parseStores(
         storesDoc.data() ?? <String, dynamic>{},
-      ).where((s) => !hiddenStoreIds.contains(s.id)).toList();
+      );
+      final orgStores = allParsedStores
+          .where((s) => !excludedStoreIds.contains(s.id))
+          .toList();
+      final pendingAckStores = allParsedStores
+          .where((s) => pendingAckStoreIds.contains(s.id))
+          .toList();
       final billedKeys = <String>{};
       final issuedMonthStoreKeys = <String>{};
       final invoices = <_BillingInvoiceSummary>[];
       for (final doc in invoiceSnap.docs) {
         final data = doc.data();
-        if (hiddenStoreIds.contains((data['storeId'] ?? '').toString())) {
+        if (excludedStoreIds.contains((data['storeId'] ?? '').toString())) {
           continue;
         }
         if ((data['status'] ?? '').toString() == 'canceled') continue;
@@ -223,7 +247,7 @@ class _BillingPageState extends State<BillingPage> {
           );
           final qty = _toInt(item['qty']);
           if (qty <= 0) continue;
-          if (hiddenStoreIds.contains((item['storeId'] ?? '').toString())) {
+          if (excludedStoreIds.contains((item['storeId'] ?? '').toString())) {
             continue;
           }
           final line = _BillingLine(
@@ -307,13 +331,14 @@ class _BillingPageState extends State<BillingPage> {
           ..addAll(
             Map.fromEntries(
               storeRecipients.entries.where(
-                (e) => !hiddenStoreIds.contains(e.key),
+                (e) => !excludedStoreIds.contains(e.key),
               ),
             ),
           );
         _repaymentEnabled = repaymentEnabled;
         _orgStores = orgStores;
         _hiddenStoreIds = hiddenStoreIds;
+        _pendingAckStores = pendingAckStores;
         _lines
           ..clear()
           ..addAll(lines);
@@ -329,6 +354,33 @@ class _BillingPageState extends State<BillingPage> {
         _error = e.toString();
         _loading = false;
       });
+    }
+  }
+
+  // 店舗側が開示した請求情報を、統括管理者が確認済みとしてマークする。
+  // これにより初めてsuperAdminAcknowledgedがtrueになり、この画面や
+  // Firestoreルール上でその店舗のデータが表示・読み取り可能になる。
+  Future<void> _acknowledgeBillingDisclosure(LegacyStore store) async {
+    try {
+      await AppSession.doc('stores')
+          .collection('billing_visibility')
+          .doc(store.id)
+          .update({'hidden': false, 'superAdminAcknowledged': true});
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${store.name} の請求情報を確認しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('エラー: $e'), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -4888,6 +4940,55 @@ class _BillingPageState extends State<BillingPage> {
                         ],
                       ),
                     ),
+                  ],
+                  if (_pendingAckStores.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    for (final store in _pendingAckStores)
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.blue.shade200),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.visibility_outlined,
+                              size: 16,
+                              color: Colors.blue.shade800,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '${store.name}：開示されました。内容を確認しますか？',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.blue.shade900,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                ),
+                                minimumSize: const Size(0, 32),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              onPressed: () =>
+                                  _acknowledgeBillingDisclosure(store),
+                              child: const Text('確認して見る'),
+                            ),
+                          ],
+                        ),
+                      ),
                   ],
                   const SizedBox(height: 8),
                   _buildEntryFlow(),

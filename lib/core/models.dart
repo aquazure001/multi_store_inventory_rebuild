@@ -10,7 +10,7 @@ class LegacyStore {
     required this.code,
     required this.name,
     this.billingHidden = false,
-    this.billingDisclosedBySuperAdmin = false,
+    this.billingSuperAdminAcknowledged = false,
   });
 
   final String id;
@@ -27,9 +27,13 @@ class LegacyStore {
   // 読み込み後にcopyWithBillingVisibility()でマージする。
   final bool billingHidden;
 
-  // billingHiddenがtrueの店舗について、店舗側スタッフが開示操作を行ったか。
-  // 統括管理者はこれをtrueにする操作はできない(非開示の解除は店舗側のみ)。
-  final bool billingDisclosedBySuperAdmin;
+  // 店舗側スタッフが開示操作(hidden: true→false)を行った後、統括管理者が
+  // 「確認して見る」操作でその開示内容を確認済みかどうか。billing_page.dart
+  // では、hiddenがfalseであってもこれがtrueになるまではその店舗の情報を
+  // 表示しない(開示直後に自動で見えてしまうことを防ぐ、確認操作の一段挟み)。
+  // 統括管理者が再度非開示にする(billingHidden: trueにする)と、このフラグは
+  // falseにリセットされ、次回の開示時にまた確認操作が必要になる。
+  final bool billingSuperAdminAcknowledged;
 
   factory LegacyStore.fromMap(Map<String, dynamic> map) {
     return LegacyStore(
@@ -41,14 +45,14 @@ class LegacyStore {
 
   LegacyStore copyWithBillingVisibility({
     required bool hidden,
-    required bool disclosedBySuperAdmin,
+    required bool superAdminAcknowledged,
   }) {
     return LegacyStore(
       id: id,
       code: code,
       name: name,
       billingHidden: hidden,
-      billingDisclosedBySuperAdmin: disclosedBySuperAdmin,
+      billingSuperAdminAcknowledged: superAdminAcknowledged,
     );
   }
 }
