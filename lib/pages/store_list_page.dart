@@ -59,8 +59,10 @@ class _StoreListPageState extends State<StoreListPage> {
       _error = null;
     });
     try {
-      final masterData = await _loadMasterData();
-      final billingVisibility = await _loadBillingVisibility();
+      final masterDataFuture = _loadMasterData();
+      final billingVisibilityFuture = _loadBillingVisibility();
+      final masterData = await masterDataFuture;
+      final billingVisibility = await billingVisibilityFuture;
       final allStores = masterData.stores.map((s) {
         final v = billingVisibility[s.id];
         return s.copyWithBillingVisibility(

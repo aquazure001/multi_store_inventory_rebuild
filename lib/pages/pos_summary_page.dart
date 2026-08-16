@@ -28,6 +28,9 @@ class _PosSummaryPageState extends State<PosSummaryPage> {
 
   List<LegacyStore> _stores = [];
   LegacyStore? _selectedStore;
+  Set<String> _viewableStoreIds = {};
+  bool _isRestricted = false;
+  List<String> _visibleStoreNames = [];
 
   bool _loadingStores = true;
   bool _loading = false;
@@ -50,8 +53,17 @@ class _PosSummaryPageState extends State<PosSummaryPage> {
     setState(() => _loadingStores = true);
     try {
       final storesDoc = await AppSession.doc('stores').get();
+      final allStores = _parseStores(storesDoc.data() ?? <String, dynamic>{});
+      final allStoreIds = allStores.map((s) => s.id).toList();
+      final viewableIds = AppSession.viewableStoreIds(allStoreIds).toSet();
+      final visibleStores = allStores
+          .where((s) => viewableIds.contains(s.id))
+          .toList();
       setState(() {
-        _stores = _parseStores(storesDoc.data() ?? <String, dynamic>{});
+        _stores = visibleStores;
+        _viewableStoreIds = viewableIds;
+        _isRestricted = visibleStores.length < allStores.length;
+        _visibleStoreNames = visibleStores.map((s) => s.name).toList();
         _loadingStores = false;
       });
     } catch (e) {
@@ -134,6 +146,7 @@ class _PosSummaryPageState extends State<PosSummaryPage> {
       for (final doc in snap.docs) {
         final data = doc.data();
         final storeId = (data['storeId'] ?? '').toString();
+        if (!_viewableStoreIds.contains(storeId)) continue;
         if (_selectedStore != null && storeId != _selectedStore!.id) continue;
 
         count++;
@@ -401,6 +414,36 @@ class _PosSummaryPageState extends State<PosSummaryPage> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            if (!_loadingStores && _isRestricted)
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 16),
+                color: Colors.orange.shade50,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      size: 18,
+                      color: Colors.orange.shade800,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '閲覧が許可されている店舗のみ対象にしています：'
+                        '${_visibleStoreNames.join('、')}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.orange.shade900,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),

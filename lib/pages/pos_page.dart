@@ -60,6 +60,7 @@ class _PosPageState extends State<PosPage> {
       TextEditingController();
 
   List<LegacyStore> _stores = [];
+  bool _noViewableStores = false;
   List<LegacyItem> _products = [];
   Map<String, _PosPrice> _prices = {};
   final List<_PosCartLine> _cart = [];
@@ -110,7 +111,12 @@ class _PosPageState extends State<PosPage> {
       final priceDoc = results[2];
       final settingsDoc = results[3];
 
-      final stores = _parseStores(storesDoc.data() ?? <String, dynamic>{});
+      final allStores = _parseStores(storesDoc.data() ?? <String, dynamic>{});
+      final allStoreIds = allStores.map((s) => s.id).toList();
+      final viewableIds = AppSession.viewableStoreIds(allStoreIds).toSet();
+      final stores = allStores
+          .where((s) => viewableIds.contains(s.id))
+          .toList();
       final products = _parseItemsFromDoc(
         productsDoc,
       ).where((item) => !item.discontinued).toList();
@@ -134,6 +140,7 @@ class _PosPageState extends State<PosPage> {
       final settings = settingsDoc.data() ?? <String, dynamic>{};
       setState(() {
         _stores = stores;
+        _noViewableStores = stores.isEmpty;
         _products = products;
         _prices = prices;
         _selectedStore = stores.isNotEmpty ? stores.first : null;
@@ -142,6 +149,9 @@ class _PosPageState extends State<PosPage> {
         _loading = false;
       });
       unawaited(_refreshOpenSession());
+      if (!_noViewableStores) {
+        unawaited(_maybeShowEntryDialog());
+      }
     } catch (e) {
       setState(() {
         _message = '読み込みエラー: $e';
@@ -251,6 +261,69 @@ class _PosPageState extends State<PosPage> {
       }
       _message = null;
     });
+  }
+
+  Future<void> _maybeShowEntryDialog() async {
+    if (!mounted) return;
+
+    final chooseManual = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('販売内容について'),
+        content: const Text('Aqu,azuRe商品を含む販売ですか？それとも自社商品のみの販売ですか？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Aqu,azuRe商品を含む'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('自社商品のみ'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted) return;
+
+    _setMode(chooseManual == true);
+    if (chooseManual == true) {
+      await _maybeShowManualEntryRegistrationDialog();
+    }
+  }
+
+  Future<void> _maybeShowManualEntryRegistrationDialog() async {
+    if (!mounted) return;
+
+    final register = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('商品登録のご案内'),
+        content: const Text(
+          'この商品を商品マスタに登録しますか？登録すると、次回からは'
+          '商品コードを入力するだけで、この商品の金額が自動で'
+          '表示されるようになります。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('今回はしない'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('登録する'),
+          ),
+        ],
+      ),
+    );
+
+    if (register == true && mounted) {
+      Navigator.of(
+        context,
+      ).push(MaterialPageRoute(builder: (_) => const ItemMasterPage()));
+    }
   }
 
   void _addProductToCart() {
@@ -673,6 +746,35 @@ class _PosPageState extends State<PosPage> {
   Widget build(BuildContext context) {
     if (_loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    if (_noViewableStores) {
+      return Scaffold(
+        backgroundColor: const Color(0xFFFFF7FF),
+        appBar: AppBar(title: const Text('レジ')),
+        body: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.error_outline,
+                    size: 40,
+                    color: Colors.red.shade400,
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    '閲覧できる店舗がありません。\n管理者にお問い合わせください。',
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
     }
 
     return Scaffold(
@@ -1503,6 +1605,11 @@ class _PosPageState extends State<PosPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Text(
+          '※ 商品コード・商品名を商品マスタに登録すると、次回から金額が自動表示されます',
+          style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+        ),
+        const SizedBox(height: 8),
         TextField(
           controller: _manualNameController,
           decoration: const InputDecoration(
