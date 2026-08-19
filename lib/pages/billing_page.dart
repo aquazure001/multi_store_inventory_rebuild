@@ -4,6 +4,27 @@ part of '../main.dart';
 // 請求・受領管理（統括管理者専用）
 // ─────────────────────────────────────────────
 
+int _billingRoundDivide(int numerator, int denominator) {
+  if (denominator <= 0) return 0;
+  if (numerator >= 0) {
+    return (numerator + denominator ~/ 2) ~/ denominator;
+  }
+  return -((-numerator + denominator ~/ 2) ~/ denominator);
+}
+
+int _billingTaxExcludedFromTaxIncludedGross(int grossTotal, int taxRate) {
+  return _billingRoundDivide(grossTotal * 100, 100 + taxRate);
+}
+
+int _billingTaxFromTaxExcludedSubtotal(int subtotal, int taxRate) {
+  return _billingRoundDivide(subtotal * taxRate, 100);
+}
+
+int _billingTaxFromTaxIncludedGross(int grossTotal, int taxRate) {
+  return grossTotal -
+      _billingTaxExcludedFromTaxIncludedGross(grossTotal, taxRate);
+}
+
 class BillingPage extends StatefulWidget {
   const BillingPage({super.key});
 
@@ -638,8 +659,10 @@ class _BillingPageState extends State<BillingPage> {
       }
     }
     if (taxIncludedGrossTotal > 0) {
-      taxExcludedSubtotal += (taxIncludedGrossTotal / (1 + taxRate / 100))
-          .round();
+      taxExcludedSubtotal += _billingTaxExcludedFromTaxIncludedGross(
+        taxIncludedGrossTotal,
+        taxRate,
+      );
     }
     return taxExcludedSubtotal;
   }
@@ -664,14 +687,12 @@ class _BillingPageState extends State<BillingPage> {
                 (!line.taxIncluded || line.listPrice <= 0),
           )
           .fold<int>(0, (total, line) => total + line.qty * line.unitPrice);
-      final grossTax =
-          includedGross - (includedGross / (1 + taxRate / 100)).round();
-      return grossTax + (excludedTax * taxRate / 100).round();
+      final grossTax = _billingTaxFromTaxIncludedGross(includedGross, taxRate);
+      return grossTax +
+          _billingTaxFromTaxExcludedSubtotal(excludedTax, taxRate);
     }
-    return (subtotal * taxRate / 100).round();
+    return _billingTaxFromTaxExcludedSubtotal(subtotal, taxRate);
   }
-
-  int _taxFor(int subtotal, int taxRate) => (subtotal * taxRate / 100).round();
 
   int _taxExcludedAmountFromInput({
     required int inputUnit,
@@ -681,7 +702,7 @@ class _BillingPageState extends State<BillingPage> {
   }) {
     if (!taxIncluded) return inputUnit * qty;
     final grossTotal = inputUnit * qty;
-    return (grossTotal / (1 + taxRate / 100)).round();
+    return _billingTaxExcludedFromTaxIncludedGross(grossTotal, taxRate);
   }
 
   int _taxExcludedUnitFromInput({
@@ -690,7 +711,7 @@ class _BillingPageState extends State<BillingPage> {
     required bool taxIncluded,
   }) {
     if (!taxIncluded) return inputUnit;
-    return (inputUnit / (1 + taxRate / 100)).round();
+    return _billingTaxExcludedFromTaxIncludedGross(inputUnit, taxRate);
   }
 
   Future<void> _saveBillingPriceForLine(_BillingLine line) async {
@@ -4181,8 +4202,8 @@ class _BillingPageState extends State<BillingPage> {
       final subtotal = lines.fold<int>(0, (total, line) => total + line.amount);
       final subtotal10 = _subtotalForRate(lines, 10);
       final subtotal8 = _subtotalForRate(lines, 8);
-      final tax10 = _taxFor(subtotal10, 10);
-      final tax8 = _taxFor(subtotal8, 8);
+      final tax10 = _taxForLines(lines, 10);
+      final tax8 = _taxForLines(lines, 8);
       final repaymentAddition = result.repaymentEnabled
           ? repaymentMonthlyAmount
           : 0;
@@ -4646,8 +4667,8 @@ class _BillingPageState extends State<BillingPage> {
       final subtotal = lines.fold<int>(0, (total, line) => total + line.amount);
       final subtotal10 = _subtotalForRate(lines, 10);
       final subtotal8 = _subtotalForRate(lines, 8);
-      final tax10 = _taxFor(subtotal10, 10);
-      final tax8 = _taxFor(subtotal8, 8);
+      final tax10 = _taxForLines(lines, 10);
+      final tax8 = _taxForLines(lines, 8);
       final repaymentAddition = result.repaymentEnabled
           ? repaymentMonthlyAmount
           : 0;
@@ -5065,7 +5086,7 @@ class _BillingLine {
     if (!taxIncluded) return qty * unitPrice;
     if (listPrice <= 0 || qty <= 0) return qty * unitPrice;
     final grossTotal = listPrice * qty;
-    return (grossTotal / (1 + taxRate / 100)).round();
+    return _billingTaxExcludedFromTaxIncludedGross(grossTotal, taxRate);
   }
 
   _BillingLine copyWith({
