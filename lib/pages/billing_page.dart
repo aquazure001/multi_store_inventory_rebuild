@@ -125,26 +125,19 @@ class _BillingPageState extends State<BillingPage> {
         ...hiddenStoreIds,
         ...pendingAckStoreIds,
       };
-      final excludedIdsForQuery = excludedStoreIds.length <= 10
-          ? excludedStoreIds.toList()
-          : null;
-
-      var invoicesQuery = AppSession.billingInvoices
+      // whereNotIn + orderBy(createdAt) は複合インデックスが必要になり、
+      // 端末によって請求・受領管理ページがエラー停止するため使わない。
+      // 一覧は新しい順で軽めに取得し、非開示/確認待ち店舗は取得後に除外する。
+      final invoicesQuery = AppSession.billingInvoices
           .orderBy('createdAt', descending: true)
-          .limit(30);
-      if (excludedIdsForQuery != null && excludedIdsForQuery.isNotEmpty) {
-        invoicesQuery = AppSession.billingInvoices
-            .where('storeId', whereNotIn: excludedIdsForQuery)
-            .orderBy('createdAt', descending: true)
-            .limit(30);
-      }
+          .limit(20);
 
       final loadResults = await Future.wait([
         invoicesQuery.get(),
         AppSession.doc('billing_prices').get(),
         AppSession.orderBatches
             .orderBy('createdAt', descending: true)
-            .limit(60)
+            .limit(40)
             .get(),
         AppSession.doc('stores').get(),
       ]);
