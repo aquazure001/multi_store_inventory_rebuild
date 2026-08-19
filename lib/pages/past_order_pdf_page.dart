@@ -263,13 +263,10 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     }
 
     if (raw.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('この発注表には保存済みPDFがありません'),
-          backgroundColor: Colors.orange,
-        ),
-      );
+      // 2026年7月9日・7月13日など、PDF保存機能を入れる前の旧データは
+      // 発注明細だけが残っていてPDF本体が無い。
+      // その場合は明細から店舗別PDFを再作成して開く。Firestoreへは書き込まない。
+      await _exportPdfByStore(batch);
       return;
     }
 
@@ -688,13 +685,17 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
               style: const TextStyle(color: Colors.black54),
             ),
             const SizedBox(height: 12),
-            if (hasSavedPdf) ...[
+            if (hasSavedPdf || items.isNotEmpty) ...[
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
                   onPressed: canceled ? null : () => _openSavedPdf(batch),
                   icon: const Icon(Icons.picture_as_pdf, size: 18),
-                  label: Text('保存PDFを開く（$pdfKindLabel）'),
+                  label: Text(
+                    hasSavedPdf
+                        ? '保存PDFを開く（$pdfKindLabel）'
+                        : 'PDFを再作成して開く（店舗別）',
+                  ),
                 ),
               ),
               if (_hasEmbeddedPdf(data)) ...[
