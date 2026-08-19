@@ -167,14 +167,12 @@ class _BillingPageState extends State<BillingPage> {
       final batchSnap = loadResults[2] as QuerySnapshot<Map<String, dynamic>>;
       final storesDoc =
           loadResults[3] as DocumentSnapshot<Map<String, dynamic>>;
-      // 統括管理者からもこの画面では非開示店舗・確認待ち店舗を一切見せない
-      // (店舗選択・請求書/受領書一覧・未請求ラインの全てから除外する)。
+      // 宛先設定・任意作成・編集の店舗候補は店舗マスタ全件から出す。
+      // 請求明細・発行済み一覧の表示だけは下の処理で非開示/確認待ち店舗を除外する。
       final allParsedStores = _parseStores(
         storesDoc.data() ?? <String, dynamic>{},
       );
-      final orgStores = allParsedStores
-          .where((s) => !excludedStoreIds.contains(s.id))
-          .toList();
+      final orgStores = allParsedStores.toList();
       final pendingAckStores = allParsedStores
           .where((s) => pendingAckStoreIds.contains(s.id))
           .toList();
@@ -342,13 +340,7 @@ class _BillingPageState extends State<BillingPage> {
           ..addAll(billingPrices);
         _storeRecipients
           ..clear()
-          ..addAll(
-            Map.fromEntries(
-              storeRecipients.entries.where(
-                (e) => !excludedStoreIds.contains(e.key),
-              ),
-            ),
-          );
+          ..addAll(storeRecipients);
         _repaymentEnabled = repaymentEnabled;
         _orgStores = orgStores;
         _hiddenStoreIds = hiddenStoreIds;
@@ -483,7 +475,9 @@ class _BillingPageState extends State<BillingPage> {
   }
 
   Map<String, String> _storesForMonth(DateTime month) {
-    final map = <String, String>{};
+    final map = <String, String>{
+      for (final store in _orgStores) store.id: store.name,
+    };
     for (final line in _lines) {
       if (!_isSameMonth(line.orderDate, month)) continue;
       if (line.storeId.isNotEmpty && line.storeName.isNotEmpty) {
@@ -496,7 +490,9 @@ class _BillingPageState extends State<BillingPage> {
   }
 
   Map<String, String> _allBillingStores() {
-    final map = <String, String>{};
+    final map = <String, String>{
+      for (final store in _orgStores) store.id: store.name,
+    };
     for (final line in _lines) {
       if (line.storeId.isNotEmpty && line.storeName.isNotEmpty) {
         map[line.storeId] = line.storeName;
