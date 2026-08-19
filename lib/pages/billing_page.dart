@@ -648,7 +648,7 @@ class _BillingPageState extends State<BillingPage> {
     var taxExcludedSubtotal = 0;
     var taxIncludedGrossTotal = 0;
     for (final line in lines.where((line) => line.taxRate == taxRate)) {
-      if (line.taxIncluded && line.listPrice > 0) {
+      if (line.taxIncluded && line.listPrice != 0 && line.qty != 0) {
         taxIncludedGrossTotal += line.listPrice * line.qty;
       } else {
         taxExcludedSubtotal += line.qty * line.unitPrice;
@@ -667,7 +667,9 @@ class _BillingPageState extends State<BillingPage> {
     return lines
         .where(
           (line) =>
-              line.taxRate == taxRate && line.taxIncluded && line.listPrice > 0,
+              line.taxRate == taxRate &&
+              line.taxIncluded &&
+              line.listPrice != 0,
         )
         .fold<int>(0, (total, line) => total + line.listPrice * line.qty);
   }
@@ -680,7 +682,7 @@ class _BillingPageState extends State<BillingPage> {
           .where(
             (line) =>
                 line.taxRate == taxRate &&
-                (!line.taxIncluded || line.listPrice <= 0),
+                (!line.taxIncluded || line.listPrice == 0),
           )
           .fold<int>(0, (total, line) => total + line.qty * line.unitPrice);
       final grossTax = _billingTaxFromTaxIncludedGross(includedGross, taxRate);
@@ -2909,7 +2911,7 @@ class _BillingPageState extends State<BillingPage> {
       if (name.isEmpty) continue;
       final qty = inventoryIntValue(row.qty.text);
       final inputUnit = inventoryIntValue(row.unitPrice.text);
-      if (qty <= 0 || inputUnit <= 0) continue;
+      if (qty == 0 || inputUnit == 0) continue;
       final taxRate = row.taxRate == 8 ? 8 : 10;
       final unitPrice = _taxExcludedUnitFromInput(
         inputUnit: inputUnit,
@@ -2941,7 +2943,7 @@ class _BillingPageState extends State<BillingPage> {
   int _manualPreviewAmount(_ManualBillingLineControllers row) {
     final qty = inventoryIntValue(row.qty.text);
     final inputUnit = inventoryIntValue(row.unitPrice.text);
-    if (qty <= 0 || inputUnit <= 0) return 0;
+    if (qty == 0 || inputUnit == 0) return 0;
     final taxRate = row.taxRate == 8 ? 8 : 10;
     return _taxExcludedAmountFromInput(
       inputUnit: inputUnit,
@@ -2991,7 +2993,7 @@ class _BillingPageState extends State<BillingPage> {
       if (name.isEmpty) continue;
       final qty = inventoryIntValue(row.qty.text);
       final inputUnit = inventoryIntValue(row.unitPrice.text);
-      if (qty <= 0 || inputUnit <= 0) continue;
+      if (qty == 0 || inputUnit == 0) continue;
       final taxRate = row.taxRate == 8 ? 8 : 10;
       final unitPrice = _taxExcludedUnitFromInput(
         inputUnit: inputUnit,
@@ -3603,12 +3605,12 @@ class _BillingPageState extends State<BillingPage> {
       final name = row.name.text.trim();
       final qty = inventoryIntValue(row.qty.text);
       final unitPrice = inventoryIntValue(row.unitPrice.text);
-      if (name.isEmpty && unitPrice <= 0) continue;
+      if (name.isEmpty && unitPrice == 0) continue;
       result.add({
         'type': row.type.text.trim().isEmpty ? '任意' : row.type.text.trim(),
         'code': row.code.text.trim(),
         'name': name,
-        'qty': qty <= 0 ? 1 : qty,
+        'qty': qty == 0 ? 1 : qty,
         'unitPrice': unitPrice,
         'taxRate': row.taxRate == 8 ? 8 : 10,
         'taxIncluded': row.taxIncluded,
@@ -3639,8 +3641,9 @@ class _BillingPageState extends State<BillingPage> {
       rows[i].type.text = (map['type'] ?? '任意').toString();
       rows[i].code.text = (map['code'] ?? '').toString();
       rows[i].name.text = (map['name'] ?? '').toString();
-      rows[i].qty.text = '${max(1, inventoryIntValue(map['qty']))}';
-      rows[i].unitPrice.text = inventoryIntValue(map['unitPrice']) <= 0
+      rows[i].qty.text =
+          '${inventoryIntValue(map['qty']) == 0 ? 1 : inventoryIntValue(map['qty'])}';
+      rows[i].unitPrice.text = inventoryIntValue(map['unitPrice']) == 0
           ? ''
           : '${inventoryIntValue(map['unitPrice'])}';
       rows[i].taxRate = inventoryIntValue(map['taxRate']) == 8 ? 8 : 10;
@@ -4126,7 +4129,7 @@ class _BillingPageState extends State<BillingPage> {
       if (name.isEmpty) continue;
       final qty = inventoryIntValue(row.qty.text);
       final inputUnit = inventoryIntValue(row.unitPrice.text);
-      if (qty <= 0 || inputUnit <= 0) continue;
+      if (qty == 0 || inputUnit == 0) continue;
       final taxRate = row.taxRate == 8 ? 8 : 10;
       final unitPrice = _taxExcludedUnitFromInput(
         inputUnit: inputUnit,
@@ -5080,7 +5083,7 @@ class _BillingLine {
 
   int get amount {
     if (!taxIncluded) return qty * unitPrice;
-    if (listPrice <= 0 || qty <= 0) return qty * unitPrice;
+    if (listPrice == 0 || qty == 0) return qty * unitPrice;
     final grossTotal = listPrice * qty;
     return _billingTaxExcludedFromTaxIncludedGross(grossTotal, taxRate);
   }
@@ -5144,8 +5147,9 @@ class _BillingLine {
       final price = inventoryIntValue(map['unitPrice']);
       final qty = inventoryIntValue(map['qty']);
       final taxIncluded = map['taxIncluded'] == true;
-      final listPrice = inventoryIntValue(map['listPrice']) > 0
-          ? inventoryIntValue(map['listPrice'])
+      final savedListPrice = inventoryIntValue(map['listPrice']);
+      final listPrice = savedListPrice != 0
+          ? savedListPrice
           : inventoryIntValue(map['inputUnitPrice']);
       return _BillingLine(
         key: (map['lineKey'] ?? '').toString(),
