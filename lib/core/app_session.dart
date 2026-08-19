@@ -39,6 +39,12 @@ class AppSession {
     return storeIds;
   }
 
+  // 在庫数・発注リスト・特別発注・納品処理用。
+  // billing_visibility は請求・受領・領収書だけを隠す設定なので、
+  // 通常業務画面ではこの判定だけを使い、請求非開示の店舗も表示する。
+  static List<String> operationalStoreIds(List<String> allStoreIds) =>
+      viewableStoreIds(allStoreIds);
+
   static DocumentReference<Map<String, dynamic>> doc(String suffix) =>
       FirebaseFirestore.instance
           .collection('inventory_shared_v1')

@@ -71,7 +71,7 @@ class _StoreListPageState extends State<StoreListPage> {
         );
       }).toList();
       final allStoreIds = allStores.map((s) => s.id).toList();
-      final viewableIds = AppSession.viewableStoreIds(allStoreIds).toSet();
+      final viewableIds = AppSession.operationalStoreIds(allStoreIds).toSet();
       final visibleStores = allStores
           .where((s) => viewableIds.contains(s.id))
           .toList();

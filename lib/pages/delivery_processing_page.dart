@@ -15,6 +15,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
   bool _loading = true;
   String? _error;
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _batches = [];
+  List<LegacyStore> _stores = [];
   final Set<String> _localDeliveredKeys = <String>{};
   final Set<String> _selectedDeliveryKeys = <String>{};
   final Map<String, Map<String, dynamic>> _externalDeliveredMaps =
@@ -30,9 +31,12 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
 
   int _toInt(dynamic value) => inventoryIntValue(value);
 
-  // フィルタ前の、発注データから導出した全店舗（storeId → storeName）。
+  // 店舗マスタを優先し、発注データだけに出てくる旧店舗名も補完する。
+  // billing_visibility は請求情報だけの非開示設定なので、納品処理では使わない。
   Map<String, String> _rawDeliveryStores() {
-    final stores = <String, String>{};
+    final stores = <String, String>{
+      for (final store in _stores) store.id: store.name,
+    };
     for (final batch in _batches) {
       final rawItems = batch.data()['items'];
       if (rawItems is! List) continue;
@@ -53,7 +57,9 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
   // 閲覧が許可されている店舗のみに絞り込んだ店舗一覧。
   Map<String, String> _deliveryStores() {
     final all = _rawDeliveryStores();
-    final viewableIds = AppSession.viewableStoreIds(all.keys.toList()).toSet();
+    final viewableIds = AppSession.operationalStoreIds(
+      all.keys.toList(),
+    ).toSet();
     final filtered = Map<String, String>.fromEntries(
       all.entries.where((e) => viewableIds.contains(e.key)),
     );
@@ -120,10 +126,22 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
       _error = null;
     });
     try {
-      final snap = await AppSession.orderBatches
-          .orderBy('createdAt', descending: true)
-          .limit(20)
-          .get();
+      final results = await Future.wait([
+        AppSession.orderBatches
+            .orderBy('createdAt', descending: true)
+            .limit(20)
+            .get(),
+        _loadMasterData(),
+      ]);
+      final snap = results[0] as QuerySnapshot<Map<String, dynamic>>;
+      final masterData = results[1] as _MasterDataSnapshot;
+      final allStoreIds = masterData.stores.map((store) => store.id).toList();
+      final viewableStoreIds = AppSession.operationalStoreIds(
+        allStoreIds,
+      ).toSet();
+      final viewableStores = masterData.stores
+          .where((store) => viewableStoreIds.contains(store.id))
+          .toList();
 
       final visibleBatches = snap.docs
           .where((doc) => (doc.data()['status'] ?? '').toString() != 'canceled')
@@ -154,6 +172,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
 
       setState(() {
         _batches = visibleBatches;
+        _stores = viewableStores;
         _externalDeliveredMaps
           ..clear()
           ..addAll(externalDeliveredMaps);

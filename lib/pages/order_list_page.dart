@@ -85,7 +85,7 @@ class _OrderListPageState extends State<OrderListPage> {
 
       final allStores = master.stores;
       final allStoreIds = allStores.map((s) => s.id).toList();
-      final viewableIds = AppSession.viewableStoreIds(allStoreIds).toSet();
+      final viewableIds = AppSession.operationalStoreIds(allStoreIds).toSet();
       final stores = allStores
           .where((s) => viewableIds.contains(s.id))
           .toList();
