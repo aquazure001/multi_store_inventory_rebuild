@@ -40,6 +40,8 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   final Map<String, TextEditingController>
   _homeCareCustomerOrderQtyControllers = {};
   final Map<String, TextEditingController> _homeCareRemainingControllers = {};
+  final Map<String, TextEditingController> _homeCareCurrentStockControllers =
+      {};
   final Map<String, TextEditingController> _homeCareDeliveredControllers = {};
   final Map<String, TextEditingController> _newProductCustomerControllers = {};
   final Map<String, TextEditingController> _newProductCustomerNameControllers =
@@ -48,6 +50,8 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   final Map<String, TextEditingController>
   _newProductCustomerOrderQtyControllers = {};
   final Map<String, TextEditingController> _newProductRemainingControllers = {};
+  final Map<String, TextEditingController> _newProductCurrentStockControllers =
+      {};
   final Map<String, TextEditingController> _newProductDeliveredControllers = {};
 
   static const _kTypes = ['特別発注', '新規発注', 'その他'];
@@ -57,6 +61,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     super.initState();
     _load();
   }
+
+  bool get _canManageSpecialStock =>
+      AppSession.isAdmin || AppSession.isSuperAdmin;
 
   @override
   void dispose() {
@@ -78,6 +85,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     for (final c in _homeCareRemainingControllers.values) {
       c.dispose();
     }
+    for (final c in _homeCareCurrentStockControllers.values) {
+      c.dispose();
+    }
     for (final c in _homeCareDeliveredControllers.values) {
       c.dispose();
     }
@@ -94,6 +104,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       c.dispose();
     }
     for (final c in _newProductRemainingControllers.values) {
+      c.dispose();
+    }
+    for (final c in _newProductCurrentStockControllers.values) {
       c.dispose();
     }
     for (final c in _newProductDeliveredControllers.values) {
@@ -373,6 +386,14 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     );
   }
 
+  TextEditingController _homeCareCurrentStockCtrl(SpecialOrderItem item) {
+    final lot = _homeCareLotFor(item);
+    return _homeCareCurrentStockControllers.putIfAbsent(
+      lot.key,
+      () => TextEditingController(text: '${_homeCareCurrentStockForLot(lot)}'),
+    );
+  }
+
   TextEditingController _homeCareDeliveredCtrl(SpecialOrderItem item) {
     final lot = _homeCareLotFor(item);
     return _homeCareDeliveredControllers.putIfAbsent(
@@ -478,6 +499,14 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     return _newProductRemainingControllers.putIfAbsent(
       lot.key,
       () => TextEditingController(text: '${lot.remaining}'),
+    );
+  }
+
+  TextEditingController _newProductCurrentStockCtrl(SpecialOrderItem item) {
+    final lot = _newProductLotFor(item);
+    return _newProductCurrentStockControllers.putIfAbsent(
+      lot.key,
+      () => TextEditingController(text: '${lot.currentStock}'),
     );
   }
 
@@ -920,6 +949,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     _HomeCareCustomerOrderEntry entry,
     bool reserved,
   ) async {
+    if (!_canManageSpecialStock) return;
     if (entry.reserved == reserved) return;
     final updated = entry.copyWith(reserved: reserved);
     try {
@@ -1439,6 +1469,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     _NewProductCustomerOrderEntry entry,
     bool reserved,
   ) async {
+    if (!_canManageSpecialStock) return;
     if (entry.reserved == reserved) return;
     final updated = entry.copyWith(reserved: reserved);
     try {
@@ -1700,7 +1731,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   }
 
   Future<void> _saveNewProductRemaining(SpecialOrderItem item) async {
-    if (!AppSession.isSuperAdmin) return;
+    if (!_canManageSpecialStock) return;
     final lot = _newProductLotFor(item);
     final newValue = int.tryParse(_newProductRemainingCtrl(item).text.trim());
     if (newValue == null || newValue < 0) {
@@ -1749,7 +1780,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   }
 
   Future<void> _saveHomeCareRemaining(SpecialOrderItem item) async {
-    if (!AppSession.isSuperAdmin) return;
+    if (!_canManageSpecialStock) return;
     final lot = _homeCareLotFor(item);
     final newValue = int.tryParse(_homeCareRemainingCtrl(item).text.trim());
     if (newValue == null || newValue < 0) {
@@ -1797,8 +1828,110 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     }
   }
 
+  Future<void> _saveHomeCareCurrentStock(SpecialOrderItem item) async {
+    if (!_canManageSpecialStock) return;
+    final lot = _homeCareLotFor(item);
+    final newValue = int.tryParse(_homeCareCurrentStockCtrl(item).text.trim());
+    if (newValue == null || newValue < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('正しい在庫数を入力してください'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    try {
+      await AppSession.doc('special_orders').set({
+        'homeCareLots': {
+          lot.key: {
+            'code': item.code,
+            'name': item.name,
+            'lotSize': lot.lotSize <= 0 ? 1 : lot.lotSize,
+            'currentStock': newValue,
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        },
+      }, SetOptions(merge: true));
+      setState(() {
+        _homeCareLots[lot.key] = lot.copyWith(
+          code: item.code,
+          name: item.name,
+          currentStock: newValue,
+        );
+        _homeCareCurrentStockCtrl(item).text = '$newValue';
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('在庫数を変更しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('変更失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _saveNewProductCurrentStock(SpecialOrderItem item) async {
+    if (!_canManageSpecialStock) return;
+    final lot = _newProductLotFor(item);
+    final newValue = int.tryParse(
+      _newProductCurrentStockCtrl(item).text.trim(),
+    );
+    if (newValue == null || newValue < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('正しい在庫数を入力してください'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    try {
+      await AppSession.doc('special_orders').set({
+        'newProductLots': {
+          lot.key: {
+            'code': item.code,
+            'name': item.name,
+            'lotSize': lot.lotSize <= 0 ? 1 : lot.lotSize,
+            'currentStock': newValue,
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        },
+      }, SetOptions(merge: true));
+      setState(() {
+        _newProductLots[lot.key] = lot.copyWith(
+          code: item.code,
+          name: item.name,
+          currentStock: newValue,
+        );
+        _newProductCurrentStockCtrl(item).text = '$newValue';
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('在庫数を変更しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('変更失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
   Future<void> _saveHomeCareDeliveredCount(SpecialOrderItem item) async {
-    if (!AppSession.isSuperAdmin && !AppSession.isAdmin) return;
+    if (!_canManageSpecialStock) return;
     final lot = _homeCareLotFor(item);
     final delivered = int.tryParse(_homeCareDeliveredCtrl(item).text.trim());
     if (delivered == null || delivered < 0) {
@@ -1900,7 +2033,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   }
 
   Future<void> _saveNewProductDeliveredCount(SpecialOrderItem item) async {
-    if (!AppSession.isSuperAdmin && !AppSession.isAdmin) return;
+    if (!_canManageSpecialStock) return;
     final lot = _newProductLotFor(item);
     final delivered = int.tryParse(_newProductDeliveredCtrl(item).text.trim());
     if (delivered == null || delivered < 0) {
@@ -3083,8 +3216,12 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 children: [
                   Checkbox(
                     value: entry.reserved,
-                    onChanged: (value) =>
-                        _toggleHomeCareCustomerReserved(entry, value == true),
+                    onChanged: _canManageSpecialStock
+                        ? (value) => _toggleHomeCareCustomerReserved(
+                            entry,
+                            value == true,
+                          )
+                        : null,
                   ),
                   const Text('取置き済み'),
                 ],
@@ -3206,8 +3343,10 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     required int currentStock,
     required String reservedStoreBreakdown,
     required TextEditingController remainingCtrl,
+    required TextEditingController currentStockCtrl,
     required TextEditingController deliveredCtrl,
     required VoidCallback onSaveRemaining,
+    required VoidCallback onSaveCurrentStock,
     required VoidCallback onSaveDelivered,
   }) {
     Widget statChip(String label, Color color) => Container(
@@ -3281,7 +3420,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
               ),
             ),
           ],
-          if (AppSession.isSuperAdmin || AppSession.isAdmin) ...[
+          if (_canManageSpecialStock) ...[
             const SizedBox(height: 10),
             Wrap(
               spacing: 8,
@@ -3303,6 +3442,22 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 ElevatedButton(
                   onPressed: onSaveRemaining,
                   child: const Text('予定数保存'),
+                ),
+                SizedBox(
+                  width: 132,
+                  child: TextField(
+                    controller: currentStockCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: '現在在庫',
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+                ElevatedButton(
+                  onPressed: onSaveCurrentStock,
+                  child: const Text('在庫保存'),
                 ),
                 SizedBox(
                   width: 150,
@@ -3330,7 +3485,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
             ),
             const SizedBox(height: 4),
             Text(
-              '※納品済み数は納品予定数を超えて反映できません。反映すると納品予定数から差し引かれます。',
+              '※在庫数・納品予定数・納品済み反映・取置き済みは管理者/統括管理者のみ変更できます。',
               style: TextStyle(fontSize: 11, color: Colors.blueGrey.shade700),
             ),
           ],
@@ -3358,8 +3513,10 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       currentStock: lot.currentStock,
       reservedStoreBreakdown: _reservedStoreBreakdownForNewProductLot(lot.key),
       remainingCtrl: _newProductRemainingCtrl(item),
+      currentStockCtrl: _newProductCurrentStockCtrl(item),
       deliveredCtrl: _newProductDeliveredCtrl(item),
       onSaveRemaining: () => _saveNewProductRemaining(item),
+      onSaveCurrentStock: () => _saveNewProductCurrentStock(item),
       onSaveDelivered: () => _saveNewProductDeliveredCount(item),
     );
   }
@@ -3542,8 +3699,12 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 children: [
                   Checkbox(
                     value: entry.reserved,
-                    onChanged: (value) =>
-                        _toggleNewProductCustomerReserved(entry, value == true),
+                    onChanged: _canManageSpecialStock
+                        ? (value) => _toggleNewProductCustomerReserved(
+                            entry,
+                            value == true,
+                          )
+                        : null,
                   ),
                   const Text('取置き済み'),
                 ],
@@ -3608,8 +3769,10 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       currentStock: _homeCareCurrentStockForLot(lot),
       reservedStoreBreakdown: _reservedStoreBreakdownForHomeCareLot(lot.key),
       remainingCtrl: _homeCareRemainingCtrl(item),
+      currentStockCtrl: _homeCareCurrentStockCtrl(item),
       deliveredCtrl: _homeCareDeliveredCtrl(item),
       onSaveRemaining: () => _saveHomeCareRemaining(item),
+      onSaveCurrentStock: () => _saveHomeCareCurrentStock(item),
       onSaveDelivered: () => _saveHomeCareDeliveredCount(item),
     );
   }
