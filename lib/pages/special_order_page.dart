@@ -285,6 +285,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           name: item.name,
           lotSize: 1,
           remaining: 0,
+          currentStock: 0,
         );
   }
 
@@ -436,6 +437,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           name: item.name,
           lotSize: 1,
           remaining: 0,
+          currentStock: 0,
         );
   }
 
@@ -825,10 +827,11 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   ) async {
     if (entry.delivered == delivered) return;
     final lot = _homeCareLotFor(item);
-    if (delivered && entry.qty > lot.remaining) {
+    final currentStock = _homeCareCurrentStockForLot(lot);
+    if (delivered && entry.qty > currentStock) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('在庫が不足しています（在庫 ${lot.remaining} 個）'),
+          content: Text('在庫が不足しています（現在在庫 $currentStock 個）'),
           backgroundColor: Colors.orange,
         ),
       );
@@ -872,7 +875,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
               _homeCareLotCtrl(item),
               lot.lotSize <= 0 ? 1 : lot.lotSize,
             ),
-            'remaining': FieldValue.increment(stockDelta),
+            'currentStock': max(0, currentStock + stockDelta),
             'updatedAt': FieldValue.serverTimestamp(),
           },
         },
@@ -892,7 +895,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         _homeCareLots[lot.key] = lot.copyWith(
           code: item.code,
           name: item.name,
-          remaining: max(0, lot.remaining + stockDelta),
+          currentStock: max(0, currentStock + stockDelta),
         );
         _homeCareCustomerOrders[entry.id] = updated;
         _handoverLogs.add(
@@ -1100,7 +1103,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
               _homeCareLotCtrl(item),
               lot.lotSize <= 0 ? 1 : lot.lotSize,
             ),
-            'remaining': FieldValue.increment(stockDelta),
+            'currentStock': max(0, lot.currentStock + stockDelta),
             'updatedAt': FieldValue.serverTimestamp(),
           },
         };
@@ -1365,10 +1368,10 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   ) async {
     if (entry.delivered == delivered) return;
     final lot = _newProductLotFor(item);
-    if (delivered && entry.qty > lot.remaining) {
+    if (delivered && entry.qty > lot.currentStock) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('納品予定数が不足しています（残 ${lot.remaining} 個）'),
+          content: Text('在庫が不足しています（現在在庫 ${lot.currentStock} 個）'),
           backgroundColor: Colors.orange,
         ),
       );
@@ -1419,7 +1422,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         _newProductLots[lot.key] = lot.copyWith(
           code: item.code,
           name: item.name,
-          remaining: max(0, lot.remaining + stockDelta),
+          currentStock: max(0, lot.currentStock + stockDelta),
         );
         _newProductCustomerOrders[entry.id] = updated;
       });
@@ -1835,7 +1838,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       ),
     );
     if (confirmed != true) return;
+    final currentStock = _homeCareCurrentStockForLot(lot);
     final nextRemaining = max(0, lot.remaining - delivered);
+    final nextCurrentStock = currentStock + delivered;
     try {
       await AppSession.doc('special_orders').set({
         'homeCareLots': {
@@ -1844,6 +1849,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
             'name': item.name,
             'lotSize': lot.lotSize <= 0 ? 1 : lot.lotSize,
             'remaining': FieldValue.increment(-delivered),
+            'currentStock': nextCurrentStock,
             'updatedAt': FieldValue.serverTimestamp(),
           },
         },
@@ -1863,6 +1869,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           code: item.code,
           name: item.name,
           remaining: nextRemaining,
+          currentStock: nextCurrentStock,
         );
         _homeCareRemainingCtrl(item).text = '$nextRemaining';
         _homeCareDeliveredCtrl(item).text = '0';
@@ -1934,6 +1941,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     );
     if (confirmed != true) return;
     final nextRemaining = max(0, lot.remaining - delivered);
+    final nextCurrentStock = lot.currentStock + delivered;
     try {
       await AppSession.doc('special_orders').set({
         'newProductLots': {
@@ -1942,6 +1950,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
             'name': item.name,
             'lotSize': lot.lotSize <= 0 ? 1 : lot.lotSize,
             'remaining': FieldValue.increment(-delivered),
+            'currentStock': nextCurrentStock,
             'updatedAt': FieldValue.serverTimestamp(),
           },
         },
@@ -1951,6 +1960,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           code: item.code,
           name: item.name,
           remaining: nextRemaining,
+          currentStock: nextCurrentStock,
         );
         _newProductRemainingCtrl(item).text = '$nextRemaining';
         _newProductDeliveredCtrl(item).text = '0';
@@ -3116,6 +3126,70 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     );
   }
 
+  int _homeCareManualDeliveredTotalForLot(String lotKey) {
+    return _handoverLogs
+        .where(
+          (entry) => entry.key == lotKey && entry.customerCode == '納品済み手動反映',
+        )
+        .fold(0, (total, entry) => total + entry.qty);
+  }
+
+  int _homeCareCurrentStockForLot(_HomeCareLotStock lot) {
+    if (lot.currentStock > 0) return lot.currentStock;
+    final deliveredByCustomer = _homeCareCustomerOrdersForLot(lot.key)
+        .where((entry) => entry.delivered)
+        .fold(0, (total, entry) => total + entry.qty);
+    return max(
+      0,
+      _homeCareManualDeliveredTotalForLot(lot.key) - deliveredByCustomer,
+    );
+  }
+
+  int _reservedTotalForHomeCareLot(String lotKey) {
+    return _homeCareCustomerOrdersForLot(lotKey)
+        .where((entry) => entry.reserved && !entry.delivered)
+        .fold(0, (total, entry) => total + entry.qty);
+  }
+
+  String _reservedStoreBreakdownForHomeCareLot(String lotKey) {
+    final byStore = <String, int>{};
+    for (final entry in _homeCareCustomerOrdersForLot(lotKey)) {
+      if (!entry.reserved || entry.delivered) continue;
+      final storeName = entry.storeName.trim().isEmpty
+          ? '店舗未入力'
+          : entry.storeName.trim();
+      byStore[storeName] = (byStore[storeName] ?? 0) + entry.qty;
+    }
+    if (byStore.isEmpty) return '';
+    final keys = byStore.keys.toList()..sort(_naturalCompare);
+    return keys.map((key) => '$key ${byStore[key]}個').join(' / ');
+  }
+
+  int _reservedTotalForNewProductLot(String lotKey) {
+    return _newProductCustomerOrders.values
+        .where(
+          (entry) =>
+              entry.lotKey == lotKey && entry.reserved && !entry.delivered,
+        )
+        .fold(0, (total, entry) => total + entry.qty);
+  }
+
+  String _reservedStoreBreakdownForNewProductLot(String lotKey) {
+    final byStore = <String, int>{};
+    for (final entry in _newProductCustomerOrders.values) {
+      if (entry.lotKey != lotKey || !entry.reserved || entry.delivered) {
+        continue;
+      }
+      final storeName = entry.storeName.trim().isEmpty
+          ? '店舗未入力'
+          : entry.storeName.trim();
+      byStore[storeName] = (byStore[storeName] ?? 0) + entry.qty;
+    }
+    if (byStore.isEmpty) return '';
+    final keys = byStore.keys.toList()..sort(_naturalCompare);
+    return keys.map((key) => '$key ${byStore[key]}個').join(' / ');
+  }
+
   // ── 新商品タブ：集計表示ボックス（顧客コード欄なし） ─────────────
   // 「新商品」「ホームケアセット」共通の集計表示ボックス（青いボックス、
   // 顧客コード欄なし）。件数・合計・未引渡し・納品予定数を表示し、
@@ -3126,7 +3200,11 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     required int count,
     required int total,
     required int pendingTotal,
+    required int deliveredTotal,
+    required int reservedTotal,
     required int remaining,
+    required int currentStock,
+    required String reservedStoreBreakdown,
     required TextEditingController remainingCtrl,
     required TextEditingController deliveredCtrl,
     required VoidCallback onSaveRemaining,
@@ -3185,11 +3263,24 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
             runSpacing: 8,
             children: [
               statChip('件数 $count 件', Colors.blue.shade800),
-              statChip('合計 $total 個', Colors.blue.shade800),
-              statChip('未引渡し $pendingTotal 個', Colors.orange.shade800),
-              statChip('納品予定数 $remaining 個', Colors.green.shade800),
+              statChip('仮発注合計 $total 個', Colors.blue.shade800),
+              statChip('取置き中 $reservedTotal 個', Colors.purple.shade800),
+              statChip('引渡し済み $deliveredTotal 個', Colors.grey.shade800),
+              statChip('現在在庫 $currentStock 個', Colors.green.shade800),
+              statChip('納品予定 $remaining 個', Colors.orange.shade800),
             ],
           ),
+          if (reservedStoreBreakdown.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              '店舗別取置き: $reservedStoreBreakdown',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: Colors.purple.shade800,
+              ),
+            ),
+          ],
           if (AppSession.isSuperAdmin || AppSession.isAdmin) ...[
             const SizedBox(height: 10),
             Wrap(
@@ -3261,7 +3352,11 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       count: count,
       total: total,
       pendingTotal: pendingTotal,
+      deliveredTotal: deliveredTotal,
+      reservedTotal: _reservedTotalForNewProductLot(lot.key),
       remaining: lot.remaining,
+      currentStock: lot.currentStock,
+      reservedStoreBreakdown: _reservedStoreBreakdownForNewProductLot(lot.key),
       remainingCtrl: _newProductRemainingCtrl(item),
       deliveredCtrl: _newProductDeliveredCtrl(item),
       onSaveRemaining: () => _saveNewProductRemaining(item),
@@ -3507,7 +3602,11 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       count: count,
       total: total,
       pendingTotal: pendingTotal,
+      deliveredTotal: deliveredTotal,
+      reservedTotal: _reservedTotalForHomeCareLot(lot.key),
       remaining: lot.remaining,
+      currentStock: _homeCareCurrentStockForLot(lot),
+      reservedStoreBreakdown: _reservedStoreBreakdownForHomeCareLot(lot.key),
       remainingCtrl: _homeCareRemainingCtrl(item),
       deliveredCtrl: _homeCareDeliveredCtrl(item),
       onSaveRemaining: () => _saveHomeCareRemaining(item),
@@ -4027,6 +4126,7 @@ class _HomeCareLotStock {
     required this.name,
     required this.lotSize,
     required this.remaining,
+    required this.currentStock,
   });
 
   final String key;
@@ -4034,6 +4134,7 @@ class _HomeCareLotStock {
   final String name;
   final int lotSize;
   final int remaining;
+  final int currentStock;
 
   factory _HomeCareLotStock.fromMap(String key, Map<String, dynamic> map) {
     return _HomeCareLotStock(
@@ -4044,6 +4145,7 @@ class _HomeCareLotStock {
           ? 1
           : inventoryIntValue(map['lotSize']),
       remaining: max(0, inventoryIntValue(map['remaining'])),
+      currentStock: max(0, inventoryIntValue(map['currentStock'])),
     );
   }
 
@@ -4052,6 +4154,7 @@ class _HomeCareLotStock {
     String? name,
     int? lotSize,
     int? remaining,
+    int? currentStock,
   }) {
     return _HomeCareLotStock(
       key: key,
@@ -4059,6 +4162,7 @@ class _HomeCareLotStock {
       name: name ?? this.name,
       lotSize: lotSize ?? this.lotSize,
       remaining: remaining ?? this.remaining,
+      currentStock: currentStock ?? this.currentStock,
     );
   }
 }
@@ -4170,6 +4274,7 @@ class _NewProductLotStock {
     required this.name,
     required this.lotSize,
     required this.remaining,
+    required this.currentStock,
   });
 
   final String key;
@@ -4177,6 +4282,7 @@ class _NewProductLotStock {
   final String name;
   final int lotSize;
   final int remaining;
+  final int currentStock;
 
   factory _NewProductLotStock.fromMap(String key, Map<String, dynamic> map) {
     return _NewProductLotStock(
@@ -4187,6 +4293,7 @@ class _NewProductLotStock {
           ? 1
           : inventoryIntValue(map['lotSize']),
       remaining: max(0, inventoryIntValue(map['remaining'])),
+      currentStock: max(0, inventoryIntValue(map['currentStock'])),
     );
   }
 
@@ -4195,6 +4302,7 @@ class _NewProductLotStock {
     String? name,
     int? lotSize,
     int? remaining,
+    int? currentStock,
   }) {
     return _NewProductLotStock(
       key: key,
@@ -4202,6 +4310,7 @@ class _NewProductLotStock {
       name: name ?? this.name,
       lotSize: lotSize ?? this.lotSize,
       remaining: remaining ?? this.remaining,
+      currentStock: currentStock ?? this.currentStock,
     );
   }
 }
