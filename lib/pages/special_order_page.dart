@@ -40,6 +40,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   final Map<String, TextEditingController>
   _homeCareCustomerOrderQtyControllers = {};
   final Map<String, TextEditingController> _homeCareRemainingControllers = {};
+  final Map<String, TextEditingController> _homeCareDeliveredControllers = {};
   final Map<String, TextEditingController> _newProductCustomerControllers = {};
   final Map<String, TextEditingController> _newProductCustomerNameControllers =
       {};
@@ -47,6 +48,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   final Map<String, TextEditingController>
   _newProductCustomerOrderQtyControllers = {};
   final Map<String, TextEditingController> _newProductRemainingControllers = {};
+  final Map<String, TextEditingController> _newProductDeliveredControllers = {};
 
   static const _kTypes = ['特別発注', '新規発注', 'その他'];
 
@@ -76,6 +78,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     for (final c in _homeCareRemainingControllers.values) {
       c.dispose();
     }
+    for (final c in _homeCareDeliveredControllers.values) {
+      c.dispose();
+    }
     for (final c in _newProductCustomerControllers.values) {
       c.dispose();
     }
@@ -89,6 +94,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       c.dispose();
     }
     for (final c in _newProductRemainingControllers.values) {
+      c.dispose();
+    }
+    for (final c in _newProductDeliveredControllers.values) {
       c.dispose();
     }
     super.dispose();
@@ -364,6 +372,14 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     );
   }
 
+  TextEditingController _homeCareDeliveredCtrl(SpecialOrderItem item) {
+    final lot = _homeCareLotFor(item);
+    return _homeCareDeliveredControllers.putIfAbsent(
+      lot.key,
+      () => TextEditingController(text: '0'),
+    );
+  }
+
   int _homeCareOrderedLotTotalForItem(SpecialOrderItem item) {
     return (_orders[item.id] ?? {}).values.fold(0, (a, b) => a + b);
   }
@@ -460,6 +476,14 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     return _newProductRemainingControllers.putIfAbsent(
       lot.key,
       () => TextEditingController(text: '${lot.remaining}'),
+    );
+  }
+
+  TextEditingController _newProductDeliveredCtrl(SpecialOrderItem item) {
+    final lot = _newProductLotFor(item);
+    return _newProductDeliveredControllers.putIfAbsent(
+      lot.key,
+      () => TextEditingController(text: '0'),
     );
   }
 
@@ -729,6 +753,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       storeName: storeName,
       qty: qty,
       delivered: false,
+      reserved: false,
       orderedAt: now,
       deliveredAt: null,
     );
@@ -883,6 +908,28 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('引渡し更新失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _toggleHomeCareCustomerReserved(
+    _HomeCareCustomerOrderEntry entry,
+    bool reserved,
+  ) async {
+    if (entry.reserved == reserved) return;
+    final updated = entry.copyWith(reserved: reserved);
+    try {
+      await AppSession.doc('special_orders').set({
+        'homeCareCustomerOrders': {entry.id: updated.toMap()},
+      }, SetOptions(merge: true));
+      setState(() {
+        _homeCareCustomerOrders[entry.id] = updated;
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('取置き更新失敗: $e'), backgroundColor: Colors.red),
         );
       }
     }
@@ -1249,6 +1296,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       storeName: storeName,
       qty: qty,
       delivered: false,
+      reserved: false,
       orderedAt: now,
       deliveredAt: null,
     );
@@ -1379,6 +1427,28 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('引渡し更新失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _toggleNewProductCustomerReserved(
+    _NewProductCustomerOrderEntry entry,
+    bool reserved,
+  ) async {
+    if (entry.reserved == reserved) return;
+    final updated = entry.copyWith(reserved: reserved);
+    try {
+      await AppSession.doc('special_orders').set({
+        'newProductCustomerOrders': {entry.id: updated.toMap()},
+      }, SetOptions(merge: true));
+      setState(() {
+        _newProductCustomerOrders[entry.id] = updated;
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('取置き更新失敗: $e'), backgroundColor: Colors.red),
         );
       }
     }
@@ -1719,6 +1789,184 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('変更失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _saveHomeCareDeliveredCount(SpecialOrderItem item) async {
+    if (!AppSession.isSuperAdmin && !AppSession.isAdmin) return;
+    final lot = _homeCareLotFor(item);
+    final delivered = int.tryParse(_homeCareDeliveredCtrl(item).text.trim());
+    if (delivered == null || delivered < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('正しい納品済み数を入力してください'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    if (delivered == 0) return;
+    if (delivered > lot.remaining) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('納品予定数を超えています（納品予定 ${lot.remaining} 個）'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('納品済み数を反映'),
+        content: Text('${lot.name}\n$delivered 個を納品済みにして、納品予定数から差し引きます。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('反映する'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final nextRemaining = max(0, lot.remaining - delivered);
+    try {
+      await AppSession.doc('special_orders').set({
+        'homeCareLots': {
+          lot.key: {
+            'code': item.code,
+            'name': item.name,
+            'lotSize': lot.lotSize <= 0 ? 1 : lot.lotSize,
+            'remaining': FieldValue.increment(-delivered),
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        },
+        'homeCareHandoverLogs': FieldValue.arrayUnion([
+          {
+            'key': lot.key,
+            'code': item.code,
+            'name': item.name,
+            'customerCode': '納品済み手動反映',
+            'qty': delivered,
+            'at': Timestamp.now(),
+          },
+        ]),
+      }, SetOptions(merge: true));
+      setState(() {
+        _homeCareLots[lot.key] = lot.copyWith(
+          code: item.code,
+          name: item.name,
+          remaining: nextRemaining,
+        );
+        _homeCareRemainingCtrl(item).text = '$nextRemaining';
+        _homeCareDeliveredCtrl(item).text = '0';
+        _handoverLogs.add(
+          _HandoverLogEntry(
+            key: lot.key,
+            customerCode: '納品済み手動反映',
+            qty: delivered,
+            at: DateTime.now(),
+          ),
+        );
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('納品済み数を反映しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('反映失敗: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _saveNewProductDeliveredCount(SpecialOrderItem item) async {
+    if (!AppSession.isSuperAdmin && !AppSession.isAdmin) return;
+    final lot = _newProductLotFor(item);
+    final delivered = int.tryParse(_newProductDeliveredCtrl(item).text.trim());
+    if (delivered == null || delivered < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('正しい納品済み数を入力してください'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    if (delivered == 0) return;
+    if (delivered > lot.remaining) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('納品予定数を超えています（納品予定 ${lot.remaining} 個）'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('納品済み数を反映'),
+        content: Text('${lot.name}\n$delivered 個を納品済みにして、納品予定数から差し引きます。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('反映する'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final nextRemaining = max(0, lot.remaining - delivered);
+    try {
+      await AppSession.doc('special_orders').set({
+        'newProductLots': {
+          lot.key: {
+            'code': item.code,
+            'name': item.name,
+            'lotSize': lot.lotSize <= 0 ? 1 : lot.lotSize,
+            'remaining': FieldValue.increment(-delivered),
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        },
+      }, SetOptions(merge: true));
+      setState(() {
+        _newProductLots[lot.key] = lot.copyWith(
+          code: item.code,
+          name: item.name,
+          remaining: nextRemaining,
+        );
+        _newProductRemainingCtrl(item).text = '$nextRemaining';
+        _newProductDeliveredCtrl(item).text = '0';
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('納品済み数を反映しました'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('反映失敗: $e'), backgroundColor: Colors.red),
         );
       }
     }
@@ -2824,6 +3072,17 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Checkbox(
+                    value: entry.reserved,
+                    onChanged: (value) =>
+                        _toggleHomeCareCustomerReserved(entry, value == true),
+                  ),
+                  const Text('取置き済み'),
+                ],
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Checkbox(
                     value: entry.delivered,
                     onChanged: (value) => _toggleHomeCareCustomerDelivered(
                       item,
@@ -2869,7 +3128,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     required int pendingTotal,
     required int remaining,
     required TextEditingController remainingCtrl,
+    required TextEditingController deliveredCtrl,
     required VoidCallback onSaveRemaining,
+    required VoidCallback onSaveDelivered,
   }) {
     Widget statChip(String label, Color color) => Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -2929,12 +3190,15 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
               statChip('納品予定数 $remaining 個', Colors.green.shade800),
             ],
           ),
-          if (AppSession.isSuperAdmin) ...[
+          if (AppSession.isSuperAdmin || AppSession.isAdmin) ...[
             const SizedBox(height: 10),
-            Row(
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 SizedBox(
-                  width: 120,
+                  width: 132,
                   child: TextField(
                     controller: remainingCtrl,
                     keyboardType: TextInputType.number,
@@ -2945,16 +3209,37 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
                 ElevatedButton(
                   onPressed: onSaveRemaining,
-                  child: const Text('保存'),
+                  child: const Text('予定数保存'),
+                ),
+                SizedBox(
+                  width: 150,
+                  child: TextField(
+                    controller: deliveredCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: '納品済みにする数',
+                      suffixText: '個',
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+                ElevatedButton.icon(
+                  onPressed: onSaveDelivered,
+                  icon: const Icon(Icons.check_circle_outline),
+                  label: const Text('納品済み反映'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue,
+                    foregroundColor: Colors.white,
+                  ),
                 ),
               ],
             ),
             const SizedBox(height: 4),
             Text(
-              '※統括管理者のみ編集できます。顧客別仮発注を引渡し済みにすると自動で減算されます。',
+              '※納品済み数は納品予定数を超えて反映できません。反映すると納品予定数から差し引かれます。',
               style: TextStyle(fontSize: 11, color: Colors.blueGrey.shade700),
             ),
           ],
@@ -2978,7 +3263,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       pendingTotal: pendingTotal,
       remaining: lot.remaining,
       remainingCtrl: _newProductRemainingCtrl(item),
+      deliveredCtrl: _newProductDeliveredCtrl(item),
       onSaveRemaining: () => _saveNewProductRemaining(item),
+      onSaveDelivered: () => _saveNewProductDeliveredCount(item),
     );
   }
 
@@ -3159,6 +3446,17 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Checkbox(
+                    value: entry.reserved,
+                    onChanged: (value) =>
+                        _toggleNewProductCustomerReserved(entry, value == true),
+                  ),
+                  const Text('取置き済み'),
+                ],
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Checkbox(
                     value: entry.delivered,
                     onChanged: (value) => _toggleNewProductCustomerDelivered(
                       item,
@@ -3211,7 +3509,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       pendingTotal: pendingTotal,
       remaining: lot.remaining,
       remainingCtrl: _homeCareRemainingCtrl(item),
+      deliveredCtrl: _homeCareDeliveredCtrl(item),
       onSaveRemaining: () => _saveHomeCareRemaining(item),
+      onSaveDelivered: () => _saveHomeCareDeliveredCount(item),
     );
   }
 
@@ -3775,6 +4075,7 @@ class _HomeCareCustomerOrderEntry {
     required this.storeName,
     required this.qty,
     required this.delivered,
+    required this.reserved,
     required this.orderedAt,
     required this.deliveredAt,
   });
@@ -3789,6 +4090,7 @@ class _HomeCareCustomerOrderEntry {
   final String storeName;
   final int qty;
   final bool delivered;
+  final bool reserved;
   final DateTime orderedAt;
   final DateTime? deliveredAt;
 
@@ -3807,6 +4109,7 @@ class _HomeCareCustomerOrderEntry {
       storeName: (map['storeName'] ?? '').toString(),
       qty: max(0, inventoryIntValue(map['qty'])),
       delivered: map['delivered'] == true,
+      reserved: map['reserved'] == true,
       orderedAt: _readLogTimestamp(map['orderedAt'] ?? map['at']),
       deliveredAt: map['deliveredAt'] == null
           ? null
@@ -3825,6 +4128,7 @@ class _HomeCareCustomerOrderEntry {
     'storeName': storeName,
     'qty': qty,
     'delivered': delivered,
+    'reserved': reserved,
     'orderedAt': Timestamp.fromDate(orderedAt),
     if (deliveredAt != null) 'deliveredAt': Timestamp.fromDate(deliveredAt!),
   };
@@ -3835,6 +4139,7 @@ class _HomeCareCustomerOrderEntry {
     String? storeName,
     int? qty,
     bool? delivered,
+    bool? reserved,
     DateTime? orderedAt,
     DateTime? deliveredAt,
   }) {
@@ -3849,6 +4154,7 @@ class _HomeCareCustomerOrderEntry {
       storeName: storeName ?? this.storeName,
       qty: qty ?? this.qty,
       delivered: delivered ?? this.delivered,
+      reserved: reserved ?? this.reserved,
       orderedAt: orderedAt ?? this.orderedAt,
       deliveredAt: deliveredAt,
     );
@@ -3913,6 +4219,7 @@ class _NewProductCustomerOrderEntry {
     required this.storeName,
     required this.qty,
     required this.delivered,
+    required this.reserved,
     required this.orderedAt,
     required this.deliveredAt,
   });
@@ -3927,6 +4234,7 @@ class _NewProductCustomerOrderEntry {
   final String storeName;
   final int qty;
   final bool delivered;
+  final bool reserved;
   final DateTime orderedAt;
   final DateTime? deliveredAt;
 
@@ -3945,6 +4253,7 @@ class _NewProductCustomerOrderEntry {
       storeName: (map['storeName'] ?? '').toString(),
       qty: max(0, inventoryIntValue(map['qty'])),
       delivered: map['delivered'] == true,
+      reserved: map['reserved'] == true,
       orderedAt: _readLogTimestamp(map['orderedAt']),
       deliveredAt: map['deliveredAt'] == null
           ? null
@@ -3963,6 +4272,7 @@ class _NewProductCustomerOrderEntry {
     'storeName': storeName,
     'qty': qty,
     'delivered': delivered,
+    'reserved': reserved,
     'orderedAt': Timestamp.fromDate(orderedAt),
     if (deliveredAt != null) 'deliveredAt': Timestamp.fromDate(deliveredAt!),
   };
@@ -3973,6 +4283,7 @@ class _NewProductCustomerOrderEntry {
     String? storeName,
     int? qty,
     bool? delivered,
+    bool? reserved,
     DateTime? orderedAt,
     DateTime? deliveredAt,
   }) {
@@ -3987,6 +4298,7 @@ class _NewProductCustomerOrderEntry {
       storeName: storeName ?? this.storeName,
       qty: qty ?? this.qty,
       delivered: delivered ?? this.delivered,
+      reserved: reserved ?? this.reserved,
       orderedAt: orderedAt ?? this.orderedAt,
       deliveredAt: deliveredAt ?? this.deliveredAt,
     );
