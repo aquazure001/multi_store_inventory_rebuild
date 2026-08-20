@@ -1013,7 +1013,7 @@ class _BillingPageState extends State<BillingPage> {
         'pdfFileName':
             '請求書_${_monthKey(_selectedMonth)}_${storeName}_$invoiceNo.pdf',
       });
-      await Printing.sharePdf(
+      await _openBillingPdfBytes(
         bytes: pdfBytes,
         filename:
             '請求書_${_monthKey(_selectedMonth)}_${storeName}_$invoiceNo.pdf',
@@ -1240,7 +1240,7 @@ class _BillingPageState extends State<BillingPage> {
         'receiptId': receiptRef.id,
         'hasSavedPdf': true,
       });
-      await Printing.sharePdf(
+      await _openBillingPdfBytes(
         bytes: pdfBytes,
         filename:
             '領収書_${_monthKey(_selectedMonth)}_${storeName}_$receiptNo.pdf',
@@ -1323,6 +1323,30 @@ class _BillingPageState extends State<BillingPage> {
     };
   }
 
+  Future<void> _openBillingPdfBytes({
+    required List<int> bytes,
+    required String filename,
+  }) async {
+    final safeFileName = filename.trim().isEmpty
+        ? 'document.pdf'
+        : filename.trim();
+    final blob = html.Blob([bytes], 'application/pdf');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    try {
+      final anchor = html.AnchorElement(href: url)
+        ..target = '_blank'
+        ..rel = 'noopener'
+        ..download = safeFileName
+        ..style.display = 'none';
+      html.document.body?.append(anchor);
+      anchor.click();
+      anchor.remove();
+      await Future<void>.delayed(const Duration(seconds: 8));
+    } finally {
+      html.Url.revokeObjectUrl(url);
+    }
+  }
+
   Future<void> _openInvoicePdf(_BillingInvoiceSummary invoice) async {
     await _openSavedBillingPdf(
       collection: AppSession.billingInvoicePdfs,
@@ -1361,7 +1385,7 @@ class _BillingPageState extends State<BillingPage> {
         return;
       }
       final fileName = (data['pdfFileName'] ?? '').toString();
-      await Printing.sharePdf(
+      await _openBillingPdfBytes(
         bytes: base64Decode(raw),
         filename: fileName.isEmpty ? fallbackFileName : fileName,
       );
@@ -1478,7 +1502,7 @@ class _BillingPageState extends State<BillingPage> {
         'receiptCreatedAt': FieldValue.serverTimestamp(),
         'receiptCreatedAtLocal': issuedAt.toIso8601String(),
       });
-      await Printing.sharePdf(
+      await _openBillingPdfBytes(
         bytes: pdfBytes,
         filename: '受領書_${invoice.invoiceNo}.pdf',
       );
@@ -3433,7 +3457,7 @@ class _BillingPageState extends State<BillingPage> {
         'pdfBase64': base64Encode(pdfBytes),
         'pdfFileName': '請求書_${invoice.invoiceNo}_編集済.pdf',
       }, SetOptions(merge: true));
-      await Printing.sharePdf(
+      await _openBillingPdfBytes(
         bytes: pdfBytes,
         filename: '請求書_${invoice.invoiceNo}_編集済.pdf',
       );
@@ -3569,7 +3593,7 @@ class _BillingPageState extends State<BillingPage> {
             .doc(invoice.id)
             .set(updateData, SetOptions(merge: true));
       }
-      await Printing.sharePdf(
+      await _openBillingPdfBytes(
         bytes: pdfBytes,
         filename: '${label}_${invoice.invoiceNo}_編集済.pdf',
       );
@@ -4250,7 +4274,7 @@ class _BillingPageState extends State<BillingPage> {
         'pdfBase64': base64Encode(pdfBytes),
         'pdfFileName': '任意請求書_${storeName}_$invoiceNo.pdf',
       });
-      await Printing.sharePdf(
+      await _openBillingPdfBytes(
         bytes: pdfBytes,
         filename: '任意請求書_${storeName}_$invoiceNo.pdf',
       );
@@ -4751,7 +4775,7 @@ class _BillingPageState extends State<BillingPage> {
         'receiptId': receiptRef.id,
         'hasSavedPdf': true,
       });
-      await Printing.sharePdf(
+      await _openBillingPdfBytes(
         bytes: pdfBytes,
         filename: '${docLabel}_${storeName}_$receiptNo.pdf',
       );
