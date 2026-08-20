@@ -1562,6 +1562,10 @@ class _BillingPageState extends State<BillingPage> {
     final total = subtotal + tax10 + tax8 + repaymentAddition;
     final title = isInvoice ? 'ご請求書' : docNoun;
     final mascot = isInvoice ? assets.mascotInvoice : assets.mascotReceipt;
+    final effectivePaymentDueText =
+        (paymentDueTextOverride ?? '').trim().isNotEmpty
+        ? (paymentDueTextOverride ?? '').trim()
+        : (billingMonth != null ? _paymentDueTextForMonth(billingMonth) : '-');
 
     pdf.addPage(
       pw.Page(
@@ -1712,12 +1716,7 @@ class _BillingPageState extends State<BillingPage> {
                       pw.Expanded(
                         child: _billingDateBox(
                           isInvoice ? 'お支払期限' : '$actionNoun日',
-                          isInvoice
-                              ? (paymentDueTextOverride ??
-                                    (billingMonth != null
-                                        ? _paymentDueTextForMonth(billingMonth)
-                                        : '-'))
-                              : _dateText(date),
+                          isInvoice ? effectivePaymentDueText : _dateText(date),
                           assets.boldFont,
                         ),
                       ),
@@ -3416,6 +3415,10 @@ class _BillingPageState extends State<BillingPage> {
         _billingMonthFromData(data, invoice),
         input.dueText,
       );
+      final dueText = _dateText(dueDate);
+      final editedAt = DateTime.now();
+      final editedPdfFileName =
+          '請求書_${invoice.invoiceNo}_編集済_${editedAt.millisecondsSinceEpoch}.pdf';
       final recipient = input.recipient;
       final assets = await _loadPdfAssets();
       final pdfBytes = await _buildBillingPdf(
@@ -3427,7 +3430,7 @@ class _BillingPageState extends State<BillingPage> {
         storeName: invoice.storeName,
         billingTypeText: invoice.billingItemTypesText,
         recipient: recipient,
-        paymentDueTextOverride: _dateText(dueDate),
+        paymentDueTextOverride: dueText,
         repaymentEnabled: invoice.repaymentEnabled,
         repaymentCurrent: invoice.repaymentCurrent,
         repaymentTotal: invoice.repaymentTotal,
@@ -3446,11 +3449,11 @@ class _BillingPageState extends State<BillingPage> {
         'tax8': totals['tax8'],
         'total': totals['total'],
         'paymentDueDateLocal': dueDate.toIso8601String(),
-        'paymentDueText': _dateText(dueDate),
+        'paymentDueText': dueText,
         'recipient': recipient.toMap(),
         'pdfDateLocal': issuedAt.toIso8601String(),
         'editedAt': FieldValue.serverTimestamp(),
-        'editedAtLocal': DateTime.now().toIso8601String(),
+        'editedAtLocal': editedAt.toIso8601String(),
         'editedBy': AppSession.nickname,
       }, SetOptions(merge: true));
       await AppSession.billingInvoicePdfs.doc(invoice.id).set({
@@ -3461,17 +3464,14 @@ class _BillingPageState extends State<BillingPage> {
         'storeName': invoice.storeName,
         'recipient': recipient.toMap(),
         'paymentDueDateLocal': dueDate.toIso8601String(),
-        'paymentDueText': _dateText(dueDate),
+        'paymentDueText': dueText,
         'updatedAt': FieldValue.serverTimestamp(),
-        'updatedAtLocal': DateTime.now().toIso8601String(),
+        'updatedAtLocal': editedAt.toIso8601String(),
         'updatedBy': AppSession.nickname,
         'pdfBase64': base64Encode(pdfBytes),
-        'pdfFileName': '請求書_${invoice.invoiceNo}_編集済.pdf',
+        'pdfFileName': editedPdfFileName,
       }, SetOptions(merge: true));
-      await _openBillingPdfBytes(
-        bytes: pdfBytes,
-        filename: '請求書_${invoice.invoiceNo}_編集済.pdf',
-      );
+      await _openBillingPdfBytes(bytes: pdfBytes, filename: editedPdfFileName);
       await _load();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
