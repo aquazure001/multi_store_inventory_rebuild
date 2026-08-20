@@ -2885,7 +2885,12 @@ class _BillingPageState extends State<BillingPage> {
   DateTime? _parseOptionalDateInput(String raw) {
     final text = raw.trim();
     if (text.isEmpty) return null;
-    final normalized = text.replaceAll('/', '-').replaceAll('.', '-');
+    final normalized = text
+        .replaceAll('/', '-')
+        .replaceAll('.', '-')
+        .replaceAll('年', '-')
+        .replaceAll('月', '-')
+        .replaceAll('日', '');
     final strict = DateTime.tryParse(normalized);
     if (strict != null) return strict;
 
@@ -3373,8 +3378,12 @@ class _BillingPageState extends State<BillingPage> {
         'pdfDateLocal',
         invoice.createdAt,
       );
-      final currentDue = (data['paymentDueText'] ?? invoice.paymentDueText)
-          .toString();
+      final currentDueDate = _dateFromLocalField(
+        data,
+        'paymentDueDateLocal',
+        _manualDueDate(_billingMonthFromData(data, invoice), ''),
+      );
+      final currentDue = _dateInputText(currentDueDate);
       if (mounted) setState(() => _saving = false);
       final input = await _showEditBillingDialog(
         title: '請求書を編集: ${invoice.invoiceNo}',
@@ -3451,6 +3460,8 @@ class _BillingPageState extends State<BillingPage> {
         'storeId': invoice.storeId,
         'storeName': invoice.storeName,
         'recipient': recipient.toMap(),
+        'paymentDueDateLocal': dueDate.toIso8601String(),
+        'paymentDueText': _dateText(dueDate),
         'updatedAt': FieldValue.serverTimestamp(),
         'updatedAtLocal': DateTime.now().toIso8601String(),
         'updatedBy': AppSession.nickname,
