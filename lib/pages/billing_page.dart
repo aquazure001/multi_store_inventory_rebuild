@@ -53,6 +53,7 @@ class _BillingPageState extends State<BillingPage> {
   final List<_BillingInvoiceSummary> _invoices = [];
   final Set<String> _billedKeys = <String>{};
   final Set<String> _issuedMonthStoreKeys = <String>{};
+  final Set<String> _selectedBillingLineKeys = <String>{};
   final Map<String, _BillingPrice> _billingPrices = {};
   final Map<String, Map<String, int>> _storePurchaseRates = {};
   final Map<String, _BillingRecipient> _storeRecipients = {};
@@ -372,6 +373,16 @@ class _BillingPageState extends State<BillingPage> {
         _lines
           ..clear()
           ..addAll(lines);
+        final selectableLineKeys = lines
+            .where((line) => !line.billed)
+            .map((line) => line.key)
+            .toSet();
+        _selectedBillingLineKeys.removeWhere(
+          (key) => !selectableLineKeys.contains(key),
+        );
+        if (_selectedBillingLineKeys.isEmpty) {
+          _selectedBillingLineKeys.addAll(selectableLineKeys);
+        }
         if (_selectedStoreId.isEmpty) {
           final stores = _storesForMonth(_selectedMonth);
           if (stores.isNotEmpty) _selectedStoreId = stores.keys.first;
@@ -859,13 +870,17 @@ class _BillingPageState extends State<BillingPage> {
     return selected.isEmpty ? '未選択' : selected.join('・');
   }
 
-  List<_BillingLine> get _invoiceTargetLines => _lines.where((line) {
+  List<_BillingLine> get _invoiceCandidateLines => _lines.where((line) {
     if (line.billed) return false;
     if (line.storeId != _selectedStoreId) return false;
     if (!_inSelectedMonth(line)) return false;
     if (!_isSelectedBillingType(line)) return false;
     return true;
   }).toList();
+
+  List<_BillingLine> get _invoiceTargetLines => _invoiceCandidateLines
+      .where((line) => _selectedBillingLineKeys.contains(line.key))
+      .toList();
 
   bool _isSelectedBillingType(_BillingLine line) {
     final normalized = inventoryTypeLabelFromKey(
@@ -2720,6 +2735,42 @@ class _BillingPageState extends State<BillingPage> {
               ),
             ),
             const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _invoiceCandidateLines.isEmpty
+                        ? null
+                        : () {
+                            setState(() {
+                              _selectedBillingLineKeys.addAll(
+                                _invoiceCandidateLines.map((line) => line.key),
+                              );
+                            });
+                          },
+                    icon: const Icon(Icons.check_box),
+                    label: const Text('表示分を全選択'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _invoiceCandidateLines.isEmpty
+                        ? null
+                        : () {
+                            setState(() {
+                              _selectedBillingLineKeys.removeAll(
+                                _invoiceCandidateLines.map((line) => line.key),
+                              );
+                            });
+                          },
+                    icon: const Icon(Icons.check_box_outline_blank),
+                    label: const Text('表示分を全解除'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(10),
@@ -2729,7 +2780,9 @@ class _BillingPageState extends State<BillingPage> {
               ),
               child: Text(
                 '対象: ${_selectedStoreName().isEmpty ? '店舗未選択' : _selectedStoreName()} / ${_periodText(_selectedMonth)}\n'
-                '締切: ${_paymentDueTextForMonth(_selectedMonth)} / 未請求 ${_invoiceTargetLines.length}件 / 合計 ￥${_yen(_targetTotal)}\n税10% ￥${_yen(_targetTax10)} / 軽減8% ￥${_yen(_targetTax8)}',
+                '選択 ${_invoiceTargetLines.length}件 / 表示 ${_invoiceCandidateLines.length}件 / 合計 ￥${_yen(_targetTotal)}\n'
+                '税10% ￥${_yen(_targetTax10)} / 軽減8% ￥${_yen(_targetTax8)}\n'
+                '締切: ${_paymentDueTextForMonth(_selectedMonth)}',
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
             ),
@@ -2767,7 +2820,23 @@ class _BillingPageState extends State<BillingPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (!line.billed)
+                  Checkbox(
+                    value: _selectedBillingLineKeys.contains(line.key),
+                    onChanged: _alreadyIssuedForSelectedMonthStore
+                        ? null
+                        : (checked) {
+                            setState(() {
+                              if (checked == true) {
+                                _selectedBillingLineKeys.add(line.key);
+                              } else {
+                                _selectedBillingLineKeys.remove(line.key);
+                              }
+                            });
+                          },
+                  ),
                 Expanded(
                   child: Text(
                     line.itemName,
