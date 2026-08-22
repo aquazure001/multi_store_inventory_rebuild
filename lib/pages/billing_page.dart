@@ -380,9 +380,6 @@ class _BillingPageState extends State<BillingPage> {
         _selectedBillingLineKeys.removeWhere(
           (key) => !selectableLineKeys.contains(key),
         );
-        if (_selectedBillingLineKeys.isEmpty) {
-          _selectedBillingLineKeys.addAll(selectableLineKeys);
-        }
         if (_selectedStoreId.isEmpty) {
           final stores = _storesForMonth(_selectedMonth);
           if (stores.isNotEmpty) _selectedStoreId = stores.keys.first;
@@ -666,11 +663,30 @@ class _BillingPageState extends State<BillingPage> {
     return '${line.storeId}__${_priceKeyFor(line)}';
   }
 
+  int _billingInputInt(String raw) {
+    final buffer = StringBuffer();
+    const fullWidthDigits = '０１２３４５６７８９';
+    for (final codePoint in raw.runes) {
+      final char = String.fromCharCode(codePoint);
+      final fullWidthIndex = fullWidthDigits.indexOf(char);
+      if (fullWidthIndex >= 0) {
+        buffer.write(fullWidthIndex);
+      } else {
+        buffer.write(char);
+      }
+    }
+    final normalized = buffer
+        .toString()
+        .replaceAll(RegExp(r'[^0-9\-]'), '')
+        .trim();
+    return int.tryParse(normalized) ?? 0;
+  }
+
   int _purchaseRateFor(_BillingLine line) {
     final priceKey = _priceKeyFor(line);
     final raw = _purchaseRateControllers[_purchaseRateKeyFor(line)]?.text ?? '';
-    final input = int.tryParse(raw.replaceAll('%', '').trim());
-    if (input != null) return input;
+    final input = _billingInputInt(raw);
+    if (input > 0) return input;
     final storeRate = _storePurchaseRates[line.storeId]?[priceKey] ?? 0;
     if (storeRate > 0) return storeRate;
     return _billingPrices[priceKey]?.purchaseRate ?? 0;
@@ -857,8 +873,11 @@ class _BillingPageState extends State<BillingPage> {
   }
 
   int _priceFor(_BillingLine line) {
-    final raw = _priceControllers[_priceKeyFor(line)]?.text ?? '';
-    return int.tryParse(raw.replaceAll(',', '').trim()) ?? 0;
+    final key = _priceKeyFor(line);
+    final raw = _priceControllers[key]?.text ?? '';
+    final input = _billingInputInt(raw);
+    if (input > 0) return input;
+    return _billingPrices[key]?.unitPrice ?? 0;
   }
 
   List<String> get _billingTypeOrder => const ['商品', 'テスター', '備品'];
@@ -974,19 +993,20 @@ class _BillingPageState extends State<BillingPage> {
     final lines = _invoiceTargetLines;
     if (lines.isEmpty) {
       if (!mounted) return;
+      final message = _invoiceCandidateLines.isEmpty
+          ? 'この店舗・この月の未請求明細がありません'
+          : '請求する明細にチェックを入れてください';
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('この店舗・この月の未請求明細がありません'),
-          backgroundColor: Colors.orange,
-        ),
+        SnackBar(content: Text(message), backgroundColor: Colors.orange),
       );
       return;
     }
     final missingPrice = lines.where((line) => _priceFor(line) <= 0).toList();
     if (missingPrice.isNotEmpty) {
+      final first = missingPrice.first;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('対象明細すべての単価を入力してください'),
+        SnackBar(
+          content: Text('単価未入力: ${first.itemName}（コード:${first.itemCode}）'),
           backgroundColor: Colors.orange,
         ),
       );
@@ -1141,19 +1161,20 @@ class _BillingPageState extends State<BillingPage> {
     final lines = _invoiceTargetLines;
     if (lines.isEmpty) {
       if (!mounted) return;
+      final message = _invoiceCandidateLines.isEmpty
+          ? 'この店舗・この月の未請求明細がありません'
+          : '請求する明細にチェックを入れてください';
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('この店舗・この月の未請求明細がありません'),
-          backgroundColor: Colors.orange,
-        ),
+        SnackBar(content: Text(message), backgroundColor: Colors.orange),
       );
       return;
     }
     final missingPrice = lines.where((line) => _priceFor(line) <= 0).toList();
     if (missingPrice.isNotEmpty) {
+      final first = missingPrice.first;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('対象明細すべての単価を入力してください'),
+        SnackBar(
+          content: Text('単価未入力: ${first.itemName}（コード:${first.itemCode}）'),
           backgroundColor: Colors.orange,
         ),
       );
