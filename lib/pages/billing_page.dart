@@ -283,7 +283,10 @@ class _BillingPageState extends State<BillingPage> {
             storeId: (item['storeId'] ?? '').toString(),
             storeName: (item['storeName'] ?? '').toString(),
             itemType: inventoryTypeLabelFromKey(
-              (item['typeKey'] ?? item['itemType'] ?? '').toString(),
+              normalizeInventoryTypeKey(
+                typeKey: (item['typeKey'] ?? '').toString(),
+                itemType: (item['itemType'] ?? '').toString(),
+              ),
             ),
             itemCode: (item['itemCode'] ?? '').toString(),
             itemName: (item['itemName'] ?? '').toString(),
@@ -856,14 +859,25 @@ class _BillingPageState extends State<BillingPage> {
     return selected.isEmpty ? '未選択' : selected.join('・');
   }
 
-  List<_BillingLine> get _invoiceTargetLines => _visibleLines
-      .where((line) => !line.billed && line.storeId == _selectedStoreId)
-      .toList();
+  List<_BillingLine> get _invoiceTargetLines => _lines.where((line) {
+    if (line.billed) return false;
+    if (line.storeId != _selectedStoreId) return false;
+    if (!_inSelectedMonth(line)) return false;
+    if (!_isSelectedBillingType(line)) return false;
+    return true;
+  }).toList();
+
+  bool _isSelectedBillingType(_BillingLine line) {
+    final normalized = inventoryTypeLabelFromKey(
+      normalizeInventoryTypeKey(itemType: line.itemType),
+    );
+    return _selectedBillingTypes.contains(normalized);
+  }
 
   List<_BillingLine> get _visibleLines {
     return _lines.where((line) {
       if (!_showBilled && line.billed) return false;
-      if (!_selectedBillingTypes.contains(line.itemType)) return false;
+      if (!_isSelectedBillingType(line)) return false;
       if (!_inSelectedMonth(line)) return false;
       if (_selectedStoreId.isNotEmpty && line.storeId != _selectedStoreId) {
         return false;
@@ -5239,7 +5253,11 @@ class _BillingLine {
             DateTime.now(),
         storeId: (map['storeId'] ?? '').toString(),
         storeName: (map['storeName'] ?? '').toString(),
-        itemType: (map['itemType'] ?? '').toString(),
+        itemType: inventoryTypeLabelFromKey(
+          normalizeInventoryTypeKey(
+            itemType: (map['itemType'] ?? '').toString(),
+          ),
+        ),
         itemCode: (map['itemCode'] ?? '').toString(),
         itemName: (map['itemName'] ?? '').toString(),
         qty: qty,
