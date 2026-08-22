@@ -54,6 +54,7 @@ class _BillingPageState extends State<BillingPage> {
   final Set<String> _billedKeys = <String>{};
   final Set<String> _issuedMonthStoreKeys = <String>{};
   final Map<String, _BillingPrice> _billingPrices = {};
+  final Map<String, Map<String, int>> _storePurchaseRates = {};
   final Map<String, _BillingRecipient> _storeRecipients = {};
   final Map<String, TextEditingController> _priceControllers = {};
   final Map<String, TextEditingController> _purchaseRateControllers = {};
@@ -209,6 +210,18 @@ class _BillingPageState extends State<BillingPage> {
           billingPrices[entry.key.toString()] = _BillingPrice.fromMap(map);
         }
       }
+      final storePurchaseRates = <String, Map<String, int>>{};
+      final rawStorePurchaseRates = priceData['storePurchaseRates'];
+      if (rawStorePurchaseRates is Map) {
+        for (final storeEntry in rawStorePurchaseRates.entries) {
+          final value = storeEntry.value;
+          if (value is! Map) continue;
+          storePurchaseRates[storeEntry.key.toString()] = {
+            for (final rateEntry in value.entries)
+              rateEntry.key.toString(): inventoryIntValue(rateEntry.value),
+          };
+        }
+      }
       final storeRecipients = <String, _BillingRecipient>{};
       final rawRecipients = priceData['storeRecipients'];
       if (rawRecipients is Map) {
@@ -295,8 +308,10 @@ class _BillingPageState extends State<BillingPage> {
       for (final line in lines) {
         if (!_isSameMonth(line.orderDate, _selectedMonth)) continue;
         if (!_showBilled && line.billed) continue;
-        final master = billingPrices[_priceKeyFor(line)];
-        final priceController = _priceControllers.putIfAbsent(line.key, () {
+        final priceKey = _priceKeyFor(line);
+        final rateKey = _purchaseRateKeyFor(line);
+        final master = billingPrices[priceKey];
+        final priceController = _priceControllers.putIfAbsent(priceKey, () {
           final controller = TextEditingController();
           controller.addListener(() {
             if (mounted) setState(() {});
@@ -309,7 +324,7 @@ class _BillingPageState extends State<BillingPage> {
           priceController.text = master.unitPrice.toString();
         }
         final rateController = _purchaseRateControllers.putIfAbsent(
-          line.key,
+          rateKey,
           () {
             final controller = TextEditingController();
             controller.addListener(() {
@@ -318,10 +333,13 @@ class _BillingPageState extends State<BillingPage> {
             return controller;
           },
         );
+        final savedStoreRate = storePurchaseRates[line.storeId]?[priceKey] ?? 0;
+        final fallbackRate = savedStoreRate > 0
+            ? savedStoreRate
+            : (master?.purchaseRate ?? 0);
         if ((rateController.text.trim().isEmpty || line.billed) &&
-            master != null &&
-            master.purchaseRate > 0) {
-          rateController.text = master.purchaseRate.toString();
+            fallbackRate > 0) {
+          rateController.text = fallbackRate.toString();
         }
       }
 
@@ -338,6 +356,9 @@ class _BillingPageState extends State<BillingPage> {
         _billingPrices
           ..clear()
           ..addAll(billingPrices);
+        _storePurchaseRates
+          ..clear()
+          ..addAll(storePurchaseRates);
         _storeRecipients
           ..clear()
           ..addAll(storeRecipients);
@@ -627,10 +648,18 @@ class _BillingPageState extends State<BillingPage> {
     return '${line.itemType}__$codeOrName';
   }
 
+  String _purchaseRateKeyFor(_BillingLine line) {
+    return '${line.storeId}__${_priceKeyFor(line)}';
+  }
+
   int _purchaseRateFor(_BillingLine line) {
-    final raw = _purchaseRateControllers[line.key]?.text ?? '';
-    return int.tryParse(raw.replaceAll('%', '').trim()) ??
-        (_billingPrices[_priceKeyFor(line)]?.purchaseRate ?? 0);
+    final priceKey = _priceKeyFor(line);
+    final raw = _purchaseRateControllers[_purchaseRateKeyFor(line)]?.text ?? '';
+    final input = int.tryParse(raw.replaceAll('%', '').trim());
+    if (input != null) return input;
+    final storeRate = _storePurchaseRates[line.storeId]?[priceKey] ?? 0;
+    if (storeRate > 0) return storeRate;
+    return _billingPrices[priceKey]?.purchaseRate ?? 0;
   }
 
   int _billingUnitPriceFor(_BillingLine line) {
@@ -714,12 +743,13 @@ class _BillingPageState extends State<BillingPage> {
 
   Future<void> _saveBillingPriceForLine(_BillingLine line) async {
     final key = _priceKeyFor(line);
+    final storeRate = _purchaseRateFor(line);
     final entry = _BillingPrice(
       itemType: line.itemType,
       itemCode: line.itemCode,
       itemName: line.itemName,
       unitPrice: _priceFor(line),
-      purchaseRate: _purchaseRateFor(line),
+      purchaseRate: 0,
       taxRate: _taxRateFor(line),
     );
     if (entry.unitPrice <= 0) {
@@ -735,11 +765,18 @@ class _BillingPageState extends State<BillingPage> {
     try {
       await AppSession.doc('billing_prices').set({
         'entries': {key: entry.toMap()},
+        'storePurchaseRates': {
+          line.storeId: {key: storeRate},
+        },
         'updatedAt': FieldValue.serverTimestamp(),
         'updatedAtLocal': DateTime.now().toIso8601String(),
         'updatedBy': AppSession.nickname,
       }, SetOptions(merge: true));
-      setState(() => _billingPrices[key] = entry);
+      setState(() {
+        _billingPrices[key] = entry;
+        _storePurchaseRates.putIfAbsent(line.storeId, () => {})[key] =
+            storeRate;
+      });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -806,7 +843,7 @@ class _BillingPageState extends State<BillingPage> {
   }
 
   int _priceFor(_BillingLine line) {
-    final raw = _priceControllers[line.key]?.text ?? '';
+    final raw = _priceControllers[_priceKeyFor(line)]?.text ?? '';
     return int.tryParse(raw.replaceAll(',', '').trim()) ?? 0;
   }
 
@@ -2741,7 +2778,7 @@ class _BillingPageState extends State<BillingPage> {
                 SizedBox(
                   width: 120,
                   child: TextField(
-                    controller: _priceControllers[line.key],
+                    controller: _priceControllers[_priceKeyFor(line)],
                     enabled:
                         !line.billed && !_alreadyIssuedForSelectedMonthStore,
                     keyboardType: TextInputType.number,
@@ -2756,7 +2793,8 @@ class _BillingPageState extends State<BillingPage> {
                 SizedBox(
                   width: 100,
                   child: TextField(
-                    controller: _purchaseRateControllers[line.key],
+                    controller:
+                        _purchaseRateControllers[_purchaseRateKeyFor(line)],
                     enabled:
                         !line.billed && !_alreadyIssuedForSelectedMonthStore,
                     keyboardType: TextInputType.number,
@@ -2796,7 +2834,13 @@ class _BillingPageState extends State<BillingPage> {
                             _billingPrices[key] = current.copyWith(
                               taxRate: selected ? 8 : 10,
                               unitPrice: _priceFor(line),
-                              purchaseRate: _purchaseRateFor(line),
+                              purchaseRate: 0,
+                            );
+                            _storePurchaseRates.putIfAbsent(
+                              line.storeId,
+                              () => {},
+                            )[key] = _purchaseRateFor(
+                              line,
                             );
                           });
                         },
