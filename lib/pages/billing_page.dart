@@ -652,18 +652,52 @@ class _BillingPageState extends State<BillingPage> {
         .toList();
   }
 
+  String _normalizeBillingKeyPart(String value) {
+    final buffer = StringBuffer();
+    const fullWidthDigits = '０１２３４５６７８９';
+    const fullWidthUpper = 'ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ';
+    const fullWidthLower = 'ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ';
+    for (final codePoint in value.runes) {
+      final char = String.fromCharCode(codePoint);
+      final digitIndex = fullWidthDigits.indexOf(char);
+      if (digitIndex >= 0) {
+        buffer.write(digitIndex);
+        continue;
+      }
+      final upperIndex = fullWidthUpper.indexOf(char);
+      if (upperIndex >= 0) {
+        buffer.write(String.fromCharCode('A'.codeUnitAt(0) + upperIndex));
+        continue;
+      }
+      final lowerIndex = fullWidthLower.indexOf(char);
+      if (lowerIndex >= 0) {
+        buffer.write(String.fromCharCode('a'.codeUnitAt(0) + lowerIndex));
+        continue;
+      }
+      buffer.write(char);
+    }
+    return buffer
+        .toString()
+        .replaceAll(RegExp(r'\s+'), '')
+        .replaceAll('　', '')
+        .trim();
+  }
+
   String _priceKeyFor(_BillingLine line) {
+    final normalizedType = inventoryTypeLabelFromKey(
+      normalizeInventoryTypeKey(itemType: line.itemType),
+    );
     final codeOrName = line.itemCode.trim().isEmpty
         ? line.itemName.trim()
         : line.itemCode.trim();
-    return '${line.itemType}__$codeOrName';
+    return '${normalizedType}__${_normalizeBillingKeyPart(codeOrName)}';
   }
 
   String _purchaseRateKeyFor(_BillingLine line) {
     return '${line.storeId}__${_priceKeyFor(line)}';
   }
 
-  int _billingInputInt(String raw) {
+  String _normalizeBillingNumberText(String raw) {
     final buffer = StringBuffer();
     const fullWidthDigits = '０１２３４５６７８９';
     for (final codePoint in raw.runes) {
@@ -671,14 +705,26 @@ class _BillingPageState extends State<BillingPage> {
       final fullWidthIndex = fullWidthDigits.indexOf(char);
       if (fullWidthIndex >= 0) {
         buffer.write(fullWidthIndex);
-      } else {
+      } else if (char == 'ー' || char == '－' || char == '−' || char == '―') {
+        buffer.write('-');
+      } else if (RegExp(r'[0-9-]').hasMatch(char)) {
         buffer.write(char);
       }
     }
-    final normalized = buffer
-        .toString()
-        .replaceAll(RegExp(r'[^0-9\-]'), '')
-        .trim();
+    return buffer.toString();
+  }
+
+  void _normalizeBillingController(TextEditingController controller) {
+    final normalized = _normalizeBillingNumberText(controller.text);
+    if (controller.text == normalized) return;
+    controller.value = TextEditingValue(
+      text: normalized,
+      selection: TextSelection.collapsed(offset: normalized.length),
+    );
+  }
+
+  int _billingInputInt(String raw) {
+    final normalized = _normalizeBillingNumberText(raw);
     return int.tryParse(normalized) ?? 0;
   }
 
@@ -2886,6 +2932,9 @@ class _BillingPageState extends State<BillingPage> {
                     enabled:
                         !line.billed && !_alreadyIssuedForSelectedMonthStore,
                     keyboardType: TextInputType.number,
+                    onChanged: (_) => _normalizeBillingController(
+                      _priceControllers[_priceKeyFor(line)]!,
+                    ),
                     decoration: const InputDecoration(
                       border: OutlineInputBorder(),
                       labelText: '定価',
@@ -2902,6 +2951,9 @@ class _BillingPageState extends State<BillingPage> {
                     enabled:
                         !line.billed && !_alreadyIssuedForSelectedMonthStore,
                     keyboardType: TextInputType.number,
+                    onChanged: (_) => _normalizeBillingController(
+                      _purchaseRateControllers[_purchaseRateKeyFor(line)]!,
+                    ),
                     decoration: const InputDecoration(
                       border: OutlineInputBorder(),
                       labelText: '仕入率',
