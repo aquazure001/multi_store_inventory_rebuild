@@ -2878,11 +2878,40 @@ class _BillingPageState extends State<BillingPage> {
     );
   }
 
+  TextEditingController _billingControllerFor({
+    required Map<String, TextEditingController> controllers,
+    required String key,
+    required int initialValue,
+  }) {
+    return controllers.putIfAbsent(key, () {
+      final controller = TextEditingController(
+        text: initialValue > 0 ? initialValue.toString() : '',
+      );
+      controller.addListener(() {
+        if (mounted) setState(() {});
+      });
+      return controller;
+    });
+  }
+
   Widget _buildLineCard(_BillingLine line) {
     final priceKey = _priceKeyFor(line);
     final rateKey = _purchaseRateKeyFor(line);
-    final priceController = _priceControllers[priceKey];
-    final rateController = _purchaseRateControllers[rateKey];
+    final fallbackPrice = _billingPrices[priceKey]?.unitPrice ?? 0;
+    final fallbackRate =
+        _storePurchaseRates[line.storeId]?[priceKey] ??
+        _billingPrices[priceKey]?.purchaseRate ??
+        0;
+    final priceController = _billingControllerFor(
+      controllers: _priceControllers,
+      key: priceKey,
+      initialValue: fallbackPrice,
+    );
+    final rateController = _billingControllerFor(
+      controllers: _purchaseRateControllers,
+      key: rateKey,
+      initialValue: fallbackRate,
+    );
     return Card(
       color: line.billed ? Colors.grey.shade100 : null,
       child: Padding(
@@ -2967,11 +2996,8 @@ class _BillingPageState extends State<BillingPage> {
                   child: _BillingLiveAmountText(
                     priceController: priceController,
                     rateController: rateController,
-                    fallbackPrice: _billingPrices[priceKey]?.unitPrice ?? 0,
-                    fallbackRate:
-                        _storePurchaseRates[line.storeId]?[priceKey] ??
-                        _billingPrices[priceKey]?.purchaseRate ??
-                        0,
+                    fallbackPrice: fallbackPrice,
+                    fallbackRate: fallbackRate,
                     qty: line.qty,
                     parseInt: _billingInputInt,
                     yen: _yen,
