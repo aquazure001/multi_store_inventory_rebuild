@@ -716,11 +716,13 @@ class _BillingPageState extends State<BillingPage> {
 
   void _normalizeBillingController(TextEditingController controller) {
     final normalized = _normalizeBillingNumberText(controller.text);
-    if (controller.text == normalized) return;
-    controller.value = TextEditingValue(
-      text: normalized,
-      selection: TextSelection.collapsed(offset: normalized.length),
-    );
+    if (controller.text != normalized) {
+      controller.value = TextEditingValue(
+        text: normalized,
+        selection: TextSelection.collapsed(offset: normalized.length),
+      );
+    }
+    if (mounted) setState(() {});
   }
 
   int _billingInputInt(String raw) {
