@@ -2879,8 +2879,10 @@ class _BillingPageState extends State<BillingPage> {
   }
 
   Widget _buildLineCard(_BillingLine line) {
-    final billingUnitPrice = _billingUnitPriceFor(line);
-    final amount = line.qty * billingUnitPrice;
+    final priceKey = _priceKeyFor(line);
+    final rateKey = _purchaseRateKeyFor(line);
+    final priceController = _priceControllers[priceKey];
+    final rateController = _purchaseRateControllers[rateKey];
     return Card(
       color: line.billed ? Colors.grey.shade100 : null,
       child: Padding(
@@ -2930,13 +2932,12 @@ class _BillingPageState extends State<BillingPage> {
                 SizedBox(
                   width: 120,
                   child: TextField(
-                    controller: _priceControllers[_priceKeyFor(line)],
+                    controller: priceController,
                     enabled:
                         !line.billed && !_alreadyIssuedForSelectedMonthStore,
                     keyboardType: TextInputType.number,
-                    onChanged: (_) => _normalizeBillingController(
-                      _priceControllers[_priceKeyFor(line)]!,
-                    ),
+                    onChanged: (_) =>
+                        _normalizeBillingController(priceController!),
                     decoration: const InputDecoration(
                       border: OutlineInputBorder(),
                       labelText: '定価',
@@ -2948,14 +2949,12 @@ class _BillingPageState extends State<BillingPage> {
                 SizedBox(
                   width: 100,
                   child: TextField(
-                    controller:
-                        _purchaseRateControllers[_purchaseRateKeyFor(line)],
+                    controller: rateController,
                     enabled:
                         !line.billed && !_alreadyIssuedForSelectedMonthStore,
                     keyboardType: TextInputType.number,
-                    onChanged: (_) => _normalizeBillingController(
-                      _purchaseRateControllers[_purchaseRateKeyFor(line)]!,
-                    ),
+                    onChanged: (_) =>
+                        _normalizeBillingController(rateController!),
                     decoration: const InputDecoration(
                       border: OutlineInputBorder(),
                       labelText: '仕入率',
@@ -2965,12 +2964,17 @@ class _BillingPageState extends State<BillingPage> {
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(
-                    '請求単価 ￥${_yen(billingUnitPrice)} / 金額 ￥${_yen(amount)}',
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  child: _BillingLiveAmountText(
+                    priceController: priceController,
+                    rateController: rateController,
+                    fallbackPrice: _billingPrices[priceKey]?.unitPrice ?? 0,
+                    fallbackRate:
+                        _storePurchaseRates[line.storeId]?[priceKey] ??
+                        _billingPrices[priceKey]?.purchaseRate ??
+                        0,
+                    qty: line.qty,
+                    parseInt: _billingInputInt,
+                    yen: _yen,
                   ),
                 ),
               ],
@@ -5257,6 +5261,52 @@ class _BillingPageState extends State<BillingPage> {
                 ],
               ),
       ),
+    );
+  }
+}
+
+class _BillingLiveAmountText extends StatelessWidget {
+  const _BillingLiveAmountText({
+    required this.priceController,
+    required this.rateController,
+    required this.fallbackPrice,
+    required this.fallbackRate,
+    required this.qty,
+    required this.parseInt,
+    required this.yen,
+  });
+
+  final TextEditingController? priceController;
+  final TextEditingController? rateController;
+  final int fallbackPrice;
+  final int fallbackRate;
+  final int qty;
+  final int Function(String raw) parseInt;
+  final String Function(int value) yen;
+
+  @override
+  Widget build(BuildContext context) {
+    final listenables = <Listenable>[?priceController, ?rateController];
+    return AnimatedBuilder(
+      animation: Listenable.merge(listenables),
+      builder: (context, _) {
+        final rawPrice = priceController == null
+            ? 0
+            : parseInt(priceController!.text);
+        final rawRate = rateController == null
+            ? 0
+            : parseInt(rateController!.text);
+        final price = rawPrice > 0 ? rawPrice : fallbackPrice;
+        final rate = rawRate > 0 ? rawRate : fallbackRate;
+        final billingUnitPrice = rate > 0
+            ? (price * rate / 100).round()
+            : price;
+        final amount = billingUnitPrice * qty;
+        return Text(
+          '請求単価 ￥${yen(billingUnitPrice)} / 金額 ￥${yen(amount)}',
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        );
+      },
     );
   }
 }
