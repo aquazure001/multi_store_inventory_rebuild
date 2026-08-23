@@ -649,9 +649,10 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
 
   // 販売期間前でも、同じ商品コードの「直前のロット」の販売期間が
   // すでに終了していれば、前倒しで入力を開始できるようにする。
-  // （販売期間終了後の延長は行わない）
+  // また、締切後の顧客別仮発注は管理者・統括管理者だけ入力可能にする。
   bool _canAddOrderForItem(SpecialOrderItem item) {
     if (item.isInSalesPeriod) return true;
+    if (item.isExpired) return _canManageSpecialStock;
     if (!item.isBeforeSales) return false;
 
     final normalizedCode = _normalizeCode(item.code);
@@ -692,6 +693,12 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
   String _orderClosedMessage(SpecialOrderItem item) {
     if (_canAddOrderForItem(item)) return '';
     return item.isBeforeSales ? '販売期間前のため入力できません' : '販売期間終了のため新規入力できません';
+  }
+
+  bool _canModifyCustomerOrderForItem(SpecialOrderItem item) {
+    if (_canAddOrderForItem(item)) return true;
+    if (item.isExpired && _canManageSpecialStock) return true;
+    return false;
   }
 
   // ホームケア納品日の手動指定：入荷予定日が離れている特定2期間のみ、
@@ -3244,11 +3251,15 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   TextButton(
-                    onPressed: () => _editHomeCareCustomerOrder(item, entry),
+                    onPressed: _canModifyCustomerOrderForItem(item)
+                        ? () => _editHomeCareCustomerOrder(item, entry)
+                        : null,
                     child: const Text('編集'),
                   ),
                   TextButton(
-                    onPressed: () => _deleteHomeCareCustomerOrder(item, entry),
+                    onPressed: _canModifyCustomerOrderForItem(item)
+                        ? () => _deleteHomeCareCustomerOrder(item, entry)
+                        : null,
                     child: const Text(
                       '削除',
                       style: TextStyle(color: Colors.red),
@@ -3727,12 +3738,15 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   TextButton(
-                    onPressed: () => _editNewProductCustomerOrder(item, entry),
+                    onPressed: _canModifyCustomerOrderForItem(item)
+                        ? () => _editNewProductCustomerOrder(item, entry)
+                        : null,
                     child: const Text('編集'),
                   ),
                   TextButton(
-                    onPressed: () =>
-                        _deleteNewProductCustomerOrder(item, entry),
+                    onPressed: _canModifyCustomerOrderForItem(item)
+                        ? () => _deleteNewProductCustomerOrder(item, entry)
+                        : null,
                     child: const Text(
                       '削除',
                       style: TextStyle(color: Colors.red),
