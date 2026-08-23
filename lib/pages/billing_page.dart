@@ -1702,210 +1702,237 @@ class _BillingPageState extends State<BillingPage> {
         ? (paymentDueTextOverride ?? '').trim()
         : (billingMonth != null ? _paymentDueTextForMonth(billingMonth) : '-');
 
-    pdf.addPage(
-      pw.Page(
-        pageFormat: PdfPageFormat.a4,
-        margin: pw.EdgeInsets.zero,
-        theme: pw.ThemeData.withFont(base: assets.font, bold: assets.boldFont),
-        build: (_) => pw.Stack(
-          children: [
-            _billingPdfBackground(assets.logo, mascot),
-            pw.Positioned(
-              left: 58,
-              right: 58,
-              top: 66,
-              bottom: 62,
-              child: pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-                children: [
-                  pw.Row(
-                    crossAxisAlignment: pw.CrossAxisAlignment.start,
-                    children: [
-                      pw.Container(
-                        width: 250,
-                        child: pw.Column(
-                          crossAxisAlignment: pw.CrossAxisAlignment.start,
-                          children: [
-                            pw.Text(
-                              title,
-                              style: pw.TextStyle(
-                                font: assets.boldFont,
-                                fontSize: 32,
-                                color: PdfColor.fromHex('#2D2522'),
-                              ),
-                            ),
-                            if (isInvoice)
+    final lineChunks = <List<_BillingLine>>[];
+    if (lines.isEmpty) {
+      lineChunks.add(const <_BillingLine>[]);
+    } else {
+      for (var i = 0; i < lines.length; i += 9) {
+        final end = i + 9 > lines.length ? lines.length : i + 9;
+        lineChunks.add(lines.sublist(i, end));
+      }
+    }
+
+    for (var pageIndex = 0; pageIndex < lineChunks.length; pageIndex++) {
+      final pageLines = lineChunks[pageIndex];
+      final pageText = lineChunks.length <= 1
+          ? ''
+          : '（${pageIndex + 1}/${lineChunks.length}ページ）';
+      pdf.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          margin: pw.EdgeInsets.zero,
+          theme: pw.ThemeData.withFont(
+            base: assets.font,
+            bold: assets.boldFont,
+          ),
+          build: (_) => pw.Stack(
+            children: [
+              _billingPdfBackground(assets.logo, mascot),
+              pw.Positioned(
+                left: 58,
+                right: 58,
+                top: 66,
+                bottom: 62,
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+                  children: [
+                    pw.Row(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        pw.Container(
+                          width: 250,
+                          child: pw.Column(
+                            crossAxisAlignment: pw.CrossAxisAlignment.start,
+                            children: [
                               pw.Text(
-                                'Invoice',
+                                '$title$pageText',
                                 style: pw.TextStyle(
-                                  fontSize: 12,
-                                  color: PdfColor.fromHex('#5F5A56'),
+                                  font: assets.boldFont,
+                                  fontSize: 32,
+                                  color: PdfColor.fromHex('#2D2522'),
                                 ),
                               ),
-                            pw.Container(
-                              width: 160,
-                              height: 2,
-                              margin: const pw.EdgeInsets.only(top: 6),
-                              color: PdfColor.fromHex('#5A4A40'),
-                            ),
-                          ],
-                        ),
-                      ),
-                      pw.Spacer(),
-                      pw.Container(
-                        width: 180,
-                        child: pw.Column(
-                          crossAxisAlignment: pw.CrossAxisAlignment.end,
-                          children: [
-                            pw.Text(
-                              '$actionNoun日：${_dateText(date)}',
-                              style: const pw.TextStyle(fontSize: 9),
-                            ),
-                            pw.Text(
-                              '${docNoun}No. $no',
-                              style: const pw.TextStyle(fontSize: 9),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  pw.SizedBox(height: 48),
-                  pw.Row(
-                    crossAxisAlignment: pw.CrossAxisAlignment.start,
-                    children: [
-                      pw.Expanded(
-                        child: _billingAddressBlock(
-                          title: recipient.name.isEmpty
-                              ? '$storeName 様'
-                              : recipient.name,
-                          lines: recipient.pdfLines,
-                          dotColor: PdfColor.fromHex('#2B9BDA'),
-                          fontBold: assets.boldFont,
-                        ),
-                      ),
-                      pw.SizedBox(width: 28),
-                      pw.Expanded(
-                        child: pw.Container(
-                          height: 128,
-                          child: pw.Stack(
-                            children: [
-                              _billingAddressBlock(
-                                title: '株式会社Re,stArt',
-                                lines: const [
-                                  '〒942-0061',
-                                  '新潟県上越市春日新田2-2-2',
-                                  '適格事業者登録番号：T4110001034998',
-                                ],
-                                dotColor: PdfColor.fromHex('#E785A1'),
-                                fontBold: assets.boldFont,
-                              ),
-                              pw.Positioned(
-                                right: 6,
-                                top: 58,
-                                child: pw.Opacity(
-                                  opacity: 0.92,
-                                  child: pw.Image(
-                                    assets.stamp,
-                                    width: 59.5,
-                                    height: 59.5,
-                                    fit: pw.BoxFit.contain,
+                              if (isInvoice)
+                                pw.Text(
+                                  'Invoice',
+                                  style: pw.TextStyle(
+                                    fontSize: 12,
+                                    color: PdfColor.fromHex('#5F5A56'),
                                   ),
                                 ),
+                              pw.Container(
+                                width: 160,
+                                height: 2,
+                                margin: const pw.EdgeInsets.only(top: 6),
+                                color: PdfColor.fromHex('#5A4A40'),
                               ),
                             ],
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                  pw.SizedBox(height: 10),
-                  pw.Container(
-                    margin: const pw.EdgeInsets.symmetric(horizontal: 8),
-                    padding: const pw.EdgeInsets.symmetric(
-                      horizontal: 18,
-                      vertical: 12,
-                    ),
-                    decoration: pw.BoxDecoration(
-                      color: PdfColor.fromHex('#FFF1F3'),
-                      borderRadius: pw.BorderRadius.circular(2),
-                    ),
-                    child: pw.Text(
-                      isInvoice
-                          ? '平素は格別のお引き立てを賜り、誠にありがとうございます。\n下記の通りご請求申し上げます。'
-                          : '平素は格別のお引き立てを賜り、誠にありがとうございます。\n下記の内容を$actionNounいたしました。',
-                      style: const pw.TextStyle(fontSize: 10.2, lineSpacing: 5),
-                    ),
-                  ),
-                  pw.SizedBox(height: 15),
-                  pw.Row(
-                    children: [
-                      pw.Expanded(
-                        child: _billingAmountBox(
-                          isInvoice ? 'ご請求金額(税込10%)' : '$actionNoun金額(税込10%)',
-                          total,
-                          assets.boldFont,
+                        pw.Spacer(),
+                        pw.Container(
+                          width: 180,
+                          child: pw.Column(
+                            crossAxisAlignment: pw.CrossAxisAlignment.end,
+                            children: [
+                              pw.Text(
+                                '$actionNoun日：${_dateText(date)}',
+                                style: const pw.TextStyle(fontSize: 9),
+                              ),
+                              pw.Text(
+                                '${docNoun}No. $no',
+                                style: const pw.TextStyle(fontSize: 9),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                      pw.SizedBox(width: 34),
-                      pw.Expanded(
-                        child: _billingDateBox(
-                          isInvoice ? 'お支払期限' : '$actionNoun日',
-                          isInvoice ? effectivePaymentDueText : _dateText(date),
-                          assets.boldFont,
-                        ),
-                      ),
-                    ],
-                  ),
-                  pw.SizedBox(height: 9),
-                  pw.Container(
-                    padding: const pw.EdgeInsets.symmetric(horizontal: 8),
-                    child: pw.Text(
-                      repaymentEnabled
-                          ? '対象店舗：$storeName　種別：$billingTypeText　対象期間：${billingMonth != null ? _periodText(billingMonth) : '指定なし'}　定期返済：第$repaymentCurrent回 / 全$repaymentTotal回　毎月 ￥${_yen(repaymentMonthlyAmount)}'
-                          : '対象店舗：$storeName　種別：$billingTypeText　対象期間：${billingMonth != null ? _periodText(billingMonth) : '指定なし'}',
-                      style: pw.TextStyle(font: assets.boldFont, fontSize: 9.0),
+                      ],
                     ),
-                  ),
-                  pw.SizedBox(height: 6),
-                  _billingPdfTable(lines, assets.boldFont),
-                  pw.SizedBox(height: 8),
-                  pw.Row(
-                    mainAxisAlignment: pw.MainAxisAlignment.end,
-                    children: [
-                      _billingTotalsBox(
-                        subtotal,
-                        tax10,
-                        tax8,
-                        total,
-                        assets.boldFont,
-                        repaymentAddition: repaymentAddition,
-                      ),
-                    ],
-                  ),
-                  pw.SizedBox(height: 12),
-                  if (isInvoice)
-                    _billingBankInfo(assets.boldFont)
-                  else
+                    pw.SizedBox(height: 48),
+                    pw.Row(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        pw.Expanded(
+                          child: _billingAddressBlock(
+                            title: recipient.name.isEmpty
+                                ? '$storeName 様'
+                                : recipient.name,
+                            lines: recipient.pdfLines,
+                            dotColor: PdfColor.fromHex('#2B9BDA'),
+                            fontBold: assets.boldFont,
+                          ),
+                        ),
+                        pw.SizedBox(width: 28),
+                        pw.Expanded(
+                          child: pw.Container(
+                            height: 128,
+                            child: pw.Stack(
+                              children: [
+                                _billingAddressBlock(
+                                  title: '株式会社Re,stArt',
+                                  lines: const [
+                                    '〒942-0061',
+                                    '新潟県上越市春日新田2-2-2',
+                                    '適格事業者登録番号：T4110001034998',
+                                  ],
+                                  dotColor: PdfColor.fromHex('#E785A1'),
+                                  fontBold: assets.boldFont,
+                                ),
+                                pw.Positioned(
+                                  right: 6,
+                                  top: 58,
+                                  child: pw.Opacity(
+                                    opacity: 0.92,
+                                    child: pw.Image(
+                                      assets.stamp,
+                                      width: 59.5,
+                                      height: 59.5,
+                                      fit: pw.BoxFit.contain,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    pw.SizedBox(height: 10),
                     pw.Container(
-                      padding: const pw.EdgeInsets.all(10),
+                      margin: const pw.EdgeInsets.symmetric(horizontal: 8),
+                      padding: const pw.EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 12,
+                      ),
                       decoration: pw.BoxDecoration(
-                        color: PdfColor.fromHex('#FAFAFA'),
-                        border: pw.Border.all(color: PdfColors.grey400),
-                        borderRadius: pw.BorderRadius.circular(3),
+                        color: PdfColor.fromHex('#FFF1F3'),
+                        borderRadius: pw.BorderRadius.circular(2),
                       ),
                       child: pw.Text(
-                        '備考：本$docNounは、上記請求書に基づいて発行されています。',
-                        style: const pw.TextStyle(fontSize: 9),
+                        isInvoice
+                            ? '平素は格別のお引き立てを賜り、誠にありがとうございます。\n下記の通りご請求申し上げます。'
+                            : '平素は格別のお引き立てを賜り、誠にありがとうございます。\n下記の内容を$actionNounいたしました。',
+                        style: const pw.TextStyle(
+                          fontSize: 10.2,
+                          lineSpacing: 5,
+                        ),
                       ),
                     ),
-                ],
+                    pw.SizedBox(height: 15),
+                    pw.Row(
+                      children: [
+                        pw.Expanded(
+                          child: _billingAmountBox(
+                            isInvoice ? 'ご請求金額(税込10%)' : '$actionNoun金額(税込10%)',
+                            total,
+                            assets.boldFont,
+                          ),
+                        ),
+                        pw.SizedBox(width: 34),
+                        pw.Expanded(
+                          child: _billingDateBox(
+                            isInvoice ? 'お支払期限' : '$actionNoun日',
+                            isInvoice
+                                ? effectivePaymentDueText
+                                : _dateText(date),
+                            assets.boldFont,
+                          ),
+                        ),
+                      ],
+                    ),
+                    pw.SizedBox(height: 9),
+                    pw.Container(
+                      padding: const pw.EdgeInsets.symmetric(horizontal: 8),
+                      child: pw.Text(
+                        repaymentEnabled
+                            ? '対象店舗：$storeName　種別：$billingTypeText　対象期間：${billingMonth != null ? _periodText(billingMonth) : '指定なし'}　定期返済：第$repaymentCurrent回 / 全$repaymentTotal回　毎月 ￥${_yen(repaymentMonthlyAmount)}'
+                            : '対象店舗：$storeName　種別：$billingTypeText　対象期間：${billingMonth != null ? _periodText(billingMonth) : '指定なし'}',
+                        style: pw.TextStyle(
+                          font: assets.boldFont,
+                          fontSize: 9.0,
+                        ),
+                      ),
+                    ),
+                    pw.SizedBox(height: 6),
+                    _billingPdfTable(pageLines, assets.boldFont),
+                    pw.SizedBox(height: 8),
+                    pw.Row(
+                      mainAxisAlignment: pw.MainAxisAlignment.end,
+                      children: [
+                        _billingTotalsBox(
+                          subtotal,
+                          tax10,
+                          tax8,
+                          total,
+                          assets.boldFont,
+                          repaymentAddition: repaymentAddition,
+                        ),
+                      ],
+                    ),
+                    pw.SizedBox(height: 12),
+                    if (isInvoice)
+                      _billingBankInfo(assets.boldFont)
+                    else
+                      pw.Container(
+                        padding: const pw.EdgeInsets.all(10),
+                        decoration: pw.BoxDecoration(
+                          color: PdfColor.fromHex('#FAFAFA'),
+                          border: pw.Border.all(color: PdfColors.grey400),
+                          borderRadius: pw.BorderRadius.circular(3),
+                        ),
+                        child: pw.Text(
+                          '備考：本$docNounは、上記請求書に基づいて発行されています。',
+                          style: const pw.TextStyle(fontSize: 9),
+                        ),
+                      ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
-    );
+      );
+    }
     return pdf.save();
   }
 
