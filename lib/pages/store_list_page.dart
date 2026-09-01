@@ -19,6 +19,8 @@ class _StoreListPageState extends State<StoreListPage> {
   bool _noViewableStores = false;
   List<String> _visibleStoreNames = [];
   Timer? _adReloadTimer;
+  Timer? _adRetryTimer;
+  bool _adRetryScheduled = false;
 
   @override
   void initState() {
@@ -26,31 +28,56 @@ class _StoreListPageState extends State<StoreListPage> {
     _loadStores();
     // 広告は画面表示を待たせず、背景で読み込む。
     unawaited(
-      _reloadAds().then((_) {
-        if (mounted) setState(() {});
+      _reloadAds().then((ok) {
+        if (!mounted) return;
+        setState(() {});
+        // 初回取得に失敗したときだけ、30秒後に1回だけ自動リトライする。
+        if (!ok) _scheduleAdRetry();
       }),
     );
     // 10分ごとに広告を再読み込み（削除済み組織の広告を除外するため）
-    _adReloadTimer = Timer.periodic(const Duration(minutes: 10), (_) {
-      _reloadAds();
+    _adReloadTimer = Timer.periodic(const Duration(minutes: 10), (_) async {
+      final ok = await _reloadAds();
+      if (mounted && ok) setState(() {});
     });
   }
 
   @override
   void dispose() {
     _adReloadTimer?.cancel();
+    _adRetryTimer?.cancel();
     super.dispose();
   }
 
-  Future<void> _reloadAds() async {
-    if (!AppSession.adViewEnabled || AppSession.orgId.isEmpty) return;
+  // 初回の広告取得が失敗した場合の一度きりの自動リトライ。
+  // 無限リトライを避けるため _adRetryScheduled で1回に制限する。
+  void _scheduleAdRetry() {
+    if (_adRetryScheduled) return;
+    _adRetryScheduled = true;
+    _adRetryTimer?.cancel();
+    _adRetryTimer = Timer(const Duration(seconds: 30), () async {
+      final ok = await _reloadAds();
+      if (mounted && ok) setState(() {});
+    });
+  }
+
+  // 広告の取得に成功したら true、例外・タイムアウトで失敗したら false を返す。
+  Future<bool> _reloadAds() async {
+    if (!AppSession.adViewEnabled || AppSession.orgId.isEmpty) return true;
     try {
       final fs = FirebaseFirestore.instance;
-      final orgDoc = await fs.collection('orgs').doc(AppSession.orgId).get();
+      final orgDoc = await fs
+          .collection('orgs')
+          .doc(AppSession.orgId)
+          .get()
+          .timeout(const Duration(seconds: 10));
       if (orgDoc.exists) {
         await _loadAllAdsImpl(fs, ownOrgData: orgDoc.data());
       }
-    } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> _loadStores() async {

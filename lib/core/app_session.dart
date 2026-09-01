@@ -129,10 +129,9 @@ Future<void> _loadAllAdsImpl(
   FirebaseFirestore fs, {
   Map<String, dynamic>? ownOrgData,
 }) async {
-  final entries = <AdEntry>[];
   int fallbackSlot = 10000;
 
-  void addFromDoc(String docId, Map<String, dynamic> data) {
+  void addFromDoc(List<AdEntry> into, String docId, Map<String, dynamic> data) {
     final slotBase = (data['adSlotBase'] as int?) ?? -1;
     final orgName = (data['name'] as String?) ?? docId;
     bool addedAny = false;
@@ -148,7 +147,7 @@ Future<void> _loadAllAdsImpl(
         final url = (slot['url'] as String?) ?? '';
         if (image.isEmpty && message.isEmpty) continue;
         final base = slotBase >= 0 ? slotBase : fallbackSlot++;
-        entries.add(
+        into.add(
           AdEntry(
             orgId: docId,
             orgName: orgName,
@@ -168,7 +167,7 @@ Future<void> _loadAllAdsImpl(
       final message = (data['adMessage'] as String?) ?? '';
       if (image.isNotEmpty || message.isNotEmpty) {
         final base = slotBase >= 0 ? slotBase : fallbackSlot++;
-        entries.add(
+        into.add(
           AdEntry(
             orgId: docId,
             orgName: orgName,
@@ -182,28 +181,38 @@ Future<void> _loadAllAdsImpl(
     }
   }
 
-  // ① 自組織（_load で読み込み済みのデータを使用 → Firestore 再読み取り不要）
+  // ① 自組織（_load で読み込み済みのデータを使用 → Firestore 再読み取り不要）。
+  // 他組織クエリ（②）の遅延・失敗が自組織広告の表示に影響しないよう、
+  // まず自組織分だけを即座に distributedAds へ反映する。
+  final ownEntries = <AdEntry>[];
   if (AppSession.orgId.isNotEmpty && ownOrgData != null) {
-    addFromDoc(AppSession.orgId, ownOrgData);
+    addFromDoc(ownEntries, AppSession.orgId, ownOrgData);
+  }
+  if (ownEntries.isNotEmpty) {
+    ownEntries.sort((a, b) => a.slotNumber.compareTo(b.slotNumber));
+    AppSession.distributedAds = List<AdEntry>.of(ownEntries);
   }
 
   // ② 他組織の広告を取得。
   // 全組織を読むと起動やトップ画面が重くなるため、配信ONの広告だけ読む。
+  // 取得できたら自組織分にマージして再反映する。失敗・タイムアウト時は
+  // ①で反映済みの自組織広告をそのまま維持する。
   try {
     final snap = await fs
         .collection('orgs')
         .where('adDistribEnabled', isEqualTo: true)
         .limit(50)
-        .get();
+        .get()
+        .timeout(const Duration(seconds: 10));
+    final combined = <AdEntry>[...ownEntries];
     for (final doc in snap.docs) {
       if (doc.id == AppSession.orgId) continue;
-      if (entries.any((e) => e.orgId == doc.id)) continue;
-      addFromDoc(doc.id, doc.data());
+      if (combined.any((e) => e.orgId == doc.id)) continue;
+      addFromDoc(combined, doc.id, doc.data());
     }
+    combined.sort((a, b) => a.slotNumber.compareTo(b.slotNumber));
+    AppSession.distributedAds = combined;
   } catch (_) {}
-
-  entries.sort((a, b) => a.slotNumber.compareTo(b.slotNumber));
-  AppSession.distributedAds = entries;
 }
 
 Future<int> _assignAdSlotBase(
