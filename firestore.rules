@@ -98,8 +98,13 @@ service cloud.firestore {
     // 請求・受領entries 1件が、非開示店舗に属しておらず、かつ
     // (非開示から開示された場合は)統括管理者の確認済みか(=閲覧してよいか)。
     // billing_visibilityドキュメントが無い店舗は非開示ではない(デフォルト)。
+    //
+    // 例外: そのドキュメントの発行者本人(createdByUid == 現在のuid)であれば、
+    // 非開示・確認待ちの状態でも自分の発行履歴として閲覧を許可する。
+    // createdByUidが未設定の過去データは一致しないため、従来の非開示ルールに従う。
     function billingEntryVisible(billingDocId, storeId) {
-      return storeId == '' ||
+      return resource.data.get('createdByUid', '') == request.auth.uid ||
+        storeId == '' ||
         !exists(/databases/$(database)/documents/inventory_shared_v1/$(billingStoresDocId(billingDocId))/billing_visibility/$(storeId)) ||
         (get(/databases/$(database)/documents/inventory_shared_v1/$(billingStoresDocId(billingDocId))/billing_visibility/$(storeId)).data.hidden != true &&
          get(/databases/$(database)/documents/inventory_shared_v1/$(billingStoresDocId(billingDocId))/billing_visibility/$(storeId)).data.superAdminAcknowledged == true);

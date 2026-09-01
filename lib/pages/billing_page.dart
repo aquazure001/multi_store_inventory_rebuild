@@ -196,7 +196,12 @@ class _BillingPageState extends State<BillingPage> {
       final invoices = <_BillingInvoiceSummary>[];
       for (final doc in invoiceSnap.docs) {
         final data = doc.data();
-        if (excludedStoreIds.contains((data['storeId'] ?? '').toString())) {
+        // 発行者本人には、非開示設定に関わらず自分の発行履歴を常に表示する。
+        // createdByUid が保存されていない過去データは従来どおり非開示ルールに従う。
+        final entryUid = (data['createdByUid'] ?? '').toString();
+        final isOwnEntry = entryUid.isNotEmpty && entryUid == AppSession.uid;
+        if (!isOwnEntry &&
+            excludedStoreIds.contains((data['storeId'] ?? '').toString())) {
           continue;
         }
         if ((data['status'] ?? '').toString() == 'canceled') continue;
@@ -1159,6 +1164,8 @@ class _BillingPageState extends State<BillingPage> {
         'createdAt': FieldValue.serverTimestamp(),
         'createdAtLocal': issuedAt.toIso8601String(),
         'createdBy': AppSession.nickname,
+        'createdByUid': AppSession.uid,
+        'createdByEmail': AppSession.email,
         'pdfBase64': base64Encode(pdfBytes),
         'pdfFileName':
             '請求書_${_monthKey(_selectedMonth)}_${storeName}_$invoiceNo.pdf',
@@ -1324,6 +1331,8 @@ class _BillingPageState extends State<BillingPage> {
         'createdAt': FieldValue.serverTimestamp(),
         'createdAtLocal': issuedAt.toIso8601String(),
         'createdBy': AppSession.nickname,
+        'createdByUid': AppSession.uid,
+        'createdByEmail': AppSession.email,
         'status': 'issued',
         'subtotal': subtotal10 + subtotal8,
         'subtotal10': subtotal10,
@@ -1354,6 +1363,8 @@ class _BillingPageState extends State<BillingPage> {
         'createdAt': FieldValue.serverTimestamp(),
         'createdAtLocal': issuedAt.toIso8601String(),
         'createdBy': AppSession.nickname,
+        'createdByUid': AppSession.uid,
+        'createdByEmail': AppSession.email,
         'pdfBase64': base64Encode(pdfBytes),
         'pdfFileName':
             '領収書_${_monthKey(_selectedMonth)}_${storeName}_$receiptNo.pdf',
@@ -1366,6 +1377,8 @@ class _BillingPageState extends State<BillingPage> {
         'createdAt': FieldValue.serverTimestamp(),
         'createdAtLocal': issuedAt.toIso8601String(),
         'createdBy': AppSession.nickname,
+        'createdByUid': AppSession.uid,
+        'createdByEmail': AppSession.email,
         'status': 'issued',
         'billingMode': 'monthly_shuryoshuu',
         'billingItemTypes': billingItemTypes,
@@ -1440,6 +1453,8 @@ class _BillingPageState extends State<BillingPage> {
       'createdAt': FieldValue.serverTimestamp(),
       'createdAtLocal': issuedAt.toIso8601String(),
       'createdBy': AppSession.nickname,
+      'createdByUid': AppSession.uid,
+      'createdByEmail': AppSession.email,
       'status': 'issued',
       'billingMode': 'monthly_store_type_filter',
       'billingItemTypes': _billingTypeOrder
@@ -1620,6 +1635,8 @@ class _BillingPageState extends State<BillingPage> {
         'createdAt': FieldValue.serverTimestamp(),
         'createdAtLocal': issuedAt.toIso8601String(),
         'createdBy': AppSession.nickname,
+        'createdByUid': AppSession.uid,
+        'createdByEmail': AppSession.email,
         'status': 'issued',
         'subtotal': invoice.subtotal,
         'tax10': invoice.tax10,
@@ -1645,6 +1662,8 @@ class _BillingPageState extends State<BillingPage> {
         'createdAt': FieldValue.serverTimestamp(),
         'createdAtLocal': issuedAt.toIso8601String(),
         'createdBy': AppSession.nickname,
+        'createdByUid': AppSession.uid,
+        'createdByEmail': AppSession.email,
         'pdfBase64': base64Encode(pdfBytes),
         'pdfFileName': '受領書_${invoice.invoiceNo}.pdf',
       });
@@ -4157,6 +4176,7 @@ class _BillingPageState extends State<BillingPage> {
         'updatedAt': FieldValue.serverTimestamp(),
         'updatedAtLocal': DateTime.now().toIso8601String(),
         'createdBy': AppSession.nickname,
+        'createdByUid': AppSession.uid,
         'createdByEmail': AppSession.email,
       });
       if (!mounted) return;
@@ -4550,6 +4570,8 @@ class _BillingPageState extends State<BillingPage> {
         'createdAt': FieldValue.serverTimestamp(),
         'createdAtLocal': issuedAt.toIso8601String(),
         'createdBy': AppSession.nickname,
+        'createdByUid': AppSession.uid,
+        'createdByEmail': AppSession.email,
         'status': 'issued',
         'billingMode': 'manual',
         'billingItemTypes': ['任意'],
@@ -4584,6 +4606,8 @@ class _BillingPageState extends State<BillingPage> {
         'createdAt': FieldValue.serverTimestamp(),
         'createdAtLocal': issuedAt.toIso8601String(),
         'createdBy': AppSession.nickname,
+        'createdByUid': AppSession.uid,
+        'createdByEmail': AppSession.email,
         'pdfBase64': base64Encode(pdfBytes),
         'pdfFileName': '任意請求書_${storeName}_$invoiceNo.pdf',
       });
@@ -4908,6 +4932,8 @@ class _BillingPageState extends State<BillingPage> {
         'createdAt': FieldValue.serverTimestamp(),
         'createdAtLocal': issuedAt.toIso8601String(),
         'createdBy': AppSession.nickname,
+        'createdByUid': AppSession.uid,
+        'createdByEmail': AppSession.email,
         'status': 'issued',
         'subtotal': subtotal,
         'subtotal10': subtotal10,
@@ -4937,6 +4963,8 @@ class _BillingPageState extends State<BillingPage> {
         'createdAt': FieldValue.serverTimestamp(),
         'createdAtLocal': issuedAt.toIso8601String(),
         'createdBy': AppSession.nickname,
+        'createdByUid': AppSession.uid,
+        'createdByEmail': AppSession.email,
         'pdfBase64': base64Encode(pdfBytes),
         'pdfFileName': '${docLabel}_${storeName}_$receiptNo.pdf',
       });
@@ -4948,6 +4976,8 @@ class _BillingPageState extends State<BillingPage> {
         'createdAt': FieldValue.serverTimestamp(),
         'createdAtLocal': issuedAt.toIso8601String(),
         'createdBy': AppSession.nickname,
+        'createdByUid': AppSession.uid,
+        'createdByEmail': AppSession.email,
         'status': 'issued',
         'billingMode': billingMode,
         'billingItemTypes': [billingTypeLabel],
@@ -5163,8 +5193,8 @@ class _BillingPageState extends State<BillingPage> {
                           Expanded(
                             child: Text(
                               '請求情報が非開示になっている店舗が'
-                              '${_hiddenStoreIds.length}件あり、この画面には'
-                              '表示されていません。',
+                              '${_hiddenStoreIds.length}件あり、'
+                              '他の担当者が発行した請求情報は表示されていません。',
                               style: TextStyle(
                                 fontSize: 12,
                                 color: Colors.orange.shade900,
