@@ -1014,6 +1014,8 @@ class _InventoryListState extends State<_InventoryList> {
         ),
       ),
       const SizedBox(height: 8),
+      const AdInlineCardWidget(),
+      const SizedBox(height: 8),
     ];
 
     return Column(

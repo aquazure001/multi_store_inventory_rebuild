@@ -142,18 +142,47 @@ class _FullScreenAdDialogState extends State<_FullScreenAdDialog> {
 // 画面内広告カード（操作を止めない広告）
 // ─────────────────────────────────────────────
 
-class AdInlineCardWidget extends StatelessWidget {
+class AdInlineCardWidget extends StatefulWidget {
   const AdInlineCardWidget({super.key, this.compact = false});
 
   final bool compact;
 
   @override
+  State<AdInlineCardWidget> createState() => _AdInlineCardWidgetState();
+}
+
+class _AdInlineCardWidgetState extends State<AdInlineCardWidget> {
+  Timer? _timer;
+  int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // 広告が2件以上ある場合のみ、10秒周期で次の広告へ切り替える。
+    // Firestore への再読み込みは行わず、メモリ上の distributedAds を参照するだけ。
+    if (AppSession.distributedAds.length >= 2) {
+      _timer = Timer.periodic(const Duration(seconds: 10), (_) {
+        if (!mounted) return;
+        final n = AppSession.distributedAds.length;
+        if (n < 2) return;
+        setState(() => _index = (_index + 1) % n);
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final compact = widget.compact;
     if (!AppSession.adViewEnabled) return const SizedBox.shrink();
     final ads = AppSession.distributedAds;
     if (ads.isEmpty) return const SizedBox.shrink();
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final ad = ads[(now ~/ 10000) % ads.length];
+    final ad = ads[_index % ads.length];
 
     return Card(
       color: Colors.white,

@@ -802,6 +802,7 @@ class _PosPageState extends State<PosPage> {
           children: [
             _buildStoreInvoiceCard(),
             _buildRegisterSessionCard(),
+            const AdInlineCardWidget(compact: true),
             _buildAddItemCard(),
             _buildCartAndTotalsCard(),
           ],

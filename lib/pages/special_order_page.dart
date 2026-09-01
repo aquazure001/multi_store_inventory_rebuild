@@ -3943,7 +3943,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     final emptyMessage = homeCareMode
         ? 'ホームケアセットの発注はありません'
         : (widget.showExpiredOnly ? '検索に一致する販売終了発注はありません' : '検索に一致する発注はありません');
-    final extraTopCount = homeCareMode ? 3 : 2;
+    // 先頭固定行: 検索欄・説明文（ホームケアは集計表示も）＋ 広告カード1行。
+    final extraTopCount = homeCareMode ? 4 : 3;
+    final adIndex = extraTopCount - 1;
     return ListView.builder(
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount:
@@ -3978,6 +3980,12 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         }
         if (homeCareMode && index == 2) {
           return _buildHomeCareTopSummary(visibleItems);
+        }
+        if (index == adIndex) {
+          return const Padding(
+            padding: EdgeInsets.fromLTRB(16, 4, 16, 4),
+            child: AdInlineCardWidget(compact: true),
+          );
         }
         if (visibleItems.isEmpty) {
           return Padding(
