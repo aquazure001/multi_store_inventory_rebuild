@@ -43,3 +43,7 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Firestore backup script
+scripts/firestore-backup/node_modules/
+scripts/firestore-backup/firestore_backup_*.json

@@ -1,0 +1,13 @@
+{
+  "name": "firestore-backup",
+  "version": "1.0.0",
+  "private": true,
+  "description": "multi-store-inventory-app のFirestoreデータを読み取り専用でローカルJSONにバックアップするスクリプト",
+  "type": "commonjs",
+  "scripts": {
+    "backup": "node backup.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.7.0"
+  }
+}
