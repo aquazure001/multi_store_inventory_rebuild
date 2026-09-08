@@ -155,7 +155,7 @@ service cloud.firestore {
         ))
         ||
         (request.auth.uid != uid &&
-         (isOrgAdmin(resource.data.orgId) || isSuperAdmin()) &&
+         (isSuperAdmin() || isOrgAdmin(resource.data.orgId)) &&
          (
            (request.resource.data.orgId == '' &&
             request.resource.data.role == 'admin' &&
@@ -180,7 +180,7 @@ service cloud.firestore {
       allow create: if isSignedIn() && myOrgId() == '';
 
       allow update, delete: if isSignedIn() &&
-        (isOrgAdmin(orgId) || isSuperAdmin());
+        (isSuperAdmin() || isOrgAdmin(orgId));
     }
 
     // ── organizations（旧システムの組織コレクション・移行専用）──
@@ -197,13 +197,13 @@ service cloud.firestore {
       // 旧形式（org_プレフィックスなし）のドキュメントは読み取りのみ維持
       allow read: if isSignedIn() && (
         isLegacyDocId(docId) ||
-        (isBillingDocId(docId) ? isSuperAdmin() : (isMyOrgDocId(docId) || isSuperAdmin()))
+        (isBillingDocId(docId) ? isSuperAdmin() : (isSuperAdmin() || isMyOrgDocId(docId)))
       );
 
       allow write: if isSignedIn() && !isLegacyDocId(docId) && (
         isBillingDocId(docId) ? isSuperAdmin() :
-        isAdminWriteDocId(docId) ? (isMyOrgAdminDocId(docId) || isSuperAdmin()) :
-        (isMyOrgDocId(docId) || isSuperAdmin())
+        isAdminWriteDocId(docId) ? (isSuperAdmin() || isMyOrgAdminDocId(docId)) :
+        (isSuperAdmin() || isMyOrgDocId(docId))
       );
 
       // history / order_request_history / order_delivery_status /
@@ -226,15 +226,15 @@ service cloud.firestore {
         allow get: if isSignedIn() && (
           isBillingDocId(docId)
             ? (isSuperAdmin() && billingEntryVisible(docId, resource.data.get('storeId', '')))
-            : (isMyOrgDocId(docId) || isSuperAdmin())
+            : (isSuperAdmin() || isMyOrgDocId(docId))
         );
         allow list: if isSignedIn() && (
-          isBillingDocId(docId) ? isSuperAdmin() : (isMyOrgDocId(docId) || isSuperAdmin())
+          isBillingDocId(docId) ? isSuperAdmin() : (isSuperAdmin() || isMyOrgDocId(docId))
         );
         allow write: if isSignedIn() && (
           isBillingDocId(docId) ? isSuperAdmin() :
-          isAdminWriteDocId(docId) ? (isMyOrgAdminDocId(docId) || isSuperAdmin()) :
-          (isMyOrgDocId(docId) || isSuperAdmin())
+          isAdminWriteDocId(docId) ? (isSuperAdmin() || isMyOrgAdminDocId(docId)) :
+          (isSuperAdmin() || isMyOrgDocId(docId))
         );
       }
 
@@ -243,9 +243,9 @@ service cloud.firestore {
       // 既存バッチの読み取り・更新（納品処理・取消・訂正等）は組織メンバー全員可。
       match /batches/{batchId} {
         allow read, update, delete: if isSignedIn() &&
-          (isMyOrgDocId(docId) || isSuperAdmin());
+          (isSuperAdmin() || isMyOrgDocId(docId));
         allow create: if isSignedIn() &&
-          (isMyOrgAdminDocId(docId) || isSuperAdmin());
+          (isSuperAdmin() || isMyOrgAdminDocId(docId));
       }
 
       // storesドキュメント配下、店舗ごとの請求・受領・領収書の非開示状態。
@@ -255,7 +255,7 @@ service cloud.firestore {
       // 未サポート、実機検証済み）、店舗ごとに独立したドキュメントに分けて
       // 方向ごとに権限を強制する。
       match /billing_visibility/{storeId} {
-        allow read: if isSignedIn() && (isMyOrgDocId(docId) || isSuperAdmin());
+        allow read: if isSignedIn() && (isSuperAdmin() || isMyOrgDocId(docId));
 
         // 非開示にする(hidden: 未設定/false → true): 統括管理者のみ。
         // superAdminAcknowledgedは常にfalseにリセットする(再度開示された

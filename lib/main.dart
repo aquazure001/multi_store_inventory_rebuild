@@ -68,6 +68,14 @@ void _openLink(String url) {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  // オフライン永続化を有効化。
+  // ページ遷移のたびにネットワーク往復が発生するのを防ぎ、直近に読んだ
+  // ドキュメントはローカル(IndexedDB)キャッシュから即座に返せるようにする。
+  // Web版でも cloud_firestore の Settings.persistenceEnabled で同様に有効化できる
+  // （旧バージョンのみ enablePersistence() が別途必要だったが、現行版では不要）。
+  FirebaseFirestore.instance.settings = const Settings(
+    persistenceEnabled: true,
+  );
   runApp(const MultiStoreInventoryApp());
 }
 

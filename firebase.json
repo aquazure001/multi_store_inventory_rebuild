@@ -32,15 +32,7 @@
         "headers": [
           {
             "key": "Cache-Control",
-            "value": "no-cache, no-store, must-revalidate"
-          },
-          {
-            "key": "Pragma",
             "value": "no-cache"
-          },
-          {
-            "key": "Expires",
-            "value": "0"
           }
         ]
       },
@@ -49,15 +41,7 @@
         "headers": [
           {
             "key": "Cache-Control",
-            "value": "no-cache, no-store, must-revalidate"
-          },
-          {
-            "key": "Pragma",
             "value": "no-cache"
-          },
-          {
-            "key": "Expires",
-            "value": "0"
           }
         ]
       },
@@ -66,15 +50,7 @@
         "headers": [
           {
             "key": "Cache-Control",
-            "value": "no-cache, no-store, must-revalidate"
-          },
-          {
-            "key": "Pragma",
             "value": "no-cache"
-          },
-          {
-            "key": "Expires",
-            "value": "0"
           }
         ]
       },
@@ -140,23 +116,6 @@
         ]
       },
       {
-        "source": "/flutter_service_worker.js",
-        "headers": [
-          {
-            "key": "Cache-Control",
-            "value": "no-cache, no-store, must-revalidate"
-          },
-          {
-            "key": "Pragma",
-            "value": "no-cache"
-          },
-          {
-            "key": "Expires",
-            "value": "0"
-          }
-        ]
-      },
-      {
         "source": "/version.json",
         "headers": [
           {
@@ -178,6 +137,15 @@
         "headers": [
           {
             "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "/flutter_service_worker.js",
+        "headers": [
+          {
+            "key": "Cache-Control",
             "value": "no-cache, no-store, must-revalidate"
           },
           {
@@ -187,6 +155,15 @@
           {
             "key": "Expires",
             "value": "0"
+          }
+        ]
+      },
+      {
+        "source": "/canvaskit/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=86400, must-revalidate"
           }
         ]
       }
