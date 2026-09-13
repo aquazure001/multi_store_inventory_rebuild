@@ -56,7 +56,10 @@ class _ItemMasterTab extends StatefulWidget {
   State<_ItemMasterTab> createState() => _ItemMasterTabState();
 }
 
-class _ItemMasterTabState extends State<_ItemMasterTab> {
+class _ItemMasterTabState extends State<_ItemMasterTab>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
   List<Map<String, dynamic>> _rawItems = [];
   List<LegacyItem> _items = [];
   bool _loading = true;
@@ -105,6 +108,7 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
           if ((map['id'] ?? '').toString().isNotEmpty) rawItems.add(map);
         }
       }
+      if (!mounted) return;
       setState(() {
         _rawItems = rawItems;
         _items = _sorted(rawItems);
@@ -112,6 +116,7 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
         _loading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = e.toString();
         _loading = false;
@@ -605,6 +610,7 @@ class _ItemMasterTabState extends State<_ItemMasterTab> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_error != null) {
       return Padding(

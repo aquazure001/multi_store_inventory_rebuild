@@ -15,7 +15,44 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
   bool _loading = true;
   String? _error;
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _batches = [];
-  int _visibleCount = 20;
+  QueryDocumentSnapshot<Map<String, dynamic>>? _lastBatch;
+  bool _hasMore = false;
+  bool _loadingMore = false;
+  bool _pdfBusy = false;
+
+  Future<void> _sharePdf({
+    required Uint8List bytes,
+    required String filename,
+  }) async {
+    final url = html.Url.createObjectUrlFromBlob(
+      html.Blob([bytes], 'application/pdf'),
+    );
+    final link = html.AnchorElement(href: url)..download = filename;
+    try {
+      html.document.body?.append(link);
+      link.click();
+    } finally {
+      link.remove();
+      // Safari may still be consuming the URL immediately after click().
+      Timer(const Duration(minutes: 1), () => html.Url.revokeObjectUrl(url));
+    }
+  }
+
+  Future<void> _runPdf(Future<void> Function() action) async {
+    if (_pdfBusy) return;
+    setState(() => _pdfBusy = true);
+    try {
+      await action();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('PDF出力失敗: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _pdfBusy = false);
+    }
+  }
 
   bool get _canViewPastOrders => AppSession.isAdmin || AppSession.isSuperAdmin;
 
@@ -104,7 +141,8 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     return Map<String, String>.fromEntries(entries);
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool more = false}) async {
+    if (_loadingMore || (more && (!_hasMore || _loading))) return;
     if (!_canViewPastOrders) {
       setState(() {
         _loading = false;
@@ -114,24 +152,37 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     }
 
     setState(() {
-      _loading = true;
+      if (more) {
+        _loadingMore = true;
+      } else {
+        _loading = true;
+      }
       _error = null;
     });
     try {
-      final snap = await AppSession.orderBatches
+      var query = AppSession.orderBatches
           .orderBy('createdAt', descending: true)
-          .limit(100)
-          .get();
+          .limit(20);
+      if (more && _lastBatch != null) {
+        query = query.startAfterDocument(_lastBatch!);
+      }
+      final snap = await query.get();
+      if (!mounted) return;
       setState(() {
-        _batches = snap.docs
+        final batches = snap.docs
             .where((doc) => (doc.data()['status'] ?? '') != 'canceled')
             .toList();
-        _visibleCount = 20;
+        _batches = more ? [..._batches, ...batches] : batches;
+        if (snap.docs.isNotEmpty) _lastBatch = snap.docs.last;
+        _hasMore = snap.docs.length == 20;
+        _loadingMore = false;
         _loading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = e.toString();
+        _loadingMore = false;
         _loading = false;
       });
     }
@@ -275,7 +326,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
       final d = _batchDate(data);
       final fallbackName =
           '保存済み発注表_${d.year}${d.month.toString().padLeft(2, '0')}${d.day.toString().padLeft(2, '0')}.pdf';
-      await Printing.sharePdf(
+      await _sharePdf(
         bytes: bytes,
         filename: savedName.isEmpty ? fallbackName : savedName,
       );
@@ -404,7 +455,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     );
 
     final d = _batchDate(data);
-    await Printing.sharePdf(
+    await _sharePdf(
       bytes: await doc.save(),
       filename:
           '過去の発注表_${d.year}${d.month.toString().padLeft(2, '0')}${d.day.toString().padLeft(2, '0')}_店舗別.pdf',
@@ -553,7 +604,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     );
 
     final d = _batchDate(data);
-    await Printing.sharePdf(
+    await _sharePdf(
       bytes: await doc.save(),
       filename:
           '過去の発注表_${d.year}${d.month.toString().padLeft(2, '0')}${d.day.toString().padLeft(2, '0')}_商品別.pdf',
@@ -689,7 +740,9 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
-                  onPressed: canceled ? null : () => _openSavedPdf(batch),
+                  onPressed: canceled || _pdfBusy
+                      ? null
+                      : () => _runPdf(() => _openSavedPdf(batch)),
                   icon: const Icon(Icons.picture_as_pdf, size: 18),
                   label: Text(
                     hasSavedPdf
@@ -717,9 +770,9 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
               children: [
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: items.isEmpty || canceled
+                    onPressed: items.isEmpty || canceled || _pdfBusy
                         ? null
-                        : () => _exportPdfByStore(batch),
+                        : () => _runPdf(() => _exportPdfByStore(batch)),
                     icon: const Icon(Icons.refresh, size: 18),
                     label: const Text('店舗別を再作成'),
                   ),
@@ -727,9 +780,9 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: items.isEmpty || canceled
+                    onPressed: items.isEmpty || canceled || _pdfBusy
                         ? null
-                        : () => _exportPdfByItem(batch),
+                        : () => _runPdf(() => _exportPdfByItem(batch)),
                     icon: const Icon(Icons.refresh, size: 18),
                     label: const Text('商品別を再作成'),
                   ),
@@ -781,9 +834,9 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
                 padding: const EdgeInsets.all(24),
                 child: SelectableText('読み取りエラー\n\n$_error'),
               )
-            : _batches.isEmpty
+            : _batches.isEmpty && !_hasMore
             ? const Center(child: Text('過去の発注表はありません'))
-            : noViewableStores
+            : noViewableStores && !_hasMore
             ? Padding(
                 padding: const EdgeInsets.all(24),
                 child: Center(
@@ -806,6 +859,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
               )
             : Column(
                 children: [
+                  if (_pdfBusy) const LinearProgressIndicator(),
                   if (isRestricted)
                     Container(
                       width: double.infinity,
@@ -838,10 +892,8 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
                   Expanded(
                     child: Builder(
                       builder: (context) {
-                        final visibleBatches = _batches
-                            .take(_visibleCount)
-                            .toList();
-                        final hasMore = visibleBatches.length < _batches.length;
+                        final visibleBatches = _batches;
+                        final hasMore = _hasMore;
                         return ListView.builder(
                           padding: const EdgeInsets.all(16),
                           itemCount:
@@ -867,18 +919,11 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
                             return Padding(
                               padding: const EdgeInsets.symmetric(vertical: 12),
                               child: OutlinedButton.icon(
-                                onPressed: () {
-                                  setState(() {
-                                    _visibleCount = min(
-                                      _visibleCount + 20,
-                                      _batches.length,
-                                    );
-                                  });
-                                },
+                                onPressed: _loadingMore
+                                    ? null
+                                    : () => _load(more: true),
                                 icon: const Icon(Icons.expand_more),
-                                label: Text(
-                                  'もっと見る（${visibleBatches.length}/${_batches.length}件）',
-                                ),
+                                label: Text(_loadingMore ? '読み込み中' : 'もっと見る'),
                               ),
                             );
                           },
