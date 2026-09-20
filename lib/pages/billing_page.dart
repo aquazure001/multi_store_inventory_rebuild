@@ -163,15 +163,12 @@ class _BillingPageState extends State<BillingPage> {
             .orderBy('createdAt', descending: true)
             .limit(40)
             .get(),
-        AppSession.doc('stores').get(),
         _loadMasterData(),
       ]);
       final invoiceSnap = loadResults[0] as QuerySnapshot<Map<String, dynamic>>;
       final priceDoc = loadResults[1] as DocumentSnapshot<Map<String, dynamic>>;
       final batchSnap = loadResults[2] as QuerySnapshot<Map<String, dynamic>>;
-      final storesDoc =
-          loadResults[3] as DocumentSnapshot<Map<String, dynamic>>;
-      final masterData = loadResults[4] as _MasterDataSnapshot;
+      final masterData = loadResults[3] as _MasterDataSnapshot;
       final manualItemMastersByCode = <String, LegacyItem>{};
       for (final item in [
         ...masterData.products,
@@ -184,9 +181,7 @@ class _BillingPageState extends State<BillingPage> {
       }
       // 宛先設定・任意作成・編集の店舗候補は店舗マスタ全件から出す。
       // 請求明細・発行済み一覧の表示だけは下の処理で非開示/確認待ち店舗を除外する。
-      final allParsedStores = _parseStores(
-        storesDoc.data() ?? <String, dynamic>{},
-      );
+      final allParsedStores = masterData.stores;
       final orgStores = allParsedStores.toList();
       final pendingAckStores = allParsedStores
           .where((s) => pendingAckStoreIds.contains(s.id))

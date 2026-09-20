@@ -100,26 +100,24 @@ class _PosPageState extends State<PosPage> {
       _message = null;
     });
     try {
+      final masterFuture = _loadMasterData();
       final results = await Future.wait([
-        AppSession.doc('stores').get(),
-        AppSession.doc('products').get(),
         AppSession.doc('billing_prices').get(),
         AppSession.doc('pos_settings').get(),
       ]);
-      final storesDoc = results[0];
-      final productsDoc = results[1];
-      final priceDoc = results[2];
-      final settingsDoc = results[3];
+      final masterData = await masterFuture;
+      final priceDoc = results[0];
+      final settingsDoc = results[1];
 
-      final allStores = _parseStores(storesDoc.data() ?? <String, dynamic>{});
+      final allStores = masterData.stores;
       final allStoreIds = allStores.map((s) => s.id).toList();
       final viewableIds = AppSession.viewableStoreIds(allStoreIds).toSet();
       final stores = allStores
           .where((s) => viewableIds.contains(s.id))
           .toList();
-      final products = _parseItemsFromDoc(
-        productsDoc,
-      ).where((item) => !item.discontinued).toList();
+      final products = masterData.products
+          .where((item) => !item.discontinued)
+          .toList();
       final prices = <String, _PosPrice>{};
       final rawEntries = priceDoc.data()?['entries'];
       if (rawEntries is Map) {

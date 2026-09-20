@@ -79,35 +79,20 @@ class _ItemMasterTabState extends State<_ItemMasterTab>
       _error = null;
     });
     try {
-      final results = await Future.wait([
-        FirebaseFirestore.instance
-            .collection('inventory_shared_v1')
-            .doc(widget.docId)
-            .get(),
-        FirebaseFirestore.instance
-            .collection('orgs')
-            .doc(AppSession.orgId)
-            .get(),
-      ]);
-      final doc = results[0];
-      final orgDoc = results[1];
-      final orgData = orgDoc.data() ?? <String, dynamic>{};
-      final maxItems = switch (widget.label) {
-        '商品' => inventoryIntValue(orgData['maxProducts']),
-        'テスター' => inventoryIntValue(orgData['maxTesters']),
-        '備品' => inventoryIntValue(orgData['maxEquipments']),
-        _ => 10,
+      final masterFuture = _loadMasterData();
+      final limitsFuture = _loadOrgItemLimits();
+      final masterData = await masterFuture;
+      final limits = await limitsFuture;
+      final sourceItems = switch (widget.label) {
+        '商品' => masterData.rawProducts,
+        'テスター' => masterData.rawTesters,
+        '備品' => masterData.rawEquipments,
+        _ => const <Map<String, dynamic>>[],
       };
-      final raw = doc.data()?['items'];
-      final rawItems = <Map<String, dynamic>>[];
-      if (raw is List) {
-        for (final item in raw.whereType<Map>()) {
-          final map = Map<String, dynamic>.from(
-            item.map((k, v) => MapEntry(k.toString(), v)),
-          );
-          if ((map['id'] ?? '').toString().isNotEmpty) rawItems.add(map);
-        }
-      }
+      final rawItems = sourceItems
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
+      final maxItems = limits.forLabel(widget.label);
       if (!mounted) return;
       setState(() {
         _rawItems = rawItems;

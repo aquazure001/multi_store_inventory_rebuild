@@ -33,8 +33,8 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
       link.click();
     } finally {
       link.remove();
-      // Safari may still be consuming the URL immediately after click().
-      Timer(const Duration(minutes: 1), () => html.Url.revokeObjectUrl(url));
+      // Safariがダウンロードを開始する猶予だけ残し、大きなPDFを長時間保持しない。
+      Timer(const Duration(seconds: 10), () => html.Url.revokeObjectUrl(url));
     }
   }
 
