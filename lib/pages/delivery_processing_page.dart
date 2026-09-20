@@ -14,6 +14,8 @@ class DeliveryProcessingPage extends StatefulWidget {
 class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
   bool _loading = true;
   String? _error;
+  bool _deliveryStatusLoading = true;
+  String? _deliveryStatusError;
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _batches = [];
   List<LegacyStore> _stores = [];
   final Set<String> _localDeliveredKeys = <String>{};
@@ -30,6 +32,45 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
   }
 
   int _toInt(dynamic value) => inventoryIntValue(value);
+
+  bool get _deliveryStatusReady =>
+      !_deliveryStatusLoading && _deliveryStatusError == null;
+
+  Widget _buildDeliveryStatusNotice() {
+    if (_deliveryStatusReady) return const SizedBox.shrink();
+    final hasError = _deliveryStatusError != null;
+    return Container(
+      width: double.infinity,
+      color: hasError ? Colors.orange.shade50 : Colors.blue.shade50,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        children: [
+          if (_deliveryStatusLoading)
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          else
+            Icon(Icons.sync_problem, size: 20, color: Colors.orange.shade800),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              _deliveryStatusLoading
+                  ? '納品済み情報を同期しています。完了後に納品できます。'
+                  : '${_deliveryStatusError ?? '同期できませんでした'}。通信状況を確認して再試行してください。',
+              style: const TextStyle(fontSize: 13),
+            ),
+          ),
+          if (hasError)
+            TextButton(
+              onPressed: _loadDeliveryStatus,
+              child: const Text('再試行'),
+            ),
+        ],
+      ),
+    );
+  }
 
   // 店舗マスタを優先し、発注データだけに出てくる旧店舗名も補完する。
   // billing_visibility は請求情報だけの非開示設定なので、納品処理では使わない。
@@ -146,43 +187,67 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
       final visibleBatches = snap.docs
           .where((doc) => (doc.data()['status'] ?? '').toString() != 'canceled')
           .toList();
+      if (!mounted) return;
+      setState(() {
+        _batches = visibleBatches;
+        _stores = viewableStores;
+        _visibleBatchCount = 5;
+        _loading = false;
+        _deliveryStatusLoading = true;
+        _deliveryStatusError = null;
+      });
+      unawaited(_loadDeliveryStatus());
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
 
+  Future<void> _loadDeliveryStatus() async {
+    if (mounted) {
+      setState(() {
+        _deliveryStatusLoading = true;
+        _deliveryStatusError = null;
+      });
+    }
+    try {
+      // 納品済み情報は一覧本体とは分けて読む。大きくなった orders の取得が
+      // 遅れても、納品処理ページ全体を読み取りエラーにはしない。
+      final ordersData = await AppSession.ordersDoc.get().timeout(
+        const Duration(seconds: 30),
+        onTimeout: () => throw TimeoutException('納品済み情報の同期に時間がかかっています'),
+      );
       final externalDeliveredMaps = <String, Map<String, dynamic>>{};
-
-      // まず、既存の orders ドキュメント内に保存した軽量な納品済み情報を読む。
-      // orders は発注・納品予定で既に使っているため、新規ドキュメントより権限面で安全。
-      final ordersData = await AppSession.doc(
-        'orders',
-      ).get().timeout(const Duration(seconds: 8));
       final rawDeliveredBatches = ordersData.data()?['_deliveredBatches'];
       if (rawDeliveredBatches is Map) {
         for (final entry in rawDeliveredBatches.entries) {
-          final batchId = entry.key.toString();
           final deliveredMap = entry.value;
           if (deliveredMap is Map) {
-            externalDeliveredMaps[batchId] = Map<String, dynamic>.from(
+            externalDeliveredMaps[entry.key
+                .toString()] = Map<String, dynamic>.from(
               deliveredMap.map((k, v) => MapEntry(k.toString(), v)),
             );
           }
         }
       }
-
-      // 旧互換用の order_delivery_status は個別読み込みが多く重いため、
-      // 画面表示時には読まない。現在の正しい納品記録は orders._deliveredBatches。
-
+      if (!mounted) return;
       setState(() {
-        _batches = visibleBatches;
-        _stores = viewableStores;
         _externalDeliveredMaps
           ..clear()
           ..addAll(externalDeliveredMaps);
-        _visibleBatchCount = 5;
-        _loading = false;
+        _deliveryStatusLoading = false;
+        _deliveryStatusError = null;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
-        _error = e.toString();
-        _loading = false;
+        _deliveryStatusLoading = false;
+        _deliveryStatusError = e is TimeoutException
+            ? e.message ?? '納品済み情報の同期に時間がかかっています'
+            : '納品済み情報を取得できませんでした';
       });
     }
   }
@@ -273,6 +338,15 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
     bool askConfirm = true,
     bool showResult = true,
   }) async {
+    if (!_deliveryStatusReady) {
+      if (!showResult) throw StateError('納品済み情報を同期できていません');
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('納品済み情報の同期完了後に操作してください')));
+      }
+      return;
+    }
     final qty = _toInt(item['qty']);
     final deliveredQty = _toInt(item['deliveredQty']);
     final remaining = max(0, qty - deliveredQty);
@@ -570,6 +644,12 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
   Future<void> _deliverSelectedInBatch(
     QueryDocumentSnapshot<Map<String, dynamic>> batch,
   ) async {
+    if (!_deliveryStatusReady) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('納品済み情報の同期完了後に操作してください')));
+      return;
+    }
     final data = batch.data();
     final rawItems = data['items'];
     final items = rawItems is List
@@ -735,6 +815,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
             )
           : Column(
               children: [
+                _buildDeliveryStatusNotice(),
                 if (isRestricted)
                   Container(
                     width: double.infinity,
@@ -797,14 +878,16 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
                                     vertical: 12,
                                   ),
                                   child: OutlinedButton.icon(
-                                    onPressed: () {
-                                      setState(() {
-                                        _visibleBatchCount = min(
-                                          _visibleBatchCount + 5,
-                                          _batches.length,
-                                        );
-                                      });
-                                    },
+                                    onPressed: !_deliveryStatusReady
+                                        ? null
+                                        : () {
+                                            setState(() {
+                                              _visibleBatchCount = min(
+                                                _visibleBatchCount + 5,
+                                                _batches.length,
+                                              );
+                                            });
+                                          },
                                     icon: const Icon(Icons.expand_more),
                                     label: Text(
                                       'もっと見る（${visibleBatches.length}/${_batches.length}件）',
@@ -891,7 +974,9 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: () => _deliverSelectedInBatch(batch),
+                      onPressed: _deliveryStatusReady
+                          ? () => _deliverSelectedInBatch(batch)
+                          : null,
                       icon: const Icon(Icons.inventory_2_outlined),
                       label: const Text('選択一括納品'),
                       style: ElevatedButton.styleFrom(
@@ -934,7 +1019,7 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
             children: [
               Checkbox(
                 value: delivered ? false : selected,
-                onChanged: delivered
+                onChanged: delivered || !_deliveryStatusReady
                     ? null
                     : (value) {
                         setState(() {
@@ -1006,7 +1091,9 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
                     label: const Text('納品済み'),
                   )
                 : ElevatedButton.icon(
-                    onPressed: () => _deliverItem(batch, index, item),
+                    onPressed: _deliveryStatusReady
+                        ? () => _deliverItem(batch, index, item)
+                        : null,
                     icon: const Icon(Icons.inventory_2_outlined),
                     label: const Text('この商品を納品する'),
                     style: ElevatedButton.styleFrom(
