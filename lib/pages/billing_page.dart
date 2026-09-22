@@ -1517,6 +1517,107 @@ class _BillingPageState extends State<BillingPage> {
     );
   }
 
+  Future<void> _regenerateInvoicePdf(_BillingInvoiceSummary invoice) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('請求書PDFを再生成しますか？'),
+        content: Text(
+          '${invoice.invoiceNo} の保存済みPDFを、現在のレイアウトで置き換えます。'
+          '\n請求番号・請求データ・金額は変更しません。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('再生成する'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _saving = true);
+    try {
+      final invoiceDoc = await AppSession.billingInvoices.doc(invoice.id).get();
+      final data = invoiceDoc.data();
+      if (data == null) throw Exception('請求書データが見つかりません');
+      final lines = _BillingLine.fromInvoiceItems(data['items']);
+      final repaymentAddition =
+          invoice.billingMode == 'manual' && invoice.repaymentEnabled
+          ? invoice.repaymentMonthlyAmount
+          : 0;
+      final calculatedTotal =
+          _subtotalForRate(lines, 10) +
+          _subtotalForRate(lines, 8) +
+          _taxForLines(lines, 10) +
+          _taxForLines(lines, 8) +
+          repaymentAddition;
+      if (calculatedTotal != inventoryIntValue(data['total'])) {
+        throw Exception('保存済みの請求金額と明細が一致しません。請求編集で内容を確認してください');
+      }
+      final recipientRaw = data['recipient'];
+      final recipient = _BillingRecipient.fromMap(
+        recipientRaw is Map
+            ? Map<String, dynamic>.from(
+                recipientRaw.map(
+                  (key, value) => MapEntry(key.toString(), value),
+                ),
+              )
+            : <String, dynamic>{},
+      );
+      final savedPdfRef = AppSession.billingInvoicePdfs.doc(invoice.id);
+      final savedPdf = await savedPdfRef.get();
+      final savedName = (savedPdf.data()?['pdfFileName'] ?? '').toString();
+      final fileName = savedName.isEmpty
+          ? '請求書_${invoice.invoiceNo}.pdf'
+          : savedName;
+      final pdfBytes = await _buildBillingPdf(
+        kind: _BillingPdfKind.invoice,
+        assets: await _loadPdfAssets(),
+        no: invoice.invoiceNo,
+        date: _dateFromLocalField(data, 'pdfDateLocal', invoice.createdAt),
+        billingMonth: _billingMonthFromData(data, invoice),
+        storeName: invoice.storeName,
+        billingTypeText: invoice.billingItemTypesText,
+        recipient: recipient,
+        paymentDueTextOverride: (data['paymentDueText'] ?? '').toString(),
+        repaymentEnabled: invoice.repaymentEnabled,
+        repaymentCurrent: invoice.repaymentCurrent,
+        repaymentTotal: invoice.repaymentTotal,
+        repaymentMonthlyAmount: invoice.repaymentMonthlyAmount,
+        lines: lines,
+        includeRepaymentInTotal: invoice.billingMode == 'manual',
+      );
+      await savedPdfRef.set({
+        'invoiceId': invoice.id,
+        'invoiceNo': invoice.invoiceNo,
+        'pdfBase64': base64Encode(pdfBytes),
+        'pdfFileName': fileName,
+        'updatedAt': FieldValue.serverTimestamp(),
+        'updatedAtLocal': DateTime.now().toIso8601String(),
+        'updatedBy': AppSession.nickname,
+      }, SetOptions(merge: true));
+      await _openBillingPdfBytes(bytes: pdfBytes, filename: fileName);
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('請求書PDFを再生成しました')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('請求書PDFの再生成に失敗: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   Future<void> _openReceiptPdf(_BillingInvoiceSummary invoice) async {
     if (invoice.receiptId.isEmpty) return;
     final label = invoice.isShuryoshuu ? '領収書' : '受領書';
@@ -1736,8 +1837,8 @@ class _BillingPageState extends State<BillingPage> {
     if (lines.isEmpty) {
       lineChunks.add(const <_BillingLine>[]);
     } else {
-      for (var i = 0; i < lines.length; i += 9) {
-        final end = i + 9 > lines.length ? lines.length : i + 9;
+      for (var i = 0; i < lines.length; i += 6) {
+        final end = i + 6 > lines.length ? lines.length : i + 6;
         lineChunks.add(lines.sublist(i, end));
       }
     }
@@ -1746,7 +1847,8 @@ class _BillingPageState extends State<BillingPage> {
       final pageLines = lineChunks[pageIndex];
       final pageText = lineChunks.length <= 1
           ? ''
-          : '（${pageIndex + 1}/${lineChunks.length}ページ）';
+          : '${pageIndex + 1} / ${lineChunks.length} ページ';
+      final isLastPage = pageIndex == lineChunks.length - 1;
       pdf.addPage(
         pw.Page(
           pageFormat: PdfPageFormat.a4,
@@ -1761,8 +1863,8 @@ class _BillingPageState extends State<BillingPage> {
               pw.Positioned(
                 left: 58,
                 right: 58,
-                top: 66,
-                bottom: 62,
+                top: 52,
+                bottom: 42,
                 child: pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.stretch,
                   children: [
@@ -1775,13 +1877,18 @@ class _BillingPageState extends State<BillingPage> {
                             crossAxisAlignment: pw.CrossAxisAlignment.start,
                             children: [
                               pw.Text(
-                                '$title$pageText',
+                                title,
                                 style: pw.TextStyle(
                                   font: assets.boldFont,
                                   fontSize: 32,
                                   color: PdfColor.fromHex('#2D2522'),
                                 ),
                               ),
+                              if (pageText.isNotEmpty)
+                                pw.Text(
+                                  pageText,
+                                  style: const pw.TextStyle(fontSize: 9),
+                                ),
                               if (isInvoice)
                                 pw.Text(
                                   'Invoice',
@@ -1818,7 +1925,7 @@ class _BillingPageState extends State<BillingPage> {
                         ),
                       ],
                     ),
-                    pw.SizedBox(height: 48),
+                    pw.SizedBox(height: 24),
                     pw.Row(
                       crossAxisAlignment: pw.CrossAxisAlignment.start,
                       children: [
@@ -1835,7 +1942,7 @@ class _BillingPageState extends State<BillingPage> {
                         pw.SizedBox(width: 28),
                         pw.Expanded(
                           child: pw.Container(
-                            height: 128,
+                            height: 110,
                             child: pw.Stack(
                               children: [
                                 _billingAddressBlock(
@@ -1872,7 +1979,7 @@ class _BillingPageState extends State<BillingPage> {
                       margin: const pw.EdgeInsets.symmetric(horizontal: 8),
                       padding: const pw.EdgeInsets.symmetric(
                         horizontal: 18,
-                        vertical: 12,
+                        vertical: 8,
                       ),
                       decoration: pw.BoxDecoration(
                         color: PdfColor.fromHex('#FFF1F3'),
@@ -1888,7 +1995,7 @@ class _BillingPageState extends State<BillingPage> {
                         ),
                       ),
                     ),
-                    pw.SizedBox(height: 15),
+                    pw.SizedBox(height: 12),
                     pw.Row(
                       children: [
                         pw.Expanded(
@@ -1925,36 +2032,38 @@ class _BillingPageState extends State<BillingPage> {
                     ),
                     pw.SizedBox(height: 6),
                     _billingPdfTable(pageLines, assets.boldFont),
-                    pw.SizedBox(height: 8),
-                    pw.Row(
-                      mainAxisAlignment: pw.MainAxisAlignment.end,
-                      children: [
-                        _billingTotalsBox(
-                          subtotal,
-                          tax10,
-                          tax8,
-                          total,
-                          assets.boldFont,
-                          repaymentAddition: repaymentAddition,
-                        ),
-                      ],
-                    ),
-                    pw.SizedBox(height: 12),
-                    if (isInvoice)
-                      _billingBankInfo(assets.boldFont)
-                    else
-                      pw.Container(
-                        padding: const pw.EdgeInsets.all(10),
-                        decoration: pw.BoxDecoration(
-                          color: PdfColor.fromHex('#FAFAFA'),
-                          border: pw.Border.all(color: PdfColors.grey400),
-                          borderRadius: pw.BorderRadius.circular(3),
-                        ),
-                        child: pw.Text(
-                          '備考：本$docNounは、上記請求書に基づいて発行されています。',
-                          style: const pw.TextStyle(fontSize: 9),
-                        ),
+                    if (isLastPage) ...[
+                      pw.SizedBox(height: 8),
+                      pw.Row(
+                        mainAxisAlignment: pw.MainAxisAlignment.end,
+                        children: [
+                          _billingTotalsBox(
+                            subtotal,
+                            tax10,
+                            tax8,
+                            total,
+                            assets.boldFont,
+                            repaymentAddition: repaymentAddition,
+                          ),
+                        ],
                       ),
+                      pw.SizedBox(height: 12),
+                      if (isInvoice)
+                        _billingBankInfo(assets.boldFont)
+                      else
+                        pw.Container(
+                          padding: const pw.EdgeInsets.all(10),
+                          decoration: pw.BoxDecoration(
+                            color: PdfColor.fromHex('#FAFAFA'),
+                            border: pw.Border.all(color: PdfColors.grey400),
+                            borderRadius: pw.BorderRadius.circular(3),
+                          ),
+                          child: pw.Text(
+                            '備考：本$docNounは、上記請求書に基づいて発行されています。',
+                            style: const pw.TextStyle(fontSize: 9),
+                          ),
+                        ),
+                    ],
                   ],
                 ),
               ),
@@ -2225,7 +2334,6 @@ class _BillingPageState extends State<BillingPage> {
   );
 
   pw.Widget _billingPdfTable(List<_BillingLine> rows, pw.Font fontBold) {
-    final visibleRows = rows.take(9).toList();
     return pw.Table(
       border: pw.TableBorder.symmetric(
         inside: const pw.BorderSide(color: PdfColors.grey500, width: .45),
@@ -2255,36 +2363,19 @@ class _BillingPageState extends State<BillingPage> {
               )
               .toList(),
         ),
-        for (int i = 0; i < 9; i++)
+        for (int i = 0; i < rows.length; i++)
           pw.TableRow(
             decoration: i.isOdd
                 ? pw.BoxDecoration(color: PdfColor.fromHex('#FDE8E9'))
                 : null,
-            children: i < visibleRows.length
-                ? [
-                    _billingPdfCell(
-                      '${visibleRows[i].itemName}（コード:${visibleRows[i].itemCode}）',
-                    ),
-                    _billingPdfCell('${visibleRows[i].qty}', right: true),
-                    _billingPdfCell('個', center: true),
-                    _billingPdfCell('${visibleRows[i].taxRate}%', center: true),
-                    _billingPdfCell(
-                      '￥${_yen(visibleRows[i].unitPrice)}',
-                      right: true,
-                    ),
-                    _billingPdfCell(
-                      '￥${_yen(visibleRows[i].amount)}',
-                      right: true,
-                    ),
-                  ]
-                : [
-                    _billingPdfCell(''),
-                    _billingPdfCell(''),
-                    _billingPdfCell(''),
-                    _billingPdfCell(''),
-                    _billingPdfCell(''),
-                    _billingPdfCell('￥0', right: true),
-                  ],
+            children: [
+              _billingPdfCell('${rows[i].itemName}（コード:${rows[i].itemCode}）'),
+              _billingPdfCell('${rows[i].qty}', right: true),
+              _billingPdfCell('個', center: true),
+              _billingPdfCell('${rows[i].taxRate}%', center: true),
+              _billingPdfCell('￥${_yen(rows[i].unitPrice)}', right: true),
+              _billingPdfCell('￥${_yen(rows[i].amount)}', right: true),
+            ],
           ),
       ],
     );
@@ -5089,6 +5180,12 @@ class _BillingPageState extends State<BillingPage> {
                                 ? null
                                 : () => _editInvoicePdf(invoice),
                             child: const Text('請求編集'),
+                          ),
+                          OutlinedButton(
+                            onPressed: _saving
+                                ? null
+                                : () => _regenerateInvoicePdf(invoice),
+                            child: const Text('PDF再生成'),
                           ),
                         ],
                         ElevatedButton(
