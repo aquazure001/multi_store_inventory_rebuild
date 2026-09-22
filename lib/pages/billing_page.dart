@@ -898,7 +898,7 @@ class _BillingPageState extends State<BillingPage> {
           'enabled': _repaymentEnabled,
           'current': inventoryIntValue(_repaymentCurrentController.text),
           'total': inventoryIntValue(_repaymentTotalController.text),
-          'monthlyAmount': inventoryIntValue(_repaymentAmountController.text),
+          'monthlyAmount': _billingInputInt(_repaymentAmountController.text),
         },
         'updatedAt': FieldValue.serverTimestamp(),
         'updatedAtLocal': DateTime.now().toIso8601String(),
@@ -992,7 +992,17 @@ class _BillingPageState extends State<BillingPage> {
   int get _targetSubtotal8 => _subtotalForRate(_targetPricedLines, 8);
   int get _targetTax10 => _taxForLines(_targetPricedLines, 10);
   int get _targetTax8 => _taxForLines(_targetPricedLines, 8);
-  int get _targetTotal => _targetSubtotal + _targetTax10 + _targetTax8;
+  int get _monthlyRepaymentAmount =>
+      _repaymentEnabled ? _billingInputInt(_repaymentAmountController.text) : 0;
+
+  bool get _repaymentOnlyInvoice =>
+      _invoiceTargetLines.isEmpty && _monthlyRepaymentAmount > 0;
+
+  int get _targetTotal =>
+      _targetSubtotal +
+      _targetTax10 +
+      _targetTax8 +
+      (_repaymentOnlyInvoice ? _monthlyRepaymentAmount : 0);
 
   bool get _alreadyIssuedForSelectedMonthStore => false;
 
@@ -1044,7 +1054,9 @@ class _BillingPageState extends State<BillingPage> {
       return;
     }
 
-    if (_selectedBillingTypes.isEmpty) {
+    final lines = _invoiceTargetLines;
+    final repaymentOnly = _repaymentOnlyInvoice;
+    if (_selectedBillingTypes.isEmpty && !repaymentOnly) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('商品・テスター・備品のいずれかを選択してください'),
@@ -1054,11 +1066,10 @@ class _BillingPageState extends State<BillingPage> {
       return;
     }
 
-    final lines = _invoiceTargetLines;
-    if (lines.isEmpty) {
+    if (lines.isEmpty && !repaymentOnly) {
       if (!mounted) return;
       final message = _invoiceCandidateLines.isEmpty
-          ? 'この店舗・この月の未請求明細がありません'
+          ? 'この店舗・この月の未請求明細がありません。定期返済のみ請求する場合は毎月返済額を入力してください'
           : '請求する明細にチェックを入れてください';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(message), backgroundColor: Colors.orange),
@@ -1088,14 +1099,49 @@ class _BillingPageState extends State<BillingPage> {
         subtotal10 +
         _taxForLines(pricedLines, 10) +
         subtotal8 +
-        _taxForLines(pricedLines, 8);
+        _taxForLines(pricedLines, 8) +
+        (repaymentOnly ? _monthlyRepaymentAmount : 0);
+    final confirmationText = repaymentOnly
+        ? '$storeName / $periodText の定期返済 ￥${_yen(_monthlyRepaymentAmount)} を請求します。'
+        : '$storeName / $periodText の発注明細 ${lines.length} 件をまとめます。';
+    if (repaymentOnly) {
+      try {
+        final existing = await AppSession.billingInvoices
+            .where(
+              'monthStoreKey',
+              isEqualTo: _monthStoreKey(_selectedMonth, _selectedStoreId),
+            )
+            .get();
+        if (existing.docs.any((doc) {
+          final data = doc.data();
+          return data['billingMode'] == 'monthly_repayment_only' &&
+              data['status'] == 'issued';
+        })) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('この店舗・対象月の定期返済のみの請求書は発行済みです'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+          return;
+        }
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('発行済み請求書の確認に失敗: $e')));
+        return;
+      }
+    }
+    if (!mounted) return;
 
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('月次請求書を作成しますか？'),
         content: Text(
-          '$storeName / $periodText の発注明細 ${lines.length} 件をまとめます。\n'
+          '$confirmationText\n'
           'お支払期限: $dueText\n'
           '合計 ￥${_yen(totalWithTax)} の請求書PDFを作成して保存します。',
         ),
@@ -1126,16 +1172,15 @@ class _BillingPageState extends State<BillingPage> {
         date: issuedAt,
         billingMonth: _selectedMonth,
         storeName: storeName,
-        billingTypeText: _selectedBillingTypeText,
+        billingTypeText: repaymentOnly ? '定期返済' : _selectedBillingTypeText,
         recipient: recipient,
         paymentDueTextOverride: null,
         repaymentEnabled: _repaymentEnabled,
         repaymentCurrent: inventoryIntValue(_repaymentCurrentController.text),
         repaymentTotal: inventoryIntValue(_repaymentTotalController.text),
-        repaymentMonthlyAmount: inventoryIntValue(
-          _repaymentAmountController.text,
-        ),
+        repaymentMonthlyAmount: _monthlyRepaymentAmount,
         lines: pricedLines,
+        includeRepaymentInTotal: repaymentOnly,
       );
       final invoiceRef = AppSession.billingInvoices.doc();
       final invoiceData = _invoiceData(
@@ -1148,6 +1193,7 @@ class _BillingPageState extends State<BillingPage> {
         storeName,
         recipient,
         pricedLines,
+        repaymentOnly: repaymentOnly,
       );
       await invoiceRef.set(invoiceData);
       await AppSession.billingInvoicePdfs.doc(invoiceRef.id).set({
@@ -1433,8 +1479,9 @@ class _BillingPageState extends State<BillingPage> {
     String storeId,
     String storeName,
     _BillingRecipient recipient,
-    List<_BillingLine> lines,
-  ) {
+    List<_BillingLine> lines, {
+    bool repaymentOnly = false,
+  }) {
     final subtotal10 = _subtotalForRate(lines, 10);
     final subtotal8 = _subtotalForRate(lines, 8);
     final subtotal = subtotal10 + subtotal8;
@@ -1451,10 +1498,14 @@ class _BillingPageState extends State<BillingPage> {
       'createdByUid': AppSession.uid,
       'createdByEmail': AppSession.email,
       'status': 'issued',
-      'billingMode': 'monthly_store_type_filter',
-      'billingItemTypes': _billingTypeOrder
-          .where((type) => _selectedBillingTypes.contains(type))
-          .toList(),
+      'billingMode': repaymentOnly
+          ? 'monthly_repayment_only'
+          : 'monthly_store_type_filter',
+      'billingItemTypes': repaymentOnly
+          ? ['定期返済']
+          : _billingTypeOrder
+                .where((type) => _selectedBillingTypes.contains(type))
+                .toList(),
       'billingMonth': _monthKey(billingMonth),
       'billingYear': billingMonth.year,
       'billingMonthNumber': billingMonth.month,
@@ -1472,13 +1523,16 @@ class _BillingPageState extends State<BillingPage> {
       'subtotal8': subtotal8,
       'tax10': tax10,
       'tax8': tax8,
-      'total': subtotal + tax10 + tax8,
+      'total':
+          subtotal +
+          tax10 +
+          tax8 +
+          (repaymentOnly ? _monthlyRepaymentAmount : 0),
       'repaymentEnabled': _repaymentEnabled,
       'repaymentCurrent': inventoryIntValue(_repaymentCurrentController.text),
       'repaymentTotal': inventoryIntValue(_repaymentTotalController.text),
-      'repaymentMonthlyAmount': inventoryIntValue(
-        _repaymentAmountController.text,
-      ),
+      'repaymentMonthlyAmount': _monthlyRepaymentAmount,
+      'repaymentIncludedInTotal': repaymentOnly,
       'items': lines.map((line) => line.toInvoiceMap(line.unitPrice)).toList(),
       'hasSavedPdf': true,
     };
@@ -1546,8 +1600,10 @@ class _BillingPageState extends State<BillingPage> {
       final data = invoiceDoc.data();
       if (data == null) throw Exception('請求書データが見つかりません');
       final lines = _BillingLine.fromInvoiceItems(data['items']);
-      final repaymentAddition =
-          invoice.billingMode == 'manual' && invoice.repaymentEnabled
+      final includesRepayment =
+          invoice.billingMode == 'manual' ||
+          invoice.billingMode == 'monthly_repayment_only';
+      final repaymentAddition = includesRepayment && invoice.repaymentEnabled
           ? invoice.repaymentMonthlyAmount
           : 0;
       final calculatedTotal =
@@ -1590,7 +1646,7 @@ class _BillingPageState extends State<BillingPage> {
         repaymentTotal: invoice.repaymentTotal,
         repaymentMonthlyAmount: invoice.repaymentMonthlyAmount,
         lines: lines,
-        includeRepaymentInTotal: invoice.billingMode == 'manual',
+        includeRepaymentInTotal: includesRepayment,
       );
       await savedPdfRef.set({
         'invoiceId': invoice.id,
@@ -1716,6 +1772,8 @@ class _BillingPageState extends State<BillingPage> {
         repaymentTotal: invoice.repaymentTotal,
         repaymentMonthlyAmount: invoice.repaymentMonthlyAmount,
         lines: lines,
+        includeRepaymentInTotal:
+            invoice.billingMode == 'monthly_repayment_only',
       );
       final receiptRef = AppSession.billingReceipts.doc();
       await receiptRef.set({
@@ -1807,8 +1865,7 @@ class _BillingPageState extends State<BillingPage> {
     required int repaymentTotal,
     required int repaymentMonthlyAmount,
     required List<_BillingLine> lines,
-    // 任意請求書・任意受領書のみ、毎月返済額を合計に上乗せする
-    // （自動集計の月次請求は現状維持のため既定はfalse）。
+    // 任意書類と返済のみの月次請求では、返済額を合計に含める。
     bool includeRepaymentInTotal = false,
   }) async {
     final pdf = pw.Document();
@@ -1826,6 +1883,7 @@ class _BillingPageState extends State<BillingPage> {
         ? repaymentMonthlyAmount
         : 0;
     final total = subtotal + tax10 + tax8 + repaymentAddition;
+    final repaymentOnly = lines.isEmpty && repaymentAddition > 0;
     final title = isInvoice ? 'ご請求書' : docNoun;
     final mascot = isInvoice ? assets.mascotInvoice : assets.mascotReceipt;
     final effectivePaymentDueText =
@@ -2000,7 +2058,11 @@ class _BillingPageState extends State<BillingPage> {
                       children: [
                         pw.Expanded(
                           child: _billingAmountBox(
-                            isInvoice ? 'ご請求金額(税込10%)' : '$actionNoun金額(税込10%)',
+                            repaymentOnly
+                                ? (isInvoice ? 'ご請求金額' : '$actionNoun金額')
+                                : (isInvoice
+                                      ? 'ご請求金額(税込10%)'
+                                      : '$actionNoun金額(税込10%)'),
                             total,
                             assets.boldFont,
                           ),
@@ -2031,7 +2093,11 @@ class _BillingPageState extends State<BillingPage> {
                       ),
                     ),
                     pw.SizedBox(height: 6),
-                    _billingPdfTable(pageLines, assets.boldFont),
+                    _billingPdfTable(
+                      pageLines,
+                      assets.boldFont,
+                      repaymentAmount: repaymentOnly ? repaymentAddition : 0,
+                    ),
                     if (isLastPage) ...[
                       pw.SizedBox(height: 8),
                       pw.Row(
@@ -2333,7 +2399,11 @@ class _BillingPageState extends State<BillingPage> {
     ],
   );
 
-  pw.Widget _billingPdfTable(List<_BillingLine> rows, pw.Font fontBold) {
+  pw.Widget _billingPdfTable(
+    List<_BillingLine> rows,
+    pw.Font fontBold, {
+    int repaymentAmount = 0,
+  }) {
     return pw.Table(
       border: pw.TableBorder.symmetric(
         inside: const pw.BorderSide(color: PdfColors.grey500, width: .45),
@@ -2375,6 +2445,17 @@ class _BillingPageState extends State<BillingPage> {
               _billingPdfCell('${rows[i].taxRate}%', center: true),
               _billingPdfCell('￥${_yen(rows[i].unitPrice)}', right: true),
               _billingPdfCell('￥${_yen(rows[i].amount)}', right: true),
+            ],
+          ),
+        if (repaymentAmount > 0)
+          pw.TableRow(
+            children: [
+              _billingPdfCell('定期返済'),
+              _billingPdfCell('1', right: true),
+              _billingPdfCell('回', center: true),
+              _billingPdfCell('-', center: true),
+              _billingPdfCell('￥${_yen(repaymentAmount)}', right: true),
+              _billingPdfCell('￥${_yen(repaymentAmount)}', right: true),
             ],
           ),
       ],
@@ -2933,6 +3014,7 @@ class _BillingPageState extends State<BillingPage> {
                     child: TextField(
                       controller: _repaymentAmountController,
                       keyboardType: TextInputType.number,
+                      onChanged: (_) => setState(() {}),
                       decoration: const InputDecoration(
                         border: OutlineInputBorder(),
                         labelText: '毎月返済額',
@@ -2997,7 +3079,7 @@ class _BillingPageState extends State<BillingPage> {
               ),
               child: Text(
                 '対象: ${_selectedStoreName().isEmpty ? '店舗未選択' : _selectedStoreName()} / ${_periodText(_selectedMonth)}\n'
-                '選択 ${_invoiceTargetLines.length}件 / 表示 ${_invoiceCandidateLines.length}件 / 合計 ￥${_yen(_targetTotal)}\n'
+                '選択 ${_invoiceTargetLines.length}件 / 表示 ${_invoiceCandidateLines.length}件 / 合計 ￥${_yen(_targetTotal)}${_repaymentOnlyInvoice ? '（定期返済のみ）' : ''}\n'
                 '税10% ￥${_yen(_targetTax10)} / 軽減8% ￥${_yen(_targetTax8)}\n'
                 '締切: ${_paymentDueTextForMonth(_selectedMonth)}',
                 style: const TextStyle(fontWeight: FontWeight.bold),
@@ -3007,15 +3089,20 @@ class _BillingPageState extends State<BillingPage> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: _saving || _alreadyIssuedForSelectedMonthStore
+                onPressed:
+                    _saving ||
+                        _alreadyIssuedForSelectedMonthStore ||
+                        (isShuryoshuu && _invoiceTargetLines.isEmpty)
                     ? null
                     : (isShuryoshuu
                           ? _createMonthlyShuryoshuu
                           : _createInvoice),
                 icon: const Icon(Icons.picture_as_pdf),
                 label: Text(
-                  _selectedBillingTypes.isEmpty
+                  _selectedBillingTypes.isEmpty && !_repaymentOnlyInvoice
                       ? '種別を選択してください'
+                      : _repaymentOnlyInvoice && !isShuryoshuu
+                      ? '定期返済のみで請求書PDF作成'
                       : '選択種別で${docLabel}PDF作成',
                 ),
               ),
@@ -5159,7 +5246,7 @@ class _BillingPageState extends State<BillingPage> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '${invoice.billingMonthLabel} / ${invoice.billingItemTypesText} / 締切 ${invoice.paymentDueText} / ${invoice.itemCount}明細',
+                      '${invoice.billingMonthLabel} / ${invoice.billingItemTypesText} / 締切 ${invoice.paymentDueText} / ${invoice.billingMode == 'monthly_repayment_only' ? '定期返済のみ' : '${invoice.itemCount}明細'}',
                       softWrap: true,
                     ),
                     const SizedBox(height: 10),
@@ -5175,12 +5262,13 @@ class _BillingPageState extends State<BillingPage> {
                                 : () => _openInvoicePdf(invoice),
                             child: const Text('請求書'),
                           ),
-                          OutlinedButton(
-                            onPressed: _saving
-                                ? null
-                                : () => _editInvoicePdf(invoice),
-                            child: const Text('請求編集'),
-                          ),
+                          if (invoice.billingMode != 'monthly_repayment_only')
+                            OutlinedButton(
+                              onPressed: _saving
+                                  ? null
+                                  : () => _editInvoicePdf(invoice),
+                              child: const Text('請求編集'),
+                            ),
                           OutlinedButton(
                             onPressed: _saving
                                 ? null
@@ -5198,7 +5286,8 @@ class _BillingPageState extends State<BillingPage> {
                                 : (invoice.isShuryoshuu ? '領収書' : '受領書'),
                           ),
                         ),
-                        if (invoice.receiptId.isNotEmpty)
+                        if (invoice.receiptId.isNotEmpty &&
+                            invoice.billingMode != 'monthly_repayment_only')
                           OutlinedButton(
                             onPressed: _saving
                                 ? null
