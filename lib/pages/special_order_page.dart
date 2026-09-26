@@ -6,6 +6,12 @@ part of '../main.dart';
 
 enum _MasterAddResult { added, alreadyExists, skipped }
 
+// 警告判定用のホームケアセットのグループ（代替可能な商品）。表示は各コード
+// 独立のまま、「追加発注が必要です」の判定だけをグループ合算の在庫数で行う。
+const _homeCareLotGroups = <({String label, List<String> codes})>[
+  (label: 'D(1641)・C(1642)', codes: ['1641', '1642']),
+];
+
 class SpecialOrderPage extends StatefulWidget {
   const SpecialOrderPage({super.key, this.showExpiredOnly = false});
 
@@ -304,6 +310,41 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     return base64Url.encode(utf8.encode(base)).replaceAll('=', '');
   }
 
+  String _homeCareLotKeyForCode(String code) =>
+      base64Url.encode(utf8.encode(_normalizeCode(code))).replaceAll('=', '');
+
+  ({String label, List<String> codes})? _homeCareGroupForLotKey(String lotKey) {
+    for (final group in _homeCareLotGroups) {
+      if (group.codes.map(_homeCareLotKeyForCode).contains(lotKey)) {
+        return group;
+      }
+    }
+    return null;
+  }
+
+  // 警告判定用グループの合算値（在庫数 = 発注済みの在庫 − 引渡し済み − 未引き渡し、
+  // および発注中の合計）。グループに属さないロットは null。
+  ({String label, int stockCount, int orderedTotal})? _homeCareWarningGroupFor(
+    String lotKey,
+  ) {
+    final group = _homeCareGroupForLotKey(lotKey);
+    if (group == null) return null;
+    var stockCount = 0;
+    var orderedTotal = 0;
+    for (final key in group.codes.map(_homeCareLotKeyForCode)) {
+      stockCount +=
+          (_homeCareLots[key]?.remaining ?? 0) -
+          _homeCareDeliveredTotalForLot(key) -
+          _homeCarePendingTotalForLot(key);
+      orderedTotal += _homeCareOrderedLotQtyForLot(key);
+    }
+    return (
+      label: group.label,
+      stockCount: stockCount,
+      orderedTotal: orderedTotal,
+    );
+  }
+
   _HomeCareLotStock _homeCareLotFor(SpecialOrderItem item) {
     final key = _homeCareLotKey(item);
     return _homeCareLots[key] ??
@@ -455,6 +496,20 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     return _homeCareCustomerOrdersForLot(lotKey)
         .where((entry) => !entry.delivered)
         .fold(0, (total, entry) => total + entry.qty);
+  }
+
+  // 引渡し済み合計: そのロットの顧客別仮発注のうち delivered == true の qty 合計。
+  int _homeCareDeliveredTotalForLot(String lotKey) {
+    return _homeCareCustomerOrdersForLot(lotKey)
+        .where((entry) => entry.delivered)
+        .fold(0, (total, entry) => total + entry.qty);
+  }
+
+  // 発注中合計: そのロットのロット発注のうち未入荷（status == 'ordered'）の qty 合計。
+  int _homeCareOrderedLotQtyForLot(String lotKey) {
+    return _homeCareLotOrdersForLot(lotKey)
+        .where((order) => !order.isArrived)
+        .fold(0, (total, order) => total + order.qty);
   }
 
   // ── 新商品タブ：ロット在庫・顧客別仮発注 ─────────────────────
@@ -930,7 +985,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         title: Text(delivered ? '引渡し済みにしますか？' : '引渡し済みを解除しますか？'),
         content: Text(
           '${entry.customerCode} / ${entry.customerName.isEmpty ? '-' : entry.customerName}\n${entry.qty} 個\n\n'
-          '${delivered ? 'この仮発注を引渡し済みにします。未引き渡し在庫から外れ、在庫数が増えます。' : '引渡し済みを解除します。未引き渡し在庫に戻り、在庫数が減ります。'}',
+          '${delivered ? 'この仮発注を引渡し済みにします。未引き渡し在庫から外れ、引渡し済みに移ります（在庫数は変わりません）。' : '引渡し済みを解除します。引渡し済みから未引き渡し在庫に戻ります（在庫数は変わりません）。'}',
         ),
         actions: [
           TextButton(
@@ -3470,13 +3525,88 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     return keys.map((key) => '$key ${byStore[key]}個').join(' / ');
   }
 
+  Widget _lotBigStat(
+    String label,
+    String value, {
+    Color? valueColor,
+    String? note,
+  }) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 3),
+    child: Row(
+      children: [
+        SizedBox(
+          width: 104,
+          child: Text(
+            label,
+            style: TextStyle(fontSize: 13, color: Colors.blueGrey.shade800),
+          ),
+        ),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: valueColor ?? Colors.black87,
+          ),
+        ),
+        if (note != null) ...[
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              note,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: valueColor ?? Colors.black87,
+              ),
+            ),
+          ),
+        ],
+      ],
+    ),
+  );
+
+  // 在庫数の行。数字はそのロット単独の値を表示する。
+  // 判定は、マイナスでも発注中で賄えるなら黒字で注記、賄えなければ赤字で警告。
+  // warningGroup があるときは、判定だけをグループ合算の値で行う。
+  Widget _lotStockCountStat({
+    required int stockCount,
+    required int orderedTotal,
+    ({String label, int stockCount, int orderedTotal})? warningGroup,
+  }) {
+    final judgeStock = warningGroup?.stockCount ?? stockCount;
+    final judgeOrdered = warningGroup?.orderedTotal ?? orderedTotal;
+    final value = stockCount < 0 ? '−${stockCount.abs()} 個' : '$stockCount 個';
+    if (judgeStock < 0 && judgeStock + judgeOrdered < 0) {
+      return _lotBigStat(
+        '在庫数',
+        value,
+        valueColor: Colors.red.shade700,
+        note: warningGroup == null
+            ? '追加発注が必要です'
+            : '追加発注が必要です（${warningGroup.label} 合算）',
+      );
+    }
+    if (stockCount >= 0) return _lotBigStat('在庫数', value);
+    return _lotBigStat(
+      '在庫数',
+      value,
+      note: judgeStock >= 0
+          ? '${warningGroup?.label ?? ''} 合算で在庫あり'
+          : '発注済みのため対応不要',
+    );
+  }
+
   // ── 新商品タブ：集計表示ボックス（顧客コード欄なし） ─────────────
   // 「新商品」「ホームケアセット」共通の集計表示ボックス（青いボックス、
   // 顧客コード欄なし）。以下の3つを最上部に大きく表示する:
   //   発注済みの在庫 = remaining（当社に届いている総数）
   //   未引き渡し在庫 = pendingTotal（delivered==false の qty 合計）
   //   在庫数        = 発注済みの在庫 − 未引き渡し在庫（マイナスは赤字警告）
-  // remaining は統括管理者のみ編集できる。
+  // ホームケアセット（remainingIsCumulative: true）は remaining が入荷の累計のため、
+  //   在庫数 = 発注済みの在庫 − 引渡し済み − 未引き渡し在庫
+  // とし、マイナスでも発注中（orderedTotal）で賄えるなら警告を出さない。
+  // remaining は管理者・統括管理者が編集できる（_canManageSpecialStock）。
   Widget _buildLotSummaryBox({
     required String title,
     String? subtitle,
@@ -3486,6 +3616,10 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     required int deliveredTotal,
     required int reservedTotal,
     required int remaining,
+    bool remainingIsCumulative = false,
+    int orderedTotal = 0,
+    // 警告判定用グループの合算値。あれば赤字/黒字の判定だけこちらで行う。
+    ({String label, int stockCount, int orderedTotal})? warningGroup,
     // currentStock 系はホームケアでは廃止済み。null のとき現在在庫チップと
     // 「現在在庫」「納品済みにする数」の入力欄を表示しない。
     int? currentStock,
@@ -3514,49 +3648,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       ),
     );
 
-    // 在庫数 = 発注済みの在庫 − 未引き渡し在庫（マイナスは追加発注が必要）。
-    final stockCount = remaining - pendingTotal;
-
-    Widget bigStat(
-      String label,
-      String value, {
-      Color? valueColor,
-      String? note,
-    }) => Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 104,
-            child: Text(
-              label,
-              style: TextStyle(fontSize: 13, color: Colors.blueGrey.shade800),
-            ),
-          ),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              color: valueColor ?? Colors.black87,
-            ),
-          ),
-          if (note != null) ...[
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                note,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  color: valueColor ?? Colors.black87,
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
+    final stockCount = remainingIsCumulative
+        ? remaining - deliveredTotal - pendingTotal
+        : remaining - pendingTotal;
 
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
@@ -3599,18 +3693,17 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                bigStat('発注済みの在庫', '$remaining 個'),
-                bigStat('未引き渡し在庫', '$pendingTotal 個'),
+                _lotBigStat('発注済みの在庫', '$remaining 個'),
+                if (remainingIsCumulative)
+                  _lotBigStat('引渡し済み', '$deliveredTotal 個'),
+                _lotBigStat('未引き渡し在庫', '$pendingTotal 個'),
+                if (orderedTotal > 0) _lotBigStat('発注中', '$orderedTotal 個'),
                 const Divider(height: 14),
-                if (stockCount < 0)
-                  bigStat(
-                    '在庫数',
-                    '−${stockCount.abs()} 個',
-                    valueColor: Colors.red.shade700,
-                    note: '追加発注が必要です',
-                  )
-                else
-                  bigStat('在庫数', '$stockCount 個'),
+                _lotStockCountStat(
+                  stockCount: stockCount,
+                  orderedTotal: orderedTotal,
+                  warningGroup: warningGroup,
+                ),
               ],
             ),
           ),
@@ -4204,9 +4297,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     final orders = _homeCareCustomerOrdersForLot(lot.key);
     final count = orders.length;
     final total = orders.fold(0, (total, entry) => total + entry.qty);
-    final deliveredTotal = orders
-        .where((entry) => entry.delivered)
-        .fold(0, (total, entry) => total + entry.qty);
+    final deliveredTotal = _homeCareDeliveredTotalForLot(lot.key);
     // 未引き渡し在庫 = delivered == false の qty 合計。
     final pendingTotal = _homeCarePendingTotalForLot(lot.key);
 
@@ -4223,6 +4314,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           deliveredTotal: deliveredTotal,
           reservedTotal: _reservedTotalForHomeCareLot(lot.key),
           remaining: lot.remaining,
+          remainingIsCumulative: true,
+          orderedTotal: _homeCareOrderedLotQtyForLot(lot.key),
+          warningGroup: _homeCareWarningGroupFor(lot.key),
           reservedStoreBreakdown: _reservedStoreBreakdownForHomeCareLot(
             lot.key,
           ),
@@ -4297,8 +4391,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '在庫数 = 発注済みの在庫（統括管理者が設定した当社への納品総数）'
-                  ' − 未引き渡し在庫（引渡し前の顧客別仮発注の合計）。',
+                  '在庫数 = 発注済みの在庫（当社に入荷した累計）'
+                  ' − 引渡し済み − 未引き渡し在庫（引渡し前の顧客別仮発注の合計）。'
+                  'マイナスでも発注中の数量で賄える場合は警告しません。',
                   style: TextStyle(
                     fontSize: 12,
                     color: Colors.blueGrey.shade700,
