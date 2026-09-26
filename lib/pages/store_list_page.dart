@@ -907,6 +907,60 @@ class _StoreListPageState extends State<StoreListPage> {
                 );
               },
             ),
+          if (AppSession.isSuperAdmin)
+            StreamBuilder<QuerySnapshot>(
+              // 複合インデックス不要にするため status での絞り込みはアプリ側で行う
+              stream: FirebaseFirestore.instance
+                  .collection('deletionRequests')
+                  .orderBy('requestedAt', descending: true)
+                  .snapshots(),
+              builder: (context, snap) {
+                final count =
+                    snap.data?.docs
+                        .where((d) => (d.data() as Map)['status'] != 'handled')
+                        .length ??
+                    0;
+                return Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.person_off_outlined),
+                      tooltip: 'アカウント無効化依頼',
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const DeletionRequestsPage(),
+                        ),
+                      ),
+                    ),
+                    if (count > 0)
+                      Positioned(
+                        top: 8,
+                        right: 8,
+                        child: Container(
+                          padding: const EdgeInsets.all(3),
+                          decoration: const BoxDecoration(
+                            color: Colors.red,
+                            shape: BoxShape.circle,
+                          ),
+                          constraints: const BoxConstraints(
+                            minWidth: 16,
+                            minHeight: 16,
+                          ),
+                          child: Text(
+                            '$count',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert),
             onSelected: (value) async {

@@ -183,6 +183,32 @@ service cloud.firestore {
         (isSuperAdmin() || isOrgAdmin(orgId));
     }
 
+    // ── deletionRequests（メンバー削除時のアカウント無効化依頼）──
+    // 読み取り: 統括管理者のみ
+    // 作成: 組織管理者が自組織メンバーを削除する際、users更新と同じ
+    //       WriteBatch で作成する。バッチ内の get() は書き込み前の状態を
+    //       返すため「削除直前まで自組織のメンバーだったか」を確認できる。
+    // 更新: 統括管理者が対応状況（status/handledAt/handledBy）のみ変更可
+    // 削除: 不可（履歴として残す）
+    match /deletionRequests/{id} {
+      allow read: if isSuperAdmin();
+      allow create: if isSignedIn()
+        && request.resource.data.keys().hasOnly([
+             'targetUid', 'targetEmail', 'orgId', 'orgName',
+             'requestedByUid', 'requestedByNickname', 'requestedAt', 'status'])
+        && request.resource.data.requestedByUid == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.requestedAt == request.time
+        && isOrgAdmin(request.resource.data.orgId)
+        && get(/databases/$(database)/documents/users/$(request.resource.data.targetUid)).data.orgId
+             == request.resource.data.orgId;
+      allow update: if isSuperAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['status', 'handledAt', 'handledBy'])
+        && request.resource.data.status in ['pending', 'handled'];
+      allow delete: if false;
+    }
+
     // ── organizations（旧システムの組織コレクション・移行専用）──
     // 読み取りのみ維持（初回ログイン時の自動移行チェックで使用）。
     // 現行コードはこのコレクションに書き込まないため、書き込みは禁止。

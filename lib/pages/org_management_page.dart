@@ -506,29 +506,71 @@ class _OrgManagementPageState extends State<OrgManagementPage> {
   }
 
   Future<void> _removeMember(String uid, String email) async {
+    var requestDisable = true;
     final confirm = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('メンバーを削除'),
-        content: Text('$email をメンバーから削除しますか？\n削除後、そのユーザーは組織設定画面へ移動します。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('キャンセル'),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('メンバーを削除'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('$email をメンバーから削除しますか？\n削除後、そのユーザーは組織設定画面へ移動します。'),
+              const SizedBox(height: 12),
+              CheckboxListTile(
+                value: requestDisable,
+                onChanged: (v) =>
+                    setDialogState(() => requestDisable = v ?? false),
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text(
+                  '統括管理者にアカウント無効化を依頼する',
+                  style: TextStyle(fontSize: 14),
+                ),
+                subtitle: const Text(
+                  '（ログイン自体をできなくします）',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ),
+            ],
           ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('削除', style: TextStyle(color: Colors.red)),
-          ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('キャンセル'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('削除', style: TextStyle(color: Colors.red)),
+            ),
+          ],
+        ),
       ),
     );
     if (confirm != true) return;
     try {
-      await FirebaseFirestore.instance.collection('users').doc(uid).update({
+      final fs = FirebaseFirestore.instance;
+      // users更新と削除依頼の作成を同時に行う（ルール側で「削除直前まで
+      // 自組織のメンバーだったか」を確認するため、別々に書き込まない）
+      final batch = fs.batch();
+      batch.update(fs.collection('users').doc(uid), {
         'orgId': '',
         'role': 'admin',
       });
+      if (requestDisable) {
+        batch.set(fs.collection('deletionRequests').doc(), {
+          'targetUid': uid,
+          'targetEmail': email,
+          'orgId': AppSession.orgId,
+          'orgName': _orgName,
+          'requestedByUid': AppSession.uid,
+          'requestedByNickname': AppSession.nickname,
+          'requestedAt': FieldValue.serverTimestamp(),
+          'status': 'pending',
+        });
+      }
+      await batch.commit();
       _load();
     } catch (e) {
       if (mounted) {

@@ -37,6 +37,7 @@ part 'pages/auth_pages.dart';
 part 'pages/org_management_page.dart';
 part 'pages/ad_pages.dart';
 part 'pages/admin_review_pages.dart';
+part 'pages/deletion_requests_page.dart';
 part 'pages/legal_page.dart';
 part 'pages/item_master_page.dart';
 part 'pages/discontinued_testers_page.dart';
