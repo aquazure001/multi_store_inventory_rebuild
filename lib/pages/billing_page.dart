@@ -34,6 +34,10 @@ class BillingPage extends StatefulWidget {
 
 class _BillingPageState extends State<BillingPage> {
   bool _loading = true;
+  // 発注バッチ（明細ライン）の読み込み中フラグ。
+  // ページシェル（請求書一覧・フォーム）を先に表示し、重いバッチ読み取りは
+  // 背景で行う二段階ローディング用。
+  bool _linesLoading = false;
   bool _saving = false;
   bool _showBilled = false;
   String? _error;
@@ -123,13 +127,18 @@ class _BillingPageState extends State<BillingPage> {
     });
 
     try {
-      // 可視性・請求書一覧・単価マスタ・発注バッチ・マスタを1回の並列読み取りに
-      // まとめる。billing_visibilityを先に直列で取得すると往復待ちが1回分増え、
-      // 請求・受領管理ページの初回表示が遅くなる。非開示/確認待ち店舗の除外は
-      // 取得後のクライアント側フィルタで行う。
+      // 五感上の開きの速さ優先設計:
+      // ①先にマスタ読み取りのFutureだけ起動して待たない（店舗マスタ・商品マスタ等は
+      //   まとめて1コレクション1ドキュメントで重い。シェル表示には不要）。
+      // ②軽い読み取り（可視性・請求書一覧・単価マスタ）を並列で待って
+      //   ページシェルを即表示（_loading=false / _linesLoading=true）。
+      // ③最も重い発注バッチ（全日の発注明細配列）を②と並行ではなく
+      //   その後で取得し、明細リストだけ後から差し込む。
+      // 非開示/確認待ち店舗の除外は取得後のクライアント側フィルタで行う。
       // Firestoreのwhere-not-inは10件までの制約があるため、対象が
       // 11件以上ある場合はクエリ側の絞り込みを諦め、取得後のクライアント側
       // フィルタ(下のexcludedStoreIds.contains(...)チェック)のみに頼る。
+      final masterFuture = _loadMasterData();
       final loadResults = await Future.wait<dynamic>([
         AppSession.doc('stores').collection('billing_visibility').get(),
         AppSession.billingInvoices
@@ -137,11 +146,10 @@ class _BillingPageState extends State<BillingPage> {
             .limit(20)
             .get(),
         AppSession.doc('billing_prices').get(),
-        AppSession.orderBatches
-            .orderBy('createdAt', descending: true)
-            .limit(40)
-            .get(),
-        _loadMasterData(),
+        // 店舗マスタだけはシェル表示（店舗候補・宛名フォールバック）に必要なため
+        // 軽い読み取り側で取得する。商品/テスター/備品マスタは重いので
+        // 後続（バッチ読み取りと並行）で待つ。
+        AppSession.doc('stores').get(),
       ]);
       final billingVisibilitySnap =
           loadResults[0] as QuerySnapshot<Map<String, dynamic>>;
@@ -167,25 +175,11 @@ class _BillingPageState extends State<BillingPage> {
       // 一覧は新しい順で軽めに取得し、非開示/確認待ち店舗は取得後に除外する。
       final invoiceSnap = loadResults[1] as QuerySnapshot<Map<String, dynamic>>;
       final priceDoc = loadResults[2] as DocumentSnapshot<Map<String, dynamic>>;
-      final batchSnap = loadResults[3] as QuerySnapshot<Map<String, dynamic>>;
-      final masterData = loadResults[4] as _MasterDataSnapshot;
-      final manualItemMastersByCode = <String, LegacyItem>{};
-      for (final item in [
-        ...masterData.products,
-        ...masterData.testers,
-        ...masterData.equipments,
-      ]) {
-        final normalizedCode = _normalizeBillingKeyPart(item.code);
-        if (normalizedCode.isEmpty) continue;
-        manualItemMastersByCode.putIfAbsent(normalizedCode, () => item);
-      }
-      // 宛先設定・任意作成・編集の店舗候補は店舗マスタ全件から出す。
-      // 請求明細・発行済み一覧の表示だけは下の処理で非開示/確認待ち店舗を除外する。
-      final allParsedStores = masterData.stores;
-      final orgStores = allParsedStores.toList();
-      final pendingAckStores = allParsedStores
-          .where((s) => pendingAckStoreIds.contains(s.id))
-          .toList();
+      final storesDoc = loadResults[3] as DocumentSnapshot<Map<String, dynamic>>;
+      // シェル表示用に店舗マスタだけ先行解析する（商品マスタ系は後続）。
+      final allParsedStores = _parseStores(
+        storesDoc.data() ?? <String, dynamic>{},
+      );
       final billedKeys = <String>{};
       final issuedMonthStoreKeys = <String>{};
       final invoices = <_BillingInvoiceSummary>[];
@@ -270,6 +264,70 @@ class _BillingPageState extends State<BillingPage> {
       _repaymentAmountController.text = repaymentAmount > 0
           ? repaymentAmount.toString()
           : '';
+
+      // 宛先設定・任意作成・編集の店舗候補は店舗マスタ全件から出す。
+      // 請求明細・発行済み一覧の表示だけは下の処理で非開示/確認待ち店舗を除外する。
+      final orgStores = allParsedStores.toList();
+
+      // ページシェル（請求書一覧・単価マスタ・店舗マスタ）を先に表示する。
+      // 発注バッチ（全日の発注明細を含む＝最も重い読み取り）と商品/テスター/
+      // 備品マスタは続けて並行取得し、明細リストだけ後から差し込む。
+      setState(() {
+        _billedKeys
+          ..clear()
+          ..addAll(billedKeys);
+        _invoices
+          ..clear()
+          ..addAll(invoices);
+        _issuedMonthStoreKeys
+          ..clear()
+          ..addAll(issuedMonthStoreKeys);
+        _billingPrices
+          ..clear()
+          ..addAll(billingPrices);
+        _storePurchaseRates
+          ..clear()
+          ..addAll(storePurchaseRates);
+        _storeRecipients
+          ..clear()
+          ..addAll(storeRecipients);
+        _repaymentEnabled = repaymentEnabled;
+        _orgStores = orgStores;
+        _hiddenStoreIds = hiddenStoreIds;
+        if (_selectedStoreId.isEmpty) {
+          final stores = _storesForMonth(_selectedMonth);
+          if (stores.isNotEmpty) _selectedStoreId = stores.keys.first;
+        }
+        _applyRecipientToControllers(_selectedStoreId);
+        _loading = false;
+        _linesLoading = true;
+      });
+
+      // 二段階後半: 重い読み取り同士を並列化。
+      // 発注バッチ（明細群）と商品/テスター/備品マスタ（任意フォーム用）。
+      final heavyResults = await Future.wait<dynamic>([
+        AppSession.orderBatches
+            .orderBy('createdAt', descending: true)
+            .limit(40)
+            .get(),
+        masterFuture,
+      ]);
+      final batchSnap =
+          heavyResults[0] as QuerySnapshot<Map<String, dynamic>>;
+      final masterData = heavyResults[1] as _MasterDataSnapshot;
+      final manualItemMastersByCode = <String, LegacyItem>{};
+      for (final item in [
+        ...masterData.products,
+        ...masterData.testers,
+        ...masterData.equipments,
+      ]) {
+        final normalizedCode = _normalizeBillingKeyPart(item.code);
+        if (normalizedCode.isEmpty) continue;
+        manualItemMastersByCode.putIfAbsent(normalizedCode, () => item);
+      }
+      final pendingAckStores = allParsedStores
+          .where((s) => pendingAckStoreIds.contains(s.id))
+          .toList();
 
       final lines = <_BillingLine>[];
       for (final batch in batchSnap.docs) {
@@ -361,28 +419,6 @@ class _BillingPageState extends State<BillingPage> {
       }
 
       setState(() {
-        _billedKeys
-          ..clear()
-          ..addAll(billedKeys);
-        _invoices
-          ..clear()
-          ..addAll(invoices);
-        _issuedMonthStoreKeys
-          ..clear()
-          ..addAll(issuedMonthStoreKeys);
-        _billingPrices
-          ..clear()
-          ..addAll(billingPrices);
-        _storePurchaseRates
-          ..clear()
-          ..addAll(storePurchaseRates);
-        _storeRecipients
-          ..clear()
-          ..addAll(storeRecipients);
-        _repaymentEnabled = repaymentEnabled;
-        _orgStores = orgStores;
-        _hiddenStoreIds = hiddenStoreIds;
-        _pendingAckStores = pendingAckStores;
         _lines
           ..clear()
           ..addAll(lines);
@@ -390,9 +426,6 @@ class _BillingPageState extends State<BillingPage> {
             .where((line) => !line.billed)
             .map((line) => line.key)
             .toSet();
-        _manualItemMastersByCode
-          ..clear()
-          ..addAll(manualItemMastersByCode);
         _selectedBillingLineKeys.removeWhere(
           (key) => !selectableLineKeys.contains(key),
         );
@@ -400,14 +433,21 @@ class _BillingPageState extends State<BillingPage> {
           final stores = _storesForMonth(_selectedMonth);
           if (stores.isNotEmpty) _selectedStoreId = stores.keys.first;
         }
-        _applyRecipientToControllers(_selectedStoreId);
-        _loading = false;
+        // マスタ到着分（任意フォーム用の品目マスタ・確認待ち店舗バナー）。
+        _manualItemMastersByCode
+          ..clear()
+          ..addAll(manualItemMastersByCode);
+        _pendingAckStores = pendingAckStores;
+        _linesLoading = false;
       });
     } catch (e) {
-      setState(() {
-        _error = e.toString();
-        _loading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _loading = false;
+          _linesLoading = false;
+        });
+      }
     }
   }
 
@@ -5461,7 +5501,14 @@ class _BillingPageState extends State<BillingPage> {
                   if (_entryIsMonthly == true &&
                       _entryDocKind != _BillingPdfKind.receipt) ...[
                     const SizedBox(height: 8),
-                    if (_visibleLines.isEmpty)
+                    if (_linesLoading)
+                      const Card(
+                        child: Padding(
+                          padding: EdgeInsets.all(20),
+                          child: Center(child: CircularProgressIndicator()),
+                        ),
+                      )
+                    else if (_visibleLines.isEmpty)
                       const Card(
                         child: ListTile(title: Text('表示できる未請求明細がありません')),
                       )
@@ -5975,7 +6022,9 @@ class _BillingInvoiceSummary {
       repaymentCurrent: inventoryIntValue(data['repaymentCurrent']),
       repaymentTotal: inventoryIntValue(data['repaymentTotal']),
       repaymentMonthlyAmount: inventoryIntValue(data['repaymentMonthlyAmount']),
-      itemCount: rawItems is List ? rawItems.length : 0,
+      itemCount: rawItems is List
+          ? rawItems.length
+          : (data['lineKeys'] is List ? (data['lineKeys'] as List).length : 0),
       receiptId: (data['receiptId'] ?? '').toString(),
     );
   }
