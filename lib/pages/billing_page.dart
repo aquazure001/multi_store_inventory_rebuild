@@ -123,15 +123,28 @@ class _BillingPageState extends State<BillingPage> {
     });
 
     try {
-      // 非開示店舗・確認待ち店舗の一覧を先に読み込み、請求書一覧のクエリ自体に
-      // whereNotInで反映する(取得してからクライアント側で弾くだけでは、
-      // 非開示店舗のデータが一度はネットワーク経由で端末に届いてしまう)。
+      // 可視性・請求書一覧・単価マスタ・発注バッチ・マスタを1回の並列読み取りに
+      // まとめる。billing_visibilityを先に直列で取得すると往復待ちが1回分増え、
+      // 請求・受領管理ページの初回表示が遅くなる。非開示/確認待ち店舗の除外は
+      // 取得後のクライアント側フィルタで行う。
       // Firestoreのwhere-not-inは10件までの制約があるため、対象が
       // 11件以上ある場合はクエリ側の絞り込みを諦め、取得後のクライアント側
       // フィルタ(下のexcludedStoreIds.contains(...)チェック)のみに頼る。
-      final billingVisibilitySnap = await AppSession.doc(
-        'stores',
-      ).collection('billing_visibility').get();
+      final loadResults = await Future.wait<dynamic>([
+        AppSession.doc('stores').collection('billing_visibility').get(),
+        AppSession.billingInvoices
+            .orderBy('createdAt', descending: true)
+            .limit(20)
+            .get(),
+        AppSession.doc('billing_prices').get(),
+        AppSession.orderBatches
+            .orderBy('createdAt', descending: true)
+            .limit(40)
+            .get(),
+        _loadMasterData(),
+      ]);
+      final billingVisibilitySnap =
+          loadResults[0] as QuerySnapshot<Map<String, dynamic>>;
       final hiddenStoreIds = <String>{
         for (final doc in billingVisibilitySnap.docs)
           if (doc.data()['hidden'] == true) doc.id,
@@ -152,23 +165,10 @@ class _BillingPageState extends State<BillingPage> {
       // whereNotIn + orderBy(createdAt) は複合インデックスが必要になり、
       // 端末によって請求・受領管理ページがエラー停止するため使わない。
       // 一覧は新しい順で軽めに取得し、非開示/確認待ち店舗は取得後に除外する。
-      final invoicesQuery = AppSession.billingInvoices
-          .orderBy('createdAt', descending: true)
-          .limit(20);
-
-      final loadResults = await Future.wait([
-        invoicesQuery.get(),
-        AppSession.doc('billing_prices').get(),
-        AppSession.orderBatches
-            .orderBy('createdAt', descending: true)
-            .limit(40)
-            .get(),
-        _loadMasterData(),
-      ]);
-      final invoiceSnap = loadResults[0] as QuerySnapshot<Map<String, dynamic>>;
-      final priceDoc = loadResults[1] as DocumentSnapshot<Map<String, dynamic>>;
-      final batchSnap = loadResults[2] as QuerySnapshot<Map<String, dynamic>>;
-      final masterData = loadResults[3] as _MasterDataSnapshot;
+      final invoiceSnap = loadResults[1] as QuerySnapshot<Map<String, dynamic>>;
+      final priceDoc = loadResults[2] as DocumentSnapshot<Map<String, dynamic>>;
+      final batchSnap = loadResults[3] as QuerySnapshot<Map<String, dynamic>>;
+      final masterData = loadResults[4] as _MasterDataSnapshot;
       final manualItemMastersByCode = <String, LegacyItem>{};
       for (final item in [
         ...masterData.products,
@@ -1011,25 +1011,44 @@ class _BillingPageState extends State<BillingPage> {
     return pw.MemoryImage(data.buffer.asUint8List());
   }
 
-  Future<_BillingPdfAssets> _loadPdfAssets() async {
-    final logo = await _assetImage('assets/billing/restart_logo.png');
-    final stamp = await _assetImage('assets/billing/corporate_stamp.png');
-    final mascotInvoice = await _assetImage(
-      'assets/billing/mascot_invoice.png',
-    );
-    final mascotReceipt = await _assetImage(
-      'assets/billing/mascot_receipt.png',
-    );
-    final font = await PdfGoogleFonts.notoSansJPRegular();
-    final boldFont = await PdfGoogleFonts.notoSansJPBold();
-    return _BillingPdfAssets(
-      logo: logo,
-      stamp: stamp,
-      mascotInvoice: mascotInvoice,
-      mascotReceipt: mascotReceipt,
-      font: font,
-      boldFont: boldFont,
-    );
+  // PDFフォント・画像は毎回ネット/アセットから読み直すと請求書・受領書の
+  // 作成が数秒遅くなるため、一度読んだらキャッシュして使い回す。
+  _BillingPdfAssets? _pdfAssetsCache;
+  Future<_BillingPdfAssets>? _pdfAssetsLoading;
+
+  Future<_BillingPdfAssets> _loadPdfAssets() {
+    final cached = _pdfAssetsCache;
+    if (cached != null) return Future.value(cached);
+    final loading = _pdfAssetsLoading;
+    if (loading != null) return loading;
+    final future = Future<_BillingPdfAssets>(() async {
+      final logo = await _assetImage('assets/billing/restart_logo.png');
+      final stamp = await _assetImage('assets/billing/corporate_stamp.png');
+      final mascotInvoice = await _assetImage(
+        'assets/billing/mascot_invoice.png',
+      );
+      final mascotReceipt = await _assetImage(
+        'assets/billing/mascot_receipt.png',
+      );
+      final font = await PdfGoogleFonts.notoSansJPRegular();
+      final boldFont = await PdfGoogleFonts.notoSansJPBold();
+      final assets = _BillingPdfAssets(
+        logo: logo,
+        stamp: stamp,
+        mascotInvoice: mascotInvoice,
+        mascotReceipt: mascotReceipt,
+        font: font,
+        boldFont: boldFont,
+      );
+      _pdfAssetsCache = assets;
+      return assets;
+    });
+    _pdfAssetsLoading = future;
+    return future.whenComplete(() {
+      if (identical(_pdfAssetsLoading, future)) {
+        _pdfAssetsLoading = null;
+      }
+    });
   }
 
   Future<void> _createInvoice() async {
