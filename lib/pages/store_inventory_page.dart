@@ -17,10 +17,48 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
     with RouteAware {
   late Future<_InventoryData> _future;
 
+  // orders ドキュメントは納品記録の蓄積で大きくなりやすいため、
+  // ページ全体で監視を1本だけ張り、初回読み込みと各タブで共有する。
+  final ValueNotifier<Map<String, dynamic>?> _ordersRaw = ValueNotifier(null);
+  final Completer<void> _firstOrdersSnapshot = Completer<void>();
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _ordersSub;
+
   @override
   void initState() {
     super.initState();
+    _subscribeOrders();
     _future = _loadInventory();
+  }
+
+  void _subscribeOrders() {
+    _ordersSub = AppSession.ordersDoc.snapshots().listen(
+      (snap) {
+        _ordersRaw.value = snap.exists
+            ? (snap.data() ?? <String, dynamic>{})
+            : <String, dynamic>{};
+        if (!_firstOrdersSnapshot.isCompleted) _firstOrdersSnapshot.complete();
+      },
+      onError: (Object e) {
+        if (!_firstOrdersSnapshot.isCompleted) {
+          _firstOrdersSnapshot.completeError(e);
+        }
+      },
+    );
+  }
+
+  // 監視で受け取った最新の orders を返す。監視が失敗した場合のみ直接読む。
+  Future<Map<String, dynamic>> _loadOrdersRaw() async {
+    try {
+      await _firstOrdersSnapshot.future;
+      final raw = _ordersRaw.value;
+      if (raw != null) return raw;
+    } catch (_) {
+      // 下の get() にフォールバックする。
+    }
+    final snap = await AppSession.ordersDoc.get();
+    return snap.exists
+        ? (snap.data() ?? <String, dynamic>{})
+        : <String, dynamic>{};
   }
 
   @override
@@ -32,6 +70,8 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
   @override
   void dispose() {
     appRouteObserver.unsubscribe(this);
+    _ordersSub?.cancel();
+    _ordersRaw.dispose();
     super.dispose();
   }
 
@@ -55,24 +95,25 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
   }
 
   Future<_InventoryData> _loadInventory() async {
-    final master = await _loadMasterData();
-    final results = await Future.wait([
+    // マスタと各ドキュメントを1回の並列読み取りにまとめる。
+    final results = await Future.wait<dynamic>([
+      _loadMasterData(),
       AppSession.stocksDoc.get(),
       AppSession.baselineDoc.get(),
       AppSession.stocksV2Doc.get(),
-      AppSession.ordersDoc.get(),
+      _loadOrdersRaw(),
       AppSession.storeQuantityLimitsDoc.get(),
     ]);
-
-    final stocksData = results[0].data() ?? {};
-    final baseStocksData = results[1].exists
-        ? (results[1].data() ?? <String, dynamic>{})
+    final master = results[0] as _MasterDataSnapshot;
+    final stocksData = results[1].data() ?? {};
+    final baseStocksData = results[2].exists
+        ? (results[2].data() ?? <String, dynamic>{})
         : <String, dynamic>{};
     debugPrint(
-      '[基準在庫DEBUG] baselineDoc読込直後: exists=${results[1].exists} '
+      '[基準在庫DEBUG] baselineDoc読込直後: exists=${results[2].exists} '
       'store=${widget.store.id} raw=${baseStocksData[widget.store.id]}',
     );
-    final v2Raw = results[2].data() ?? {};
+    final v2Raw = results[3].data() ?? {};
 
     final v2TMap = (v2Raw['testers'] is Map)
         ? Map<String, dynamic>.from(
@@ -87,11 +128,9 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
           )
         : <String, dynamic>{};
 
-    final ordersRaw = results[3].exists
-        ? (results[3].data() ?? <String, dynamic>{})
-        : <String, dynamic>{};
-    final quantityLimitsRaw = results[4].exists
-        ? (results[4].data() ?? <String, dynamic>{})
+    final ordersRaw = results[4] as Map<String, dynamic>;
+    final quantityLimitsRaw = results[5].exists
+        ? (results[5].data() ?? <String, dynamic>{})
         : <String, dynamic>{};
     final quantityLimits = _parseStoreQuantityLimit(
       quantityLimitsRaw,
@@ -237,7 +276,9 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
           child: FutureBuilder<_InventoryData>(
             future: _future,
             builder: (context, snapshot) {
-              if (snapshot.connectionState != ConnectionState.done) {
+              // 再読み込み中は前回の表示を残し、タブごと作り直さない。
+              if (snapshot.connectionState != ConnectionState.done &&
+                  !snapshot.hasData) {
                 return const Center(child: CircularProgressIndicator());
               }
 
@@ -274,6 +315,7 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
                     quantityLimit: data.quantityLimits.products,
                     onDelivered: _refresh,
                     onWillShowDialog: _suppressNextPopRefreshOnce,
+                    ordersRaw: _ordersRaw,
                   ),
                   _InventoryList(
                     title: 'テスター',
@@ -287,6 +329,7 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
                     quantityLimit: data.quantityLimits.testers,
                     onDelivered: _refresh,
                     onWillShowDialog: _suppressNextPopRefreshOnce,
+                    ordersRaw: _ordersRaw,
                   ),
                   _InventoryList(
                     title: '備品',
@@ -300,6 +343,7 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
                     quantityLimit: data.quantityLimits.equipments,
                     onDelivered: _refresh,
                     onWillShowDialog: _suppressNextPopRefreshOnce,
+                    ordersRaw: _ordersRaw,
                   ),
                 ],
               );
@@ -328,6 +372,7 @@ class _InventoryList extends StatefulWidget {
     this.quantityLimit = 0,
     this.onDelivered,
     this.onWillShowDialog,
+    required this.ordersRaw,
   });
 
   final String title;
@@ -342,6 +387,8 @@ class _InventoryList extends StatefulWidget {
   final VoidCallback? onDelivered;
   // ダイアログ表示直前に呼ばれる。親の RouteObserver による誤リフレッシュ抑制に使う。
   final VoidCallback? onWillShowDialog;
+  // 親ページで1本だけ監視している orders ドキュメントの最新値。
+  final ValueNotifier<Map<String, dynamic>?> ordersRaw;
 
   @override
   State<_InventoryList> createState() => _InventoryListState();
@@ -355,7 +402,6 @@ class _InventoryListState extends State<_InventoryList> {
   Map<String, _OrderMeta> _localOrderMetas = {};
   final Set<String> _changedIds = {};
   bool _saving = false;
-  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _ordersSub;
 
   // Firestoreへの書き込みが完了していない基準在庫の楽観的更新値。
   // didUpdateWidget で親から来た古い値で上書きされるのを防ぐ。
@@ -372,7 +418,7 @@ class _InventoryListState extends State<_InventoryList> {
       '[基準在庫DEBUG] _InventoryListState.initState(${widget.title}): '
       '_localBaseStocks=$_localBaseStocks',
     );
-    _subscribeOrders();
+    widget.ordersRaw.addListener(_onOrdersChanged);
   }
 
   @override
@@ -403,44 +449,44 @@ class _InventoryListState extends State<_InventoryList> {
       }
       setState(() => _localStocks = merged);
     }
+
+    // 発注数: 再読み込みでタブを作り直さなくなったため、親の新しい値を反映する。
+    if (oldWidget.orderedStocks != widget.orderedStocks ||
+        oldWidget.orderMetas != widget.orderMetas) {
+      setState(() {
+        _localOrderedStocks = Map.from(widget.orderedStocks);
+        _localOrderMetas = Map.from(widget.orderMetas);
+      });
+    }
   }
 
-  void _subscribeOrders() {
-    final typeKey = widget.title == '商品'
-        ? 'products'
-        : (widget.title == 'テスター' ? 'testers' : 'equipments');
-    _ordersSub = AppSession.ordersDoc.snapshots().listen((snap) {
-      if (!mounted) return;
-      final raw = snap.exists
-          ? (snap.data() ?? <String, dynamic>{})
-          : <String, dynamic>{};
-      final typeMap = (raw[typeKey] is Map)
-          ? raw[typeKey] as Map
-          : <dynamic, dynamic>{};
-      final storeData = (typeMap[widget.storeId] is Map)
-          ? typeMap[widget.storeId] as Map
-          : <dynamic, dynamic>{};
-      final newQtys = <String, int>{};
-      for (final e in storeData.entries) {
-        final v = e.value;
-        final qty = v is int ? v : inventoryIntValue(v);
-        if (qty > 0) newQtys[e.key.toString()] = qty;
-      }
-      final newMetas = _parseOrderMetasForStore(
-        Map<String, dynamic>.from(raw),
-        typeKey,
-        widget.storeId,
-      );
-      setState(() {
-        _localOrderedStocks = newQtys;
-        _localOrderMetas = newMetas;
-      });
+  void _onOrdersChanged() {
+    if (!mounted) return;
+    final raw = widget.ordersRaw.value;
+    if (raw == null) return;
+    final typeKey = _typeKey;
+    final typeMap = (raw[typeKey] is Map)
+        ? raw[typeKey] as Map
+        : <dynamic, dynamic>{};
+    final storeData = (typeMap[widget.storeId] is Map)
+        ? typeMap[widget.storeId] as Map
+        : <dynamic, dynamic>{};
+    final newQtys = <String, int>{};
+    for (final e in storeData.entries) {
+      final v = e.value;
+      final qty = v is int ? v : inventoryIntValue(v);
+      if (qty > 0) newQtys[e.key.toString()] = qty;
+    }
+    final newMetas = _parseOrderMetasForStore(raw, typeKey, widget.storeId);
+    setState(() {
+      _localOrderedStocks = newQtys;
+      _localOrderMetas = newMetas;
     });
   }
 
   @override
   void dispose() {
-    _ordersSub?.cancel();
+    widget.ordersRaw.removeListener(_onOrdersChanged);
     super.dispose();
   }
 

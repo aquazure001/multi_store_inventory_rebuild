@@ -75,13 +75,17 @@ class _OrderListPageState extends State<OrderListPage> {
       _error = null;
     });
     try {
-      final master = await _loadMasterData();
-      final results = await Future.wait([
+      // マスタ・在庫・基準・発注を1回の並列読み取りにまとめる。
+      // 直列（マスタ→在庫系）だと往復待ちが2回分になるため発注画面の
+      // 読み込みが遅くなる。
+      final results = await Future.wait<dynamic>([
+        _loadMasterData(),
         AppSession.stocksDoc.get(),
         AppSession.baselineDoc.get(),
         AppSession.stocksV2Doc.get(),
         AppSession.ordersDoc.get(),
       ]);
+      final master = results[0] as _MasterDataSnapshot;
 
       final allStores = master.stores;
       final allStoreIds = allStores.map((s) => s.id).toList();
@@ -93,19 +97,19 @@ class _OrderListPageState extends State<OrderListPage> {
       final products = master.products;
       final testers = master.testers;
       final equipments = master.equipments;
-      final stocksData = results[0].data() ?? {};
-      final baseDoc = results[1];
+      final stocksData = results[1].data() ?? {};
+      final baseDoc = results[2];
       final baseData = baseDoc.exists
           ? (baseDoc.data() ?? <String, dynamic>{})
           : <String, dynamic>{};
-      final v2Raw = results[2].data() ?? {};
+      final v2Raw = results[3].data() ?? {};
       final v2TMap = (v2Raw['testers'] is Map) ? v2Raw['testers'] as Map : {};
       final v2EMap = (v2Raw['equipments'] is Map)
           ? v2Raw['equipments'] as Map
           : {};
 
-      final ordersRaw = results[3].exists
-          ? (results[3].data() ?? <String, dynamic>{})
+      final ordersRaw = results[4].exists
+          ? (results[4].data() ?? <String, dynamic>{})
           : <String, dynamic>{};
       final Map<String, int> orderedQtys = {};
       final Map<String, _OrderMeta> orderMetas = {};
@@ -170,10 +174,12 @@ class _OrderListPageState extends State<OrderListPage> {
           for (final item in items) {
             if (item.discontinued) continue;
             final b = bases[item.id] ?? 0;
-            if (b <= 0) continue;
             final c = stocks[item.id] ?? 0;
             final orderedQty =
                 orderedQtys['${store.id}_${typeName}_${item.id}'] ?? 0;
+            // 基準在庫が0でも発注済み(納品予定)が残っている商品は
+            // 発注リストから消さない（見当たらないトラブルの原因になるため）。
+            if (b <= 0 && orderedQty <= 0) continue;
             final metaKey = _orderMetaKey(typeKey, store.id, item.id);
             final effectiveShortage = max(0, b - c - orderedQty);
             if (effectiveShortage > 0 || orderedQty > 0) {
@@ -352,8 +358,10 @@ class _OrderListPageState extends State<OrderListPage> {
 
     try {
       final ordersRef = AppSession.ordersDoc;
+      // incrementsで書き込む。端末間の同時発注で既存数を上書きして
+      // 消してしまう事故（発注したのに反映されない）を防ぐ。
       final update = {
-        '$typeKey.${entry.store.id}.${entry.item.id}': totalQty,
+        '$typeKey.${entry.store.id}.${entry.item.id}': FieldValue.increment(qty),
         '${_orderMetaField(entry)}.requestedAt': FieldValue.serverTimestamp(),
         '${_orderMetaField(entry)}.requestedBy': AppSession.nickname,
         '${_orderMetaField(entry)}.storeName': entry.store.name,
@@ -366,6 +374,8 @@ class _OrderListPageState extends State<OrderListPage> {
         await ordersRef.update(update);
       } on FirebaseException catch (e) {
         if (e.code == 'not-found') {
+          // merge:true で書く。merge無しの set はドキュメント全体を
+          // 上書きするため、既存の他店舗・他商品の発注数が消える恐れがある。
           await ordersRef.set({
             typeKey: {
               entry.store.id: {entry.item.id: totalQty},
@@ -381,7 +391,7 @@ class _OrderListPageState extends State<OrderListPage> {
                 'lastRequestedQty': qty,
               },
             },
-          });
+          }, SetOptions(merge: true));
         } else {
           rethrow;
         }
@@ -490,9 +500,8 @@ class _OrderListPageState extends State<OrderListPage> {
     try {
       final Map<String, dynamic> updates = {};
       for (final e in targetEntries) {
-        final existing = _orderedQtys[_orderKey(e)] ?? 0;
-        final total = existing + e.effectiveShortage;
-        updates['$typeKey.${store.id}.${e.item.id}'] = total;
+        updates['$typeKey.${store.id}.${e.item.id}'] =
+            FieldValue.increment(e.effectiveShortage);
         updates['${_orderMetaField(e)}.requestedAt'] =
             FieldValue.serverTimestamp();
         updates['${_orderMetaField(e)}.requestedBy'] = AppSession.nickname;
@@ -525,7 +534,7 @@ class _OrderListPageState extends State<OrderListPage> {
                   'lastRequestedQty': e.effectiveShortage,
                 },
             },
-          });
+          }, SetOptions(merge: true));
         } else {
           rethrow;
         }
@@ -544,7 +553,6 @@ class _OrderListPageState extends State<OrderListPage> {
         );
       }
       await historyBatch.commit();
-
       for (final e in targetEntries) {
         final existing = _orderedQtys[_orderKey(e)] ?? 0;
         _applyOrderRequestLocally(
@@ -814,8 +822,10 @@ class _OrderListPageState extends State<OrderListPage> {
         'status': 'pending',
       });
     }
-    await AppSession.ordersDoc.update(updates);
-
+    // バッチを先に作成してから orderedAt を更新する。
+    // 先に orderedAt だけ更新すると、バッチ作成が失敗したとき
+    // 「発注済み扱いなのに過去の発注表・納品処理に見当たらない」
+    // 状態になったまま再試行できなくなってしまう。
     final batchRef = AppSession.orderBatches.doc();
     await batchRef.set({
       'createdAt': FieldValue.serverTimestamp(),
@@ -829,17 +839,24 @@ class _OrderListPageState extends State<OrderListPage> {
       'pdfFileName': pdfFileName,
       'pdfSavedAtLocal': issuedAt.toIso8601String(),
     });
-    await AppSession.doc(
-      'order_saved_pdfs',
-    ).collection('entries').doc(batchRef.id).set({
-      'batchId': batchRef.id,
-      'createdAt': FieldValue.serverTimestamp(),
-      'createdAtLocal': issuedAt.toIso8601String(),
-      'createdBy': AppSession.nickname,
-      'pdfBase64': base64Encode(pdfBytes),
-      'pdfKind': pdfKind,
-      'pdfFileName': pdfFileName,
-    });
+    await AppSession.ordersDoc.update(updates);
+
+    try {
+      await AppSession.doc(
+        'order_saved_pdfs',
+      ).collection('entries').doc(batchRef.id).set({
+        'batchId': batchRef.id,
+        'createdAt': FieldValue.serverTimestamp(),
+        'createdAtLocal': issuedAt.toIso8601String(),
+        'createdBy': AppSession.nickname,
+        'pdfBase64': base64Encode(pdfBytes),
+        'pdfKind': pdfKind,
+        'pdfFileName': pdfFileName,
+      });
+    } catch (_) {
+      // PDF本体の保存に失敗しても発注表自体は成立している。
+      // 過去の発注表からはPDF再作成できるため、ここで失敗を握りつぶす。
+    }
   }
 
   void _applyPdfIssuedLocally(List<_OrderEntry> entries) {
@@ -969,13 +986,27 @@ class _OrderListPageState extends State<OrderListPage> {
       const fileName = '発注済みリスト_店舗別.pdf';
       final pdfBytes = await doc.save();
       await Printing.sharePdf(bytes: pdfBytes, filename: fileName);
-      await _markPdfIssued(
-        pdfEntries,
-        pdfBytes: pdfBytes,
-        pdfKind: 'store',
-        pdfFileName: fileName,
-      );
-      _applyPdfIssuedLocally(pdfEntries);
+      try {
+        await _markPdfIssued(
+          pdfEntries,
+          pdfBytes: pdfBytes,
+          pdfKind: 'store',
+          pdfFileName: fileName,
+        );
+        _applyPdfIssuedLocally(pdfEntries);
+      } catch (e) {
+        // PDF自体は出力済みでも確定記録に失敗したら必ず知らせる。
+        // 失敗を握りつぶすと「発注したのに過去の発注表に出てこない」トラブルになる。
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('発注確定の記録に失敗しました: $e\n再読み込み後にもう一度PDFを出力してください'),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 6),
+            ),
+          );
+        }
+      }
     } finally {
       if (mounted) setState(() => _creatingPdf = false);
     }
@@ -1114,13 +1145,25 @@ class _OrderListPageState extends State<OrderListPage> {
       const fileName = '発注済みリスト_商品別.pdf';
       final pdfBytes = await doc.save();
       await Printing.sharePdf(bytes: pdfBytes, filename: fileName);
-      await _markPdfIssued(
-        pdfEntries,
-        pdfBytes: pdfBytes,
-        pdfKind: 'item',
-        pdfFileName: fileName,
-      );
-      _applyPdfIssuedLocally(pdfEntries);
+      try {
+        await _markPdfIssued(
+          pdfEntries,
+          pdfBytes: pdfBytes,
+          pdfKind: 'item',
+          pdfFileName: fileName,
+        );
+        _applyPdfIssuedLocally(pdfEntries);
+      } catch (e) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('発注確定の記録に失敗しました: $e\n再読み込み後にもう一度PDFを出力してください'),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 6),
+            ),
+          );
+        }
+      }
     } finally {
       if (mounted) setState(() => _creatingPdf = false);
     }

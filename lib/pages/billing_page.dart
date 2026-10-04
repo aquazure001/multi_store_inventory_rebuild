@@ -771,6 +771,12 @@ class _BillingPageState extends State<BillingPage> {
   }
 
   void _normalizeBillingController(TextEditingController controller) {
+    // 日本語入力の変換中（未確定文字あり）に text を書き換えると、
+    // IME の変換が途切れて以降の入力でも変換できなくなるため、確定後に整形する。
+    if (controller.value.composing.isValid) {
+      if (mounted) setState(() {});
+      return;
+    }
     final normalized = _normalizeBillingNumberText(controller.text);
     if (controller.text != normalized) {
       controller.value = TextEditingValue(
@@ -3456,6 +3462,8 @@ class _BillingPageState extends State<BillingPage> {
     _ManualBillingLineControllers row,
     void Function(void Function()) dialogSetState,
   ) {
+    // 変換中に商品名欄を書き換えると IME が壊れるため、確定後に反映する。
+    if (row.code.value.composing.isValid) return;
     final normalizedCode = _normalizeBillingKeyPart(row.code.text);
     if (normalizedCode.isEmpty) return;
     final item = _manualItemMastersByCode[normalizedCode];
@@ -5495,7 +5503,12 @@ class _BillingPageState extends State<BillingPage> {
                       ),
                   ],
                   const SizedBox(height: 8),
-                  _buildEntryFlow(),
+                  // 明細の後読み込み完了時に上の案内バナーが増えても、
+                  // 入力欄が作り直されて入力中の日本語変換が切れないよう key で固定する。
+                  KeyedSubtree(
+                    key: const ValueKey('billing-entry-flow'),
+                    child: _buildEntryFlow(),
+                  ),
                   const SizedBox(height: 8),
                   Container(key: _invoicesSectionKey, child: _buildInvoices()),
                   if (_entryIsMonthly == true &&

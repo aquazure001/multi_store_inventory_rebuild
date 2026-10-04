@@ -1156,16 +1156,18 @@ class _StoreListPageState extends State<StoreListPage> {
               ),
               const PopupMenuDivider(),
               _menuSectionHeader('発注・納品'),
-              const PopupMenuItem(
-                value: 'order',
-                child: Row(
-                  children: [
-                    Icon(Icons.shopping_cart),
-                    SizedBox(width: 12),
-                    Text('発注リスト'),
-                  ],
+              // 発注リスト（発注ボタン）は管理者・統括管理者のみに表示。
+              if (AppSession.isAdmin || AppSession.isSuperAdmin)
+                const PopupMenuItem(
+                  value: 'order',
+                  child: Row(
+                    children: [
+                      Icon(Icons.shopping_cart),
+                      SizedBox(width: 12),
+                      Text('発注リスト'),
+                    ],
+                  ),
                 ),
-              ),
               const PopupMenuItem(
                 value: 'special_order',
                 child: Row(

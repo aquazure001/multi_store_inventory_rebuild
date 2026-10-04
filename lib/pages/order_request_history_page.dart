@@ -54,26 +54,30 @@ class _OrderRequestHistoryPageState extends State<OrderRequestHistoryPage> {
 
     try {
       final result = <Map<String, dynamic>>[];
-
-      // 新形式: この機能追加後に発注ボタンを押した履歴。
-      try {
-        final snap = await AppSession.doc('order_request_history')
+      final parallel = await Future.wait<dynamic>([
+        AppSession.doc('order_request_history')
             .collection('entries')
             .orderBy('requestedAt', descending: true)
             .limit(500)
-            .get();
+            .get()
+            .then<dynamic>((v) => v, onError: (_) => null),
+        AppSession.ordersDoc.get(),
+      ]);
+      final snap = parallel[0];
+      final ordersDoc = parallel[1];
+      // 新形式: この機能追加後に発注ボタンを押した履歴。
+      if (snap is QuerySnapshot<Map<String, dynamic>>) {
         for (final doc in snap.docs) {
           final data = doc.data();
           result.add({...data, '_sourceLabel': '履歴'});
         }
-      } catch (_) {
-        // 初回はコレクションが無いことがあるため、そのまま旧形式の読取へ進む。
       }
 
       // 旧形式: 以前から orders._meta に残っている「最後に発注ボタンを押した情報」。
       // クリックごとの完全履歴ではなく、残存している現在値だけを表示する。
-      final ordersDoc = await AppSession.ordersDoc.get();
-      final ordersData = ordersDoc.data() ?? <String, dynamic>{};
+      final ordersData = (ordersDoc as DocumentSnapshot<Map<String, dynamic>>)
+              .data() ??
+          <String, dynamic>{};
       final metaRaw = ordersData['_meta'];
       if (metaRaw is Map) {
         for (final entry in metaRaw.entries) {
