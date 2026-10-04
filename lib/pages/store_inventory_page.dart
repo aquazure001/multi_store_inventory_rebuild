@@ -162,51 +162,8 @@ class _StoreInventoryPageState extends State<StoreInventoryPage>
     final orderedTesters = _parseStocksForStore(ordersTMap, widget.store.id);
     final orderedEquipments = _parseStocksForStore(ordersEMap, widget.store.id);
 
-    int toInt(dynamic value) => inventoryIntValue(value);
-
-    void subtractOrdered(Map<String, int> target, String itemId, int qty) {
-      if (itemId.isEmpty || qty <= 0) return;
-      final current = target[itemId] ?? 0;
-      final next = max(0, current - qty);
-      if (next <= 0) {
-        target.remove(itemId);
-      } else {
-        target[itemId] = next;
-      }
-    }
-
-    // 納品済み情報は、すでに読み込んでいる orders._deliveredBatches から補正する。
-    // 以前のように orders/batches を追加で最大30件読む処理は重いため行わない。
-    final rawDeliveredBatches = ordersRaw['_deliveredBatches'];
-    if (rawDeliveredBatches is Map) {
-      for (final rawBatch in rawDeliveredBatches.values) {
-        if (rawBatch is! Map) continue;
-        for (final raw in rawBatch.values) {
-          if (raw is! Map) continue;
-          final delivered = Map<String, dynamic>.from(
-            raw.map((k, v) => MapEntry(k.toString(), v)),
-          );
-          if ((delivered['storeId'] ?? '').toString() != widget.store.id) {
-            continue;
-          }
-          final itemId = (delivered['itemId'] ?? '').toString();
-          final typeKey = (delivered['typeKey'] ?? '').toString();
-          final itemType = (delivered['itemType'] ?? '').toString();
-          final qty = toInt(delivered['qty']);
-          final normalizedTypeKey = normalizeInventoryTypeKey(
-            typeKey: typeKey,
-            itemType: itemType,
-          );
-          if (normalizedTypeKey == 'products') {
-            subtractOrdered(orderedProducts, itemId, qty);
-          } else if (normalizedTypeKey == 'testers') {
-            subtractOrdered(orderedTesters, itemId, qty);
-          } else if (normalizedTypeKey == 'equipments') {
-            subtractOrdered(orderedEquipments, itemId, qty);
-          }
-        }
-      }
-    }
+    // 納品処理は orders の発注数を直接減らすため、ここで納品記録を
+    // 差し引くと二重に減る。発注数は orders の値をそのまま使う。
 
     final parsedBaseStocks = _parseStocksForStore(
       baseStocksData,

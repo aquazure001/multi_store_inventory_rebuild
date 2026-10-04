@@ -52,6 +52,7 @@ part 'core/app_session.dart';
 part 'core/models.dart';
 part 'core/inventory_data.dart';
 part 'core/master_data_cache.dart';
+part 'core/delivered_archive.dart';
 part 'core/item_type_utils.dart';
 part 'core/value_utils.dart';
 

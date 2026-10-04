@@ -220,16 +220,29 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         const Duration(seconds: 30),
         onTimeout: () => throw TimeoutException('納品済み情報の同期に時間がかかっています'),
       );
+      // 古い納品記録はアーカイブへ移しているため、表示中のバッチ分を先に読む。
+      // orders 側にも残っている記録はそちらで上書きする。
       final externalDeliveredMaps = <String, Map<String, dynamic>>{};
+      try {
+        final archived = await _loadArchivedDeliveredMaps(
+          _batches.map((doc) => doc.id),
+        ).timeout(const Duration(seconds: 15));
+        externalDeliveredMaps.addAll(archived);
+      } catch (_) {
+        // アーカイブ未作成・読み取り失敗時は orders 側だけで判定する。
+      }
       final rawDeliveredBatches = ordersData.data()?['_deliveredBatches'];
       if (rawDeliveredBatches is Map) {
         for (final entry in rawDeliveredBatches.entries) {
           final deliveredMap = entry.value;
           if (deliveredMap is Map) {
-            externalDeliveredMaps[entry.key
-                .toString()] = Map<String, dynamic>.from(
-              deliveredMap.map((k, v) => MapEntry(k.toString(), v)),
-            );
+            externalDeliveredMaps
+                .putIfAbsent(entry.key.toString(), () => <String, dynamic>{})
+                .addAll(
+                  Map<String, dynamic>.from(
+                    deliveredMap.map((k, v) => MapEntry(k.toString(), v)),
+                  ),
+                );
           }
         }
       }
@@ -241,6 +254,16 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         _deliveryStatusLoading = false;
         _deliveryStatusError = null;
       });
+      // orders を軽くするため、古い納品記録を裏でアーカイブへ移す。
+      // 失敗しても次回の読み込みで再試行されるので画面には出さない。
+      final ordersRaw = ordersData.data();
+      if (ordersRaw != null) {
+        unawaited(
+          _archiveOldDeliveredBatches(ordersRaw).then<void>((movedCount) {
+            if (movedCount > 0) debugPrint('[納品記録] $movedCount バッチをアーカイブへ移動');
+          }, onError: (Object e) => debugPrint('[納品記録] アーカイブ失敗: $e')),
+        );
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {

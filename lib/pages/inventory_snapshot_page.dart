@@ -272,6 +272,12 @@ class _InventorySnapshotPageState extends State<InventorySnapshotPage> {
         }
       }
 
+      // 30日以上前の納品記録は orders からアーカイブへ移しているため、
+      // 基準日より後に納品があったアーカイブ分も差し引く。
+      for (final record in await _loadArchivedDeliveriesSince(target)) {
+        applyDeliveredItem(record);
+      }
+
       if (deliveryCount == 0) {
         final batchesSnap = await AppSession.orderBatches
             .orderBy('createdAt', descending: true)
