@@ -1603,6 +1603,9 @@ class _BillingPageState extends State<BillingPage> {
     };
   }
 
+  // 発注リスト・過去発注表と同じ Printing.sharePdf で開く。
+  // 以前の <a download> 方式は、Firestore から保存PDFを読んだ後（非同期処理の後）
+  // だとブラウザにユーザー操作と見なされず、スマホ等でPDFが開かなかった。
   Future<void> _openBillingPdfBytes({
     required List<int> bytes,
     required String filename,
@@ -1610,21 +1613,10 @@ class _BillingPageState extends State<BillingPage> {
     final safeFileName = filename.trim().isEmpty
         ? 'document.pdf'
         : filename.trim();
-    final blob = html.Blob([bytes], 'application/pdf');
-    final url = html.Url.createObjectUrlFromBlob(blob);
-    try {
-      final anchor = html.AnchorElement(href: url)
-        ..target = '_blank'
-        ..rel = 'noopener'
-        ..download = safeFileName
-        ..style.display = 'none';
-      html.document.body?.append(anchor);
-      anchor.click();
-      anchor.remove();
-      await Future<void>.delayed(const Duration(seconds: 8));
-    } finally {
-      html.Url.revokeObjectUrl(url);
-    }
+    await Printing.sharePdf(
+      bytes: Uint8List.fromList(bytes),
+      filename: safeFileName,
+    );
   }
 
   Future<void> _openInvoicePdf(_BillingInvoiceSummary invoice) async {
