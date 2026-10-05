@@ -19,6 +19,8 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
   bool _hasMore = false;
   bool _loadingMore = false;
   bool _pdfBusy = false;
+  // 指定日以前の発注表から表示する（null なら最新から）。
+  DateTime? _untilDate;
 
   Future<void> _sharePdf({
     required Uint8List bytes,
@@ -163,12 +165,22 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
       var query = AppSession.orderBatches
           .orderBy('createdAt', descending: true)
           .limit(20);
+      final until = _untilDate;
+      if (until != null) {
+        query = query.where(
+          'createdAt',
+          isLessThan: Timestamp.fromDate(
+            DateTime(until.year, until.month, until.day + 1),
+          ),
+        );
+      }
       if (more && _lastBatch != null) {
         query = query.startAfterDocument(_lastBatch!);
       }
       final snap = await query.get();
       if (!mounted) return;
       setState(() {
+        if (!more) _lastBatch = null;
         final batches = snap.docs
             .where((doc) => (doc.data()['status'] ?? '') != 'canceled')
             .toList();
@@ -186,6 +198,25 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
         _loading = false;
       });
     }
+  }
+
+  Future<void> _pickUntilDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _untilDate ?? now,
+      firstDate: DateTime(2024),
+      lastDate: now,
+      helpText: 'この日以前の発注表を表示',
+    );
+    if (picked == null) return;
+    _untilDate = picked;
+    await _load();
+  }
+
+  Future<void> _clearUntilDate() async {
+    _untilDate = null;
+    await _load();
   }
 
   pw.Widget _pastOrderPdfCell(
@@ -303,13 +334,18 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     var savedName = (data['pdfFileName'] ?? '').toString();
 
     if (raw.isEmpty && data['hasSavedPdf'] == true) {
-      final pdfDoc = await AppSession.doc(
-        'order_saved_pdfs',
-      ).collection('entries').doc(batch.id).get();
-      final pdfData = pdfDoc.data() ?? <String, dynamic>{};
-      raw = (pdfData['pdfBase64'] ?? '').toString();
-      if (savedName.isEmpty) {
-        savedName = (pdfData['pdfFileName'] ?? '').toString();
+      try {
+        final pdfDoc = await AppSession.doc(
+          'order_saved_pdfs',
+        ).collection('entries').doc(batch.id).get();
+        final pdfData = pdfDoc.data() ?? <String, dynamic>{};
+        raw = (pdfData['pdfBase64'] ?? '').toString();
+        if (savedName.isEmpty) {
+          savedName = (pdfData['pdfFileName'] ?? '').toString();
+        }
+      } catch (_) {
+        // 保存PDFが読めなくても、下で明細から再作成して開く。
+        raw = '';
       }
     }
 
@@ -321,8 +357,15 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
       return;
     }
 
+    Uint8List bytes;
     try {
-      final bytes = base64Decode(raw);
+      bytes = base64Decode(raw);
+    } catch (_) {
+      // 保存PDFが壊れている場合も、明細から再作成して開く。
+      await _exportPdfByStore(batch);
+      return;
+    }
+    try {
       final d = _batchDate(data);
       final fallbackName =
           '保存済み発注表_${d.year}${d.month.toString().padLeft(2, '0')}${d.day.toString().padLeft(2, '0')}.pdf';
@@ -348,7 +391,9 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
           (item) => viewableIds.contains((item['storeId'] ?? '').toString()),
         )
         .toList();
-    if (items.isEmpty) return;
+    if (items.isEmpty) {
+      throw Exception('閲覧できる店舗の明細がこの発注表にありません');
+    }
 
     final font = await PdfGoogleFonts.notoSansJPRegular();
     final doc = pw.Document();
@@ -467,7 +512,9 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
   ) async {
     final data = batch.data();
     final items = _batchItems(data);
-    if (items.isEmpty) return;
+    if (items.isEmpty) {
+      throw Exception('閲覧できる店舗の明細がこの発注表にありません');
+    }
 
     final font = await PdfGoogleFonts.notoSansJPRegular();
     final doc = pw.Document();
@@ -823,8 +870,27 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
       appBar: AppBar(
         title: const Text('過去の発注表'),
         actions: [
+          IconButton(
+            onPressed: _pickUntilDate,
+            icon: const Icon(Icons.calendar_month),
+            tooltip: '日付を指定して探す',
+          ),
           IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
         ],
+        bottom: _untilDate == null
+            ? null
+            : PreferredSize(
+                preferredSize: const Size.fromHeight(40),
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: InputChip(
+                    label: Text(
+                      '${_untilDate!.year}年${_untilDate!.month}月${_untilDate!.day}日以前を表示中',
+                    ),
+                    onDeleted: _clearUntilDate,
+                  ),
+                ),
+              ),
       ),
       body: SafeArea(
         child: _loading

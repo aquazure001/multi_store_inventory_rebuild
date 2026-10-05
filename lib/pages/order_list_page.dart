@@ -361,7 +361,9 @@ class _OrderListPageState extends State<OrderListPage> {
       // incrementsで書き込む。端末間の同時発注で既存数を上書きして
       // 消してしまう事故（発注したのに反映されない）を防ぐ。
       final update = {
-        '$typeKey.${entry.store.id}.${entry.item.id}': FieldValue.increment(qty),
+        '$typeKey.${entry.store.id}.${entry.item.id}': FieldValue.increment(
+          qty,
+        ),
         '${_orderMetaField(entry)}.requestedAt': FieldValue.serverTimestamp(),
         '${_orderMetaField(entry)}.requestedBy': AppSession.nickname,
         '${_orderMetaField(entry)}.storeName': entry.store.name,
@@ -500,8 +502,9 @@ class _OrderListPageState extends State<OrderListPage> {
     try {
       final Map<String, dynamic> updates = {};
       for (final e in targetEntries) {
-        updates['$typeKey.${store.id}.${e.item.id}'] =
-            FieldValue.increment(e.effectiveShortage);
+        updates['$typeKey.${store.id}.${e.item.id}'] = FieldValue.increment(
+          e.effectiveShortage,
+        );
         updates['${_orderMetaField(e)}.requestedAt'] =
             FieldValue.serverTimestamp();
         updates['${_orderMetaField(e)}.requestedBy'] = AppSession.nickname;
@@ -859,6 +862,59 @@ class _OrderListPageState extends State<OrderListPage> {
     }
   }
 
+  // 発注確定の記録を先に行い、そのあとでPDFを共有する。
+  // 以前は共有の完了を待ってから記録していたため、共有でエラーになったり
+  // 共有中にアプリが閉じられたりすると「PDFは出したのに過去の発注表に無い」
+  // 状態になっていた。
+  Future<void> _recordAndSharePdf(
+    BuildContext context, {
+    required List<_OrderEntry> entries,
+    required Uint8List pdfBytes,
+    required String pdfKind,
+    required String fileName,
+  }) async {
+    var recorded = false;
+    try {
+      await _markPdfIssued(
+        entries,
+        pdfBytes: pdfBytes,
+        pdfKind: pdfKind,
+        pdfFileName: fileName,
+      );
+      _applyPdfIssuedLocally(entries);
+      recorded = true;
+    } catch (e) {
+      // 確定記録に失敗したら必ず知らせる。
+      // 失敗を握りつぶすと「発注したのに過去の発注表に出てこない」トラブルになる。
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('発注確定の記録に失敗しました: $e\n再読み込み後にもう一度PDFを出力してください'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 6),
+          ),
+        );
+      }
+    }
+    try {
+      await Printing.sharePdf(bytes: pdfBytes, filename: fileName);
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              recorded
+                  ? 'PDFを開けませんでしたが、発注確定は記録済みです。過去の発注表から開けます: $e'
+                  : 'PDFを開けませんでした: $e',
+            ),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 6),
+          ),
+        );
+      }
+    }
+  }
+
   void _applyPdfIssuedLocally(List<_OrderEntry> entries) {
     final issuedAt = DateTime.now();
     if (!mounted) return;
@@ -985,27 +1041,24 @@ class _OrderListPageState extends State<OrderListPage> {
 
       const fileName = '発注済みリスト_店舗別.pdf';
       final pdfBytes = await doc.save();
-      await Printing.sharePdf(bytes: pdfBytes, filename: fileName);
-      try {
-        await _markPdfIssued(
-          pdfEntries,
-          pdfBytes: pdfBytes,
-          pdfKind: 'store',
-          pdfFileName: fileName,
+      if (!context.mounted) return;
+      await _recordAndSharePdf(
+        context,
+        entries: pdfEntries,
+        pdfBytes: pdfBytes,
+        pdfKind: 'store',
+        fileName: fileName,
+      );
+    } catch (e) {
+      // PDF作成自体の失敗（フォント読込など）も黙って終わらせない。
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('PDFを作成できませんでした（発注確定はされていません）: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 6),
+          ),
         );
-        _applyPdfIssuedLocally(pdfEntries);
-      } catch (e) {
-        // PDF自体は出力済みでも確定記録に失敗したら必ず知らせる。
-        // 失敗を握りつぶすと「発注したのに過去の発注表に出てこない」トラブルになる。
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('発注確定の記録に失敗しました: $e\n再読み込み後にもう一度PDFを出力してください'),
-              backgroundColor: Colors.red,
-              duration: const Duration(seconds: 6),
-            ),
-          );
-        }
       }
     } finally {
       if (mounted) setState(() => _creatingPdf = false);
@@ -1144,25 +1197,24 @@ class _OrderListPageState extends State<OrderListPage> {
 
       const fileName = '発注済みリスト_商品別.pdf';
       final pdfBytes = await doc.save();
-      await Printing.sharePdf(bytes: pdfBytes, filename: fileName);
-      try {
-        await _markPdfIssued(
-          pdfEntries,
-          pdfBytes: pdfBytes,
-          pdfKind: 'item',
-          pdfFileName: fileName,
+      if (!context.mounted) return;
+      await _recordAndSharePdf(
+        context,
+        entries: pdfEntries,
+        pdfBytes: pdfBytes,
+        pdfKind: 'item',
+        fileName: fileName,
+      );
+    } catch (e) {
+      // PDF作成自体の失敗（フォント読込など）も黙って終わらせない。
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('PDFを作成できませんでした（発注確定はされていません）: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 6),
+          ),
         );
-        _applyPdfIssuedLocally(pdfEntries);
-      } catch (e) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('発注確定の記録に失敗しました: $e\n再読み込み後にもう一度PDFを出力してください'),
-              backgroundColor: Colors.red,
-              duration: const Duration(seconds: 6),
-            ),
-          );
-        }
       }
     } finally {
       if (mounted) setState(() => _creatingPdf = false);
