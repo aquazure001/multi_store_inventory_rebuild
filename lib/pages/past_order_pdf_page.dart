@@ -22,22 +22,14 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
   // 指定日以前の発注表から表示する（null なら最新から）。
   DateTime? _untilDate;
 
+  // 発注リストと同じ Printing.sharePdf で開く。
+  // 以前の <a download> 方式は、Firestore から保存PDFを読んだ後（非同期処理の後）
+  // だとブラウザにユーザー操作と見なされず、スマホ等でPDFが開かなかった。
   Future<void> _sharePdf({
     required Uint8List bytes,
     required String filename,
   }) async {
-    final url = html.Url.createObjectUrlFromBlob(
-      html.Blob([bytes], 'application/pdf'),
-    );
-    final link = html.AnchorElement(href: url)..download = filename;
-    try {
-      html.document.body?.append(link);
-      link.click();
-    } finally {
-      link.remove();
-      // Safariがダウンロードを開始する猶予だけ残し、大きなPDFを長時間保持しない。
-      Timer(const Duration(seconds: 10), () => html.Url.revokeObjectUrl(url));
-    }
+    await Printing.sharePdf(bytes: bytes, filename: filename);
   }
 
   Future<void> _runPdf(Future<void> Function() action) async {

@@ -565,14 +565,31 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
       try {
         await showStep('納品処理中: 納品予定表示を更新しています');
         final ordersRef = AppSession.ordersDoc;
-        await ordersRef
-            .update({
-              '$typeKey.$storeId.$itemId': FieldValue.increment(-remaining),
-              '_meta.${typeKey}__${storeId}__$itemId': FieldValue.delete(),
-              '_deliveredBatches.${batchDoc.id}.$deliveryKey': deliveryRecord,
+        // 発注数は 0 未満にしない。以前は increment(-納品数) だったため、
+        // 表示クリア後などに納品すると発注数がマイナスになり、
+        // その後の発注依頼が「-5+3=-2」のように打ち消されて発注リストに出なかった。
+        // また納品後も発注数が残る（＝別の新しい依頼がある）ときは依頼情報を消さない。
+        await FirebaseFirestore.instance
+            .runTransaction((tx) async {
+              final snap = await tx.get(ordersRef);
+              final data = snap.data() ?? <String, dynamic>{};
+              final typeMap = data[typeKey];
+              final storeMap = typeMap is Map ? typeMap[storeId] : null;
+              final current = storeMap is Map
+                  ? inventoryIntValue(storeMap[itemId])
+                  : 0;
+              final next = max(0, current - remaining);
+              tx.update(ordersRef, {
+                '$typeKey.$storeId.$itemId': next > 0
+                    ? next
+                    : FieldValue.delete(),
+                if (next <= 0)
+                  '_meta.${typeKey}__${storeId}__$itemId': FieldValue.delete(),
+                '_deliveredBatches.${batchDoc.id}.$deliveryKey': deliveryRecord,
+              });
             })
             .timeout(
-              const Duration(seconds: 8),
+              const Duration(seconds: 15),
               onTimeout: () => throw TimeoutException('納品予定表示の更新でタイムアウトしました'),
             );
         orderedCleared = true;
