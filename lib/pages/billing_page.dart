@@ -1059,8 +1059,9 @@ class _BillingPageState extends State<BillingPage> {
 
   // PDFフォント・画像は毎回ネット/アセットから読み直すと請求書・受領書の
   // 作成が数秒遅くなるため、一度読んだらキャッシュして使い回す。
-  _BillingPdfAssets? _pdfAssetsCache;
-  Future<_BillingPdfAssets>? _pdfAssetsLoading;
+  // 画面を開き直しても再読み込みしないよう static で保持する。
+  static _BillingPdfAssets? _pdfAssetsCache;
+  static Future<_BillingPdfAssets>? _pdfAssetsLoading;
 
   Future<_BillingPdfAssets> _loadPdfAssets() {
     final cached = _pdfAssetsCache;
@@ -1069,12 +1070,16 @@ class _BillingPageState extends State<BillingPage> {
     if (loading != null) return loading;
     final future = Future<_BillingPdfAssets>(() async {
       final logo = await _assetImage('assets/billing/restart_logo.png');
-      final stamp = await _assetImage('assets/billing/corporate_stamp.png');
+      // 印影・マスコットはPDF上で約60pt角の表示のため、300px版を使う。
+      // 原寸(約2000px)だとPDF生成のたびにPNG展開・再圧縮で数秒かかる。
+      final stamp = await _assetImage(
+        'assets/billing/corporate_stamp_300.png',
+      );
       final mascotInvoice = await _assetImage(
-        'assets/billing/mascot_invoice.png',
+        'assets/billing/mascot_invoice_300.png',
       );
       final mascotReceipt = await _assetImage(
-        'assets/billing/mascot_receipt.png',
+        'assets/billing/mascot_receipt_300.png',
       );
       final font = await PdfGoogleFonts.notoSansJPRegular();
       final boldFont = await PdfGoogleFonts.notoSansJPBold();
@@ -1225,6 +1230,7 @@ class _BillingPageState extends State<BillingPage> {
     if (confirmed != true) return;
 
     setState(() => _saving = true);
+    _reservePdfWindow();
     try {
       final issuedAt = DateTime.now();
       final invoiceSeq = _nextInvoiceSequence();
@@ -1281,7 +1287,7 @@ class _BillingPageState extends State<BillingPage> {
         filename:
             '請求書_${_monthKey(_selectedMonth)}_${storeName}_$invoiceNo.pdf',
       );
-      await _load();
+      unawaited(_load());
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -1297,6 +1303,7 @@ class _BillingPageState extends State<BillingPage> {
         );
       }
     } finally {
+      _releasePdfWindow();
       if (mounted) setState(() => _saving = false);
     }
   }
@@ -1391,6 +1398,7 @@ class _BillingPageState extends State<BillingPage> {
     if (confirmed != true) return;
 
     setState(() => _saving = true);
+    _reservePdfWindow();
     try {
       final issuedAt = DateTime.now();
       final invoiceSeq = _nextInvoiceSequence();
@@ -1515,7 +1523,7 @@ class _BillingPageState extends State<BillingPage> {
         filename:
             '領収書_${_monthKey(_selectedMonth)}_${storeName}_$receiptNo.pdf',
       );
-      await _load();
+      unawaited(_load());
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -1531,6 +1539,7 @@ class _BillingPageState extends State<BillingPage> {
         );
       }
     } finally {
+      _releasePdfWindow();
       if (mounted) setState(() => _saving = false);
     }
   }
@@ -1603,9 +1612,45 @@ class _BillingPageState extends State<BillingPage> {
     };
   }
 
-  // 発注リスト・過去発注表と同じ Printing.sharePdf で開く。
-  // 以前の <a download> 方式は、Firestore から保存PDFを読んだ後（非同期処理の後）
-  // だとブラウザにユーザー操作と見なされず、スマホ等でPDFが開かなかった。
+  // PDFを表示するタブは、ボタン押下の直後（ユーザー操作の直後）に先に開いておく。
+  // PDF生成・Firestore読み書きの後でタブを開いたりダウンロードさせたりすると、
+  // ブラウザにユーザー操作と見なされずブロックされ、エラーも出ずに何も起きない。
+  html.WindowBase? _pendingPdfWindow;
+
+  void _reservePdfWindow() {
+    if (!kIsWeb) return;
+    _releasePdfWindow();
+    try {
+      _pendingPdfWindow = html.window.open('pdf_loading.html', '_blank');
+    } catch (_) {
+      _pendingPdfWindow = null;
+    }
+  }
+
+  // 失敗・中断時に、先に開いた読み込み中タブを閉じる（PDF表示済みなら何もしない）。
+  void _releasePdfWindow() {
+    final win = _pendingPdfWindow;
+    _pendingPdfWindow = null;
+    if (_isPdfWindowOpen(win)) {
+      try {
+        win!.close();
+      } catch (_) {}
+    }
+  }
+
+  // ポップアップブロック時は null や操作不能なウィンドウが返るため、例外も含めて判定する。
+  bool _isPdfWindowOpen(html.WindowBase? win) {
+    if (win == null) return false;
+    try {
+      return win.closed != true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // 先に開いたタブがあればそこにPDFを表示する。
+  // タブを開けなかった場合（ポップアップブロック等）は Printing.sharePdf の
+  // ダウンロードにフォールバックする。
   Future<void> _openBillingPdfBytes({
     required List<int> bytes,
     required String filename,
@@ -1613,6 +1658,28 @@ class _BillingPageState extends State<BillingPage> {
     final safeFileName = filename.trim().isEmpty
         ? 'document.pdf'
         : filename.trim();
+    final win = _pendingPdfWindow;
+    _pendingPdfWindow = null;
+    if (kIsWeb && _isPdfWindowOpen(win)) {
+      final blob = html.Blob([Uint8List.fromList(bytes)], 'application/pdf');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      win!.location.href = url;
+      // 新しいタブがPDFを読み込み終えるまでURLを有効にしておく。
+      Future<void>.delayed(
+        const Duration(minutes: 2),
+        () => html.Url.revokeObjectUrl(url),
+      );
+      return;
+    }
+    if (kIsWeb && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('新しいタブを開けなかったため、PDFをダウンロードします。'
+              'ブラウザでこのサイトのポップアップを許可してください'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    }
     await Printing.sharePdf(
       bytes: Uint8List.fromList(bytes),
       filename: safeFileName,
@@ -1652,6 +1719,7 @@ class _BillingPageState extends State<BillingPage> {
     if (confirmed != true || !mounted) return;
 
     setState(() => _saving = true);
+    _reservePdfWindow();
     try {
       final invoiceDoc = await AppSession.billingInvoices.doc(invoice.id).get();
       final data = invoiceDoc.data();
@@ -1727,6 +1795,7 @@ class _BillingPageState extends State<BillingPage> {
         ).showSnackBar(SnackBar(content: Text('請求書PDFの再生成に失敗: $e')));
       }
     } finally {
+      _releasePdfWindow();
       if (mounted) setState(() => _saving = false);
     }
   }
@@ -1748,6 +1817,7 @@ class _BillingPageState extends State<BillingPage> {
     required String fallbackFileName,
     required String emptyMessage,
   }) async {
+    _reservePdfWindow();
     try {
       final doc = await collection.doc(docId).get();
       final data = doc.data() ?? <String, dynamic>{};
@@ -1769,6 +1839,8 @@ class _BillingPageState extends State<BillingPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('PDFを開けません: $e'), backgroundColor: Colors.red),
       );
+    } finally {
+      _releasePdfWindow();
     }
   }
 
@@ -1798,6 +1870,7 @@ class _BillingPageState extends State<BillingPage> {
     if (confirmed != true) return;
 
     setState(() => _saving = true);
+    _reservePdfWindow();
     try {
       final invoiceDoc = await AppSession.billingInvoices.doc(invoice.id).get();
       final invoiceData = invoiceDoc.data();
@@ -1887,7 +1960,7 @@ class _BillingPageState extends State<BillingPage> {
         bytes: pdfBytes,
         filename: '受領書_${invoice.invoiceNo}.pdf',
       );
-      await _load();
+      unawaited(_load());
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -1903,6 +1976,7 @@ class _BillingPageState extends State<BillingPage> {
         );
       }
     } finally {
+      _releasePdfWindow();
       if (mounted) setState(() => _saving = false);
     }
   }
@@ -4079,6 +4153,7 @@ class _BillingPageState extends State<BillingPage> {
         return;
       }
       if (mounted) setState(() => _saving = true);
+      _reservePdfWindow();
       final issuedAt = _manualIssueDate(input.dateText);
       final dueDate = _manualDueDate(
         _billingMonthFromData(data, invoice),
@@ -4141,7 +4216,7 @@ class _BillingPageState extends State<BillingPage> {
         'pdfFileName': editedPdfFileName,
       }, SetOptions(merge: true));
       await _openBillingPdfBytes(bytes: pdfBytes, filename: editedPdfFileName);
-      await _load();
+      unawaited(_load());
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -4158,6 +4233,7 @@ class _BillingPageState extends State<BillingPage> {
       for (final row in rowsToDispose) {
         row.dispose();
       }
+      _releasePdfWindow();
       if (mounted) setState(() => _saving = false);
     }
   }
@@ -4211,6 +4287,7 @@ class _BillingPageState extends State<BillingPage> {
         return;
       }
       if (mounted) setState(() => _saving = true);
+      _reservePdfWindow();
       final issuedAt = _manualIssueDate(input.dateText);
       final recipient = input.recipient;
       final billingMonth = _billingMonthFromData(data, invoice);
@@ -4277,7 +4354,7 @@ class _BillingPageState extends State<BillingPage> {
         bytes: pdfBytes,
         filename: '${label}_${invoice.invoiceNo}_編集済.pdf',
       );
-      await _load();
+      unawaited(_load());
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -4294,6 +4371,7 @@ class _BillingPageState extends State<BillingPage> {
       for (final row in rowsToDispose) {
         row.dispose();
       }
+      _releasePdfWindow();
       if (mounted) setState(() => _saving = false);
     }
   }
@@ -4756,6 +4834,7 @@ class _BillingPageState extends State<BillingPage> {
     }
 
     setState(() => _saving = true);
+    _reservePdfWindow();
     try {
       final issuedAt = DateTime.now();
       final invoiceSeq = _nextInvoiceSequence();
@@ -4847,7 +4926,7 @@ class _BillingPageState extends State<BillingPage> {
         bytes: pdfBytes,
         filename: '任意請求書_${storeName}_$invoiceNo.pdf',
       );
-      await _load();
+      unawaited(_load());
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -4863,6 +4942,7 @@ class _BillingPageState extends State<BillingPage> {
       repaymentCurrentController.dispose();
       repaymentTotalController.dispose();
       repaymentAmountController.dispose();
+      _releasePdfWindow();
       if (mounted) setState(() => _saving = false);
     }
   }
@@ -5111,6 +5191,7 @@ class _BillingPageState extends State<BillingPage> {
     }
 
     setState(() => _saving = true);
+    _reservePdfWindow();
     try {
       final invoiceSeq = _nextInvoiceSequence();
       final receiptNo = _invoiceNo(invoiceSeq);
@@ -5238,7 +5319,7 @@ class _BillingPageState extends State<BillingPage> {
         bytes: pdfBytes,
         filename: '${docLabel}_${storeName}_$receiptNo.pdf',
       );
-      await _load();
+      unawaited(_load());
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -5257,6 +5338,7 @@ class _BillingPageState extends State<BillingPage> {
       repaymentCurrentController.dispose();
       repaymentTotalController.dispose();
       repaymentAmountController.dispose();
+      _releasePdfWindow();
       if (mounted) setState(() => _saving = false);
     }
   }
