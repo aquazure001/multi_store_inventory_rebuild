@@ -175,7 +175,8 @@ class _BillingPageState extends State<BillingPage> {
       // 一覧は新しい順で軽めに取得し、非開示/確認待ち店舗は取得後に除外する。
       final invoiceSnap = loadResults[1] as QuerySnapshot<Map<String, dynamic>>;
       final priceDoc = loadResults[2] as DocumentSnapshot<Map<String, dynamic>>;
-      final storesDoc = loadResults[3] as DocumentSnapshot<Map<String, dynamic>>;
+      final storesDoc =
+          loadResults[3] as DocumentSnapshot<Map<String, dynamic>>;
       // シェル表示用に店舗マスタだけ先行解析する（商品マスタ系は後続）。
       final allParsedStores = _parseStores(
         storesDoc.data() ?? <String, dynamic>{},
@@ -312,8 +313,7 @@ class _BillingPageState extends State<BillingPage> {
             .get(),
         masterFuture,
       ]);
-      final batchSnap =
-          heavyResults[0] as QuerySnapshot<Map<String, dynamic>>;
+      final batchSnap = heavyResults[0] as QuerySnapshot<Map<String, dynamic>>;
       final masterData = heavyResults[1] as _MasterDataSnapshot;
       final manualItemMastersByCode = <String, LegacyItem>{};
       for (final item in [
@@ -1072,9 +1072,7 @@ class _BillingPageState extends State<BillingPage> {
       final logo = await _assetImage('assets/billing/restart_logo.png');
       // 印影・マスコットはPDF上で約60pt角の表示のため、300px版を使う。
       // 原寸(約2000px)だとPDF生成のたびにPNG展開・再圧縮で数秒かかる。
-      final stamp = await _assetImage(
-        'assets/billing/corporate_stamp_300.png',
-      );
+      final stamp = await _assetImage('assets/billing/corporate_stamp_300.png');
       final mascotInvoice = await _assetImage(
         'assets/billing/mascot_invoice_300.png',
       );
@@ -1674,8 +1672,10 @@ class _BillingPageState extends State<BillingPage> {
     if (kIsWeb && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('新しいタブを開けなかったため、PDFをダウンロードします。'
-              'ブラウザでこのサイトのポップアップを許可してください'),
+          content: Text(
+            '新しいタブを開けなかったため、PDFをダウンロードします。'
+            'ブラウザでこのサイトのポップアップを許可してください',
+          ),
           backgroundColor: Colors.orange,
         ),
       );
@@ -1684,6 +1684,19 @@ class _BillingPageState extends State<BillingPage> {
       bytes: Uint8List.fromList(bytes),
       filename: safeFileName,
     );
+  }
+
+  // スマホでは、タブが裏に回る・スリープする等で Firestore の通信が切れたまま
+  // get() が応答せず、エラーも出ずにボタンがグレーのまま待ち続けることがある。
+  // 一定時間で打ち切ってエラー表示し、再読み込みを促す。
+  Future<DocumentSnapshot<Map<String, dynamic>>> _getBillingDoc(
+    DocumentReference<Map<String, dynamic>> ref,
+  ) async {
+    try {
+      return await ref.get().timeout(const Duration(seconds: 15));
+    } on TimeoutException {
+      throw Exception('通信がタイムアウトしました。ページを再読み込みしてから、もう一度お試しください');
+    }
   }
 
   Future<void> _openInvoicePdf(_BillingInvoiceSummary invoice) async {
@@ -1721,7 +1734,9 @@ class _BillingPageState extends State<BillingPage> {
     setState(() => _saving = true);
     _reservePdfWindow();
     try {
-      final invoiceDoc = await AppSession.billingInvoices.doc(invoice.id).get();
+      final invoiceDoc = await _getBillingDoc(
+        AppSession.billingInvoices.doc(invoice.id),
+      );
       final data = invoiceDoc.data();
       if (data == null) throw Exception('請求書データが見つかりません');
       final lines = _BillingLine.fromInvoiceItems(data['items']);
@@ -1751,7 +1766,7 @@ class _BillingPageState extends State<BillingPage> {
             : <String, dynamic>{},
       );
       final savedPdfRef = AppSession.billingInvoicePdfs.doc(invoice.id);
-      final savedPdf = await savedPdfRef.get();
+      final savedPdf = await _getBillingDoc(savedPdfRef);
       final savedName = (savedPdf.data()?['pdfFileName'] ?? '').toString();
       final fileName = savedName.isEmpty
           ? '請求書_${invoice.invoiceNo}.pdf'
@@ -1819,7 +1834,7 @@ class _BillingPageState extends State<BillingPage> {
   }) async {
     _reservePdfWindow();
     try {
-      final doc = await collection.doc(docId).get();
+      final doc = await _getBillingDoc(collection.doc(docId));
       final data = doc.data() ?? <String, dynamic>{};
       final raw = (data['pdfBase64'] ?? '').toString();
       if (raw.isEmpty) {
@@ -1872,7 +1887,9 @@ class _BillingPageState extends State<BillingPage> {
     setState(() => _saving = true);
     _reservePdfWindow();
     try {
-      final invoiceDoc = await AppSession.billingInvoices.doc(invoice.id).get();
+      final invoiceDoc = await _getBillingDoc(
+        AppSession.billingInvoices.doc(invoice.id),
+      );
       final invoiceData = invoiceDoc.data();
       if (invoiceData == null) throw Exception('請求書データが見つかりません');
       final lines = _BillingLine.fromInvoiceItems(invoiceData['items']);
@@ -4111,7 +4128,9 @@ class _BillingPageState extends State<BillingPage> {
     setState(() => _saving = true);
     List<_ManualBillingLineControllers> rowsToDispose = const [];
     try {
-      final doc = await AppSession.billingInvoices.doc(invoice.id).get();
+      final doc = await _getBillingDoc(
+        AppSession.billingInvoices.doc(invoice.id),
+      );
       final data = doc.data();
       if (data == null) throw Exception('請求書データが見つかりません');
       final lines = _BillingLine.fromInvoiceItems(data['items']);
@@ -4252,7 +4271,9 @@ class _BillingPageState extends State<BillingPage> {
     setState(() => _saving = true);
     List<_ManualBillingLineControllers> rowsToDispose = const [];
     try {
-      final doc = await AppSession.billingReceipts.doc(invoice.receiptId).get();
+      final doc = await _getBillingDoc(
+        AppSession.billingReceipts.doc(invoice.receiptId),
+      );
       final data = doc.data();
       if (data == null) throw Exception('$labelデータが見つかりません');
       final lines = _BillingLine.fromInvoiceItems(data['items']);
