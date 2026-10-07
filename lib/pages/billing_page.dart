@@ -1616,7 +1616,6 @@ class _BillingPageState extends State<BillingPage> {
   html.WindowBase? _pendingPdfWindow;
 
   void _reservePdfWindow() {
-    if (!kIsWeb) return;
     _releasePdfWindow();
     try {
       _pendingPdfWindow = html.window.open('pdf_loading.html', '_blank');
@@ -1658,7 +1657,7 @@ class _BillingPageState extends State<BillingPage> {
         : filename.trim();
     final win = _pendingPdfWindow;
     _pendingPdfWindow = null;
-    if (kIsWeb && _isPdfWindowOpen(win)) {
+    if (_isPdfWindowOpen(win)) {
       final blob = html.Blob([Uint8List.fromList(bytes)], 'application/pdf');
       final url = html.Url.createObjectUrlFromBlob(blob);
       win!.location.href = url;
@@ -1669,7 +1668,7 @@ class _BillingPageState extends State<BillingPage> {
       );
       return;
     }
-    if (kIsWeb && mounted) {
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
