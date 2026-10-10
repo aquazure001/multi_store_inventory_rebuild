@@ -1,5 +1,12 @@
 part of '../main.dart';
 
+// 2週間以内の連続発注を確認するための最近の発注履歴
+class _RecentOrder {
+  const _RecentOrder({required this.qty, required this.local});
+  final int qty;
+  final String local; // requestedAtLocal (ISO8601, 端末ローカル時刻)
+}
+
 class OrderListPage extends StatefulWidget {
   const OrderListPage({super.key});
 
@@ -17,6 +24,8 @@ class _OrderListPageState extends State<OrderListPage> {
   final Set<String> _selectedTypes = {'商品', 'テスター', '備品'};
   // key: "${storeId}_${itemType}_${itemId}"
   final Map<String, int> _orderedQtys = {};
+  // key: "${storeId}_${itemId}" → 2週間以内の最新発注履歴
+  final Map<String, _RecentOrder> _recentOrderHistory = {};
   final Map<String, _OrderMeta> _orderMetas = {};
   final Map<String, TextEditingController> _qtyControllers = {};
   bool _creatingPdf = false;
@@ -42,6 +51,21 @@ class _OrderListPageState extends State<OrderListPage> {
 
   String _orderMetaField(_OrderEntry entry) =>
       '_meta.${_orderMetaKey(_typeKeyForType(entry.itemType), entry.store.id, entry.item.id)}';
+
+  // requestedAtLocal ('2026-10-10T02:09:45.007') → '10/10 02:09'
+  String _formatRecentAt(String isoLocal) {
+    final t = DateTime.tryParse(isoLocal);
+    if (t == null) return isoLocal;
+    return '${t.month}/${t.day} '
+        '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+  }
+
+  // 同一品番を2週間以内に発注していた場合の警告文（なければ null）
+  String? _recentOrderWarn(_OrderEntry e) {
+    final r = _recentOrderHistory['${e.store.id}_${e.item.id}'];
+    if (r == null) return null;
+    return '${_formatRecentAt(r.local)}に ${r.qty}個 発注済み（2週間以内の連続発注）';
+  }
 
   @override
   void initState() {
@@ -76,11 +100,19 @@ class _OrderListPageState extends State<OrderListPage> {
     });
     try {
       final master = await _loadMasterData();
-      final results = await Future.wait([
+      final recentCutoff = Timestamp.fromDate(
+        DateTime.now().subtract(const Duration(days: 14)),
+      );
+      final results = await Future.wait<dynamic>([
         AppSession.stocksDoc.get(),
         AppSession.baselineDoc.get(),
         AppSession.stocksV2Doc.get(),
         AppSession.ordersDoc.get(),
+        AppSession.doc('order_request_history')
+            .collection('entries')
+            .where('requestedAt', isGreaterThanOrEqualTo: recentCutoff)
+            .limit(400)
+            .get(),
       ]);
 
       final allStores = master.stores;
@@ -135,7 +167,8 @@ class _OrderListPageState extends State<OrderListPage> {
             final qty = itemEntry.value is int
                 ? itemEntry.value as int
                 : int.tryParse('${itemEntry.value}') ?? 0;
-            if (qty > 0) {
+            if (qty != 0) {
+              // 負の値も保持し、発注リスト画面でデータ異常として警告表示する。
               orderedQtys['${storeId}_${typeName}_$itemId'] = qty;
             }
           }
@@ -152,6 +185,25 @@ class _OrderListPageState extends State<OrderListPage> {
           store.id,
         );
         baseByStoreId[store.id] = _parseStocksForStore(baseData, store.id);
+      }
+
+      // 2週間以内の発注履歴（storeId+itemId ごとの最新1件）
+      final recentHistory = <String, _RecentOrder>{};
+      final recentSnap =
+          results[4] as QuerySnapshot<Map<String, dynamic>>;
+      for (final d in recentSnap.docs) {
+        final data = d.data();
+        final local = (data['requestedAtLocal'] ?? '').toString();
+        final storeId = (data['storeId'] ?? '').toString();
+        final itemId = (data['itemId'] ?? '').toString();
+        final qtyRaw = data['qty'];
+        final qty = qtyRaw is int ? qtyRaw : int.tryParse('$qtyRaw') ?? 0;
+        if (storeId.isEmpty || itemId.isEmpty) continue;
+        final key = '${storeId}_$itemId';
+        final existing = recentHistory[key];
+        if (existing == null || local.compareTo(existing.local) > 0) {
+          recentHistory[key] = _RecentOrder(qty: qty, local: local);
+        }
       }
 
       final entries = <_OrderEntry>[];
@@ -175,8 +227,9 @@ class _OrderListPageState extends State<OrderListPage> {
             final orderedQty =
                 orderedQtys['${store.id}_${typeName}_${item.id}'] ?? 0;
             final metaKey = _orderMetaKey(typeKey, store.id, item.id);
-            final effectiveShortage = max(0, b - c - orderedQty);
-            if (effectiveShortage > 0 || orderedQty > 0) {
+            // 負の発注データは不足計算では0扱いにし、データ異常だけを画面で警告する。
+            final effectiveShortage = max(0, b - c - max(0, orderedQty));
+            if (effectiveShortage > 0 || orderedQty != 0) {
               final entry = _OrderEntry(
                 store: store,
                 item: item,
@@ -210,6 +263,9 @@ class _OrderListPageState extends State<OrderListPage> {
         _orderedQtys
           ..clear()
           ..addAll(orderedQtys);
+        _recentOrderHistory
+          ..clear()
+          ..addAll(recentHistory);
         _orderMetas
           ..clear()
           ..addAll(orderMetas);
@@ -320,17 +376,36 @@ class _OrderListPageState extends State<OrderListPage> {
       return;
     }
     final typeKey = _typeKeyForType(entry.itemType);
-    final existingQty = _orderedQtys[_orderKey(entry)] ?? 0;
+    final existingQty = max(0, _orderedQtys[_orderKey(entry)] ?? 0);
     final totalQty = existingQty + qty;
+    final recentWarn = _recentOrderWarn(entry);
 
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('発注リスト追加確認'),
-        content: Text(
-          existingQty > 0
-              ? '${entry.store.name}\n${entry.item.name}\n$existingQty個納品予定ですが、追加で $qty個 発注しますか？\n\n合計の納品予定数は $totalQty個 になります。'
-              : '${entry.store.name}\n${entry.item.name}\nを $qty個、発注リストに登録します。\n\n※「発注確定PDF」を出した時点で発注日として記録されます。',
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              existingQty > 0
+                  ? '${entry.store.name}\n${entry.item.name}\n$existingQty個納品予定ですが、追加で $qty個 発注しますか？\n\n合計の納品予定数は $totalQty個 になります。'
+                  : '${entry.store.name}\n${entry.item.name}\nを $qty個、発注リストに登録します。\n\n※「発注確定PDF」を出した時点で発注日として記録されます。',
+            ),
+            if (recentWarn != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Text(
+                  '⚠️ ${entry.item.name}：$recentWarn',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Colors.orange,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+          ],
         ),
         actions: [
           TextButton(
@@ -447,9 +522,24 @@ class _OrderListPageState extends State<OrderListPage> {
                     child: Row(
                       children: [
                         Expanded(
-                          child: Text(
-                            e.item.name,
-                            style: const TextStyle(fontSize: 13),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                e.item.name,
+                                style: const TextStyle(fontSize: 13),
+                              ),
+                              if (_recentOrderWarn(e) != null)
+                                Text(
+                                  '⚠️ ${_recentOrderWarn(e)}',
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    color: Colors.orange,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                            ],
                           ),
                         ),
                         Text(
@@ -490,7 +580,7 @@ class _OrderListPageState extends State<OrderListPage> {
     try {
       final Map<String, dynamic> updates = {};
       for (final e in targetEntries) {
-        final existing = _orderedQtys[_orderKey(e)] ?? 0;
+        final existing = max(0, _orderedQtys[_orderKey(e)] ?? 0);
         final total = existing + e.effectiveShortage;
         updates['$typeKey.${store.id}.${e.item.id}'] = total;
         updates['${_orderMetaField(e)}.requestedAt'] =
@@ -536,7 +626,7 @@ class _OrderListPageState extends State<OrderListPage> {
         'order_request_history',
       ).collection('entries');
       for (final e in targetEntries) {
-        final existing = _orderedQtys[_orderKey(e)] ?? 0;
+        final existing = max(0, _orderedQtys[_orderKey(e)] ?? 0);
         final total = existing + e.effectiveShortage;
         historyBatch.set(
           historyRef.doc(),
@@ -546,7 +636,7 @@ class _OrderListPageState extends State<OrderListPage> {
       await historyBatch.commit();
 
       for (final e in targetEntries) {
-        final existing = _orderedQtys[_orderKey(e)] ?? 0;
+        final existing = max(0, _orderedQtys[_orderKey(e)] ?? 0);
         _applyOrderRequestLocally(
           e,
           e.effectiveShortage,
@@ -579,7 +669,7 @@ class _OrderListPageState extends State<OrderListPage> {
   ) async {
     final key = _orderKey(entry);
     final orderedQty = _orderedQtys[key] ?? 0;
-    if (orderedQty <= 0) return;
+    if (orderedQty == 0) return;
 
     final controller = TextEditingController(text: '$orderedQty');
     final newQty = await showDialog<int>(
@@ -693,7 +783,7 @@ class _OrderListPageState extends State<OrderListPage> {
   ) async {
     final key = _orderKey(entry);
     final orderedQty = _orderedQtys[key] ?? 0;
-    if (orderedQty <= 0) return;
+    if (orderedQty == 0) return;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -1400,10 +1490,31 @@ class _OrderListPageState extends State<OrderListPage> {
                     ),
                   ),
                 ),
+              ] else if (orderedQty < 0) ...[
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    border: Border.all(color: Colors.red.shade300),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    '⚠️ 納品予定データ異常:$orderedQty',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.red.shade800,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
               ],
             ],
           ),
-          if (orderedQty > 0 && _canConfirmOrders)
+          if (orderedQty != 0 && _canConfirmOrders)
             _buildOrderedActionButtons(context, e),
           const Divider(height: 10),
         ],
@@ -1494,10 +1605,31 @@ class _OrderListPageState extends State<OrderListPage> {
                     ),
                   ),
                 ),
+              ] else if (orderedQty < 0) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 5,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    border: Border.all(color: Colors.red.shade300),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    '⚠️ 納品予定データ異常:$orderedQty',
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: Colors.red.shade800,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
               ],
             ],
           ),
-          if (orderedQty > 0) _buildOrderedActionButtons(context, e),
+          if (orderedQty != 0) _buildOrderedActionButtons(context, e),
           const Divider(height: 8),
         ],
       ),
