@@ -4,6 +4,14 @@ part of '../main.dart';
 // 納品処理ページ（発注確定PDFごとの納品記録）
 // ─────────────────────────────────────────────
 
+// 納品処理をトランザクション内で中止する場合に投げる例外
+class _DeliveryAbort implements Exception {
+  const _DeliveryAbort(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
 class DeliveryProcessingPage extends StatefulWidget {
   const DeliveryProcessingPage({super.key});
 
@@ -375,82 +383,118 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
       return;
     }
 
-    var deliveryStatusSaved = false;
+    final nowLocal = DateTime.now().toIso8601String();
+    final deliveryRecord = {
+      'qty': remaining,
+      'deliveredAtLocal': nowLocal,
+      'deliveredBy': AppSession.nickname,
+      'storeId': storeId,
+      'storeName': storeName,
+      'itemId': itemId,
+      'itemName': itemName,
+      'itemType': itemType,
+      'typeKey': typeKey,
+      'batchId': batchDoc.id,
+    };
+    final stocksRef = isProduct ? AppSession.stocksDoc : AppSession.stocksV2Doc;
 
-    Future<void> rollbackDeliveryStatus() async {
-      if (!deliveryStatusSaved) return;
-      try {
-        await AppSession.doc('order_delivery_status')
-            .collection('entries')
-            .doc(batchDoc.id)
-            .update({
-              'deliveredMap.$deliveryKey': FieldValue.delete(),
-              'updatedAt': FieldValue.serverTimestamp(),
-              'updatedAtLocal': DateTime.now().toIso8601String(),
-            })
-            .timeout(const Duration(seconds: 6));
-      } catch (_) {
-        // ロールバック失敗は画面エラーを増やさない。
-      }
-      if (mounted) {
-        setState(() {
-          _localDeliveredKeys.remove(localKey);
-          _externalDeliveredMaps[batchDoc.id]?.remove(deliveryKey);
-        });
-      }
-    }
+    // 納品前の在庫数を控えておき、納品後に再読込した値と比較表示する。
+    final beforeQty = showResult
+        ? await _currentStockQty(
+            isProduct: isProduct,
+            typeKey: typeKey,
+            storeId: storeId,
+            itemId: itemId,
+          )
+        : null;
 
     try {
-      final nowLocal = DateTime.now().toIso8601String();
-      final deliveryRecord = {
-        'qty': remaining,
-        'deliveredAtLocal': nowLocal,
-        'deliveredBy': AppSession.nickname,
-        'storeId': storeId,
-        'storeName': storeName,
-        'itemId': itemId,
-        'itemName': itemName,
-        'itemType': itemType,
-        'typeKey': typeKey,
-      };
-      final stocksRef = isProduct
-          ? AppSession.stocksDoc
-          : AppSession.stocksV2Doc;
+      await showStep('納品処理中: 発注表の残数を確認しています');
 
-      // 納品前の在庫数を控えておき、納品後に再読込した値と比較表示する。
-      final beforeQty = showResult
-          ? await _currentStockQty(
-              isProduct: isProduct,
-              typeKey: typeKey,
-              storeId: storeId,
-              itemId: itemId,
-            )
-          : null;
+      // 発注表の残数・在庫加算・納品予定差し引き・納品記録を
+      // 1トランザクションで整合させる。競合時は Firestore が自動再試行する。
+      // トランザクションにより二重納品・過剰納品・部分反映を防ぐ。
+      await FirebaseFirestore.instance.runTransaction<void>((tx) async {
+        final fresh = await tx.get(batchDoc.reference);
+        if (!fresh.exists) {
+          throw const _DeliveryAbort('発注表が削除されているため納品できません');
+        }
+        final rawItems = fresh.data()?['items'];
+        if (rawItems is! List) {
+          throw const _DeliveryAbort('発注表の内容を読み取れませんでした');
+        }
+        int rowIdx = -1;
+        for (var i = 0; i < rawItems.length; i++) {
+          final e = rawItems[i];
+          if (e is! Map) continue;
+          final rowKey = _deliveryKey(
+            Map<String, dynamic>.from(
+              e.map((k, v) => MapEntry(k.toString(), v)),
+            ),
+          );
+          if (rowKey == deliveryKey) {
+            rowIdx = i;
+            break;
+          }
+        }
+        if (rowIdx < 0) {
+          throw const _DeliveryAbort('発注表に該当する行が見つかりませんでした');
+        }
+        final row = Map<String, dynamic>.from(
+          (rawItems[rowIdx] as Map).map((k, v) => MapEntry(k.toString(), v)),
+        );
+        final rowQty = _toInt(row['qty']);
+        final freshDelivered = _toInt(row['deliveredQty']);
+        final freshRemaining = max(0, rowQty - freshDelivered);
+        if (freshRemaining <= 0) {
+          throw const _DeliveryAbort('この行はすでに納品済みのため処理を中止しました');
+        }
+        if (remaining != freshRemaining) {
+          throw _DeliveryAbort(
+            '発注表の残数が変化しています（実残 $freshRemaining個）。\n'
+            '再読み込みしてから、改めて納品処理してください',
+          );
+        }
+        final delivered = freshDelivered + remaining;
+        final allDelivered = delivered >= rowQty;
+        final freshItems = List<Object?>.from(rawItems);
+        freshItems[rowIdx] = {
+          ...row,
+          'deliveredQty': delivered,
+          'deliveredAtLocal': nowLocal,
+          'deliveredBy': AppSession.nickname,
+          'status': allDelivered ? 'delivered' : 'partial',
+        };
 
-      // 納品記録の保存を先に行うと、権限・キャッシュ・旧データの影響で
-      // 在庫加算前に止まることがある。納品処理では在庫加算を最優先にする。
-      await showStep('納品処理中: 在庫に加算しています');
-      if (isProduct) {
-        await stocksRef
-            .set({
-              storeId: {itemId: FieldValue.increment(remaining)},
-            }, SetOptions(merge: true))
-            .timeout(
-              const Duration(seconds: 12),
-              onTimeout: () => throw TimeoutException('在庫加算でタイムアウトしました'),
-            );
-      } else {
-        await stocksRef
-            .set({
+        tx.update(batchDoc.reference, {
+          'items': freshItems,
+          'status': allDelivered ? 'delivered' : 'partial',
+          'updatedAt': FieldValue.serverTimestamp(),
+          'updatedAtLocal': nowLocal,
+        });
+        if (isProduct) {
+          tx.set(
+            stocksRef,
+            {storeId: {itemId: FieldValue.increment(remaining)}},
+            SetOptions(merge: true),
+          );
+        } else {
+          tx.set(
+            stocksRef,
+            {
               typeKey: {
                 storeId: {itemId: FieldValue.increment(remaining)},
               },
-            }, SetOptions(merge: true))
-            .timeout(
-              const Duration(seconds: 12),
-              onTimeout: () => throw TimeoutException('在庫加算でタイムアウトしました'),
-            );
-      }
+            },
+            SetOptions(merge: true),
+          );
+        }
+        tx.update(AppSession.ordersDoc, {
+          '$typeKey.$storeId.$itemId': FieldValue.increment(-remaining),
+          '_meta.${typeKey}__${storeId}__$itemId': FieldValue.delete(),
+          '_deliveredBatches.${batchDoc.id}.$deliveryKey': deliveryRecord,
+        });
+      }).timeout(const Duration(seconds: 30));
 
       // 納品後の在庫数を再読込し、反映結果を確認できるようにする。
       final afterQty = showResult
@@ -461,27 +505,6 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
               itemId: itemId,
             )
           : null;
-
-      // 在庫反映後に、店舗在庫一覧の「納品予定」表示を消す。
-      // ここは在庫加算とは分離し、失敗しても納品自体は成功扱いにする。
-      var orderedCleared = false;
-      try {
-        await showStep('納品処理中: 納品予定表示を更新しています');
-        final ordersRef = AppSession.ordersDoc;
-        await ordersRef
-            .update({
-              '$typeKey.$storeId.$itemId': FieldValue.increment(-remaining),
-              '_meta.${typeKey}__${storeId}__$itemId': FieldValue.delete(),
-              '_deliveredBatches.${batchDoc.id}.$deliveryKey': deliveryRecord,
-            })
-            .timeout(
-              const Duration(seconds: 8),
-              onTimeout: () => throw TimeoutException('納品予定表示の更新でタイムアウトしました'),
-            );
-        orderedCleared = true;
-      } catch (_) {
-        orderedCleared = false;
-      }
 
       if (mounted) {
         setState(() {
@@ -495,16 +518,9 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
       }
 
       // 互換用: 旧発注表側と別保存先にも書ける場合だけ書く。
-      // ここが失敗しても、在庫加算と orders 側の軽量記録を正とする。
-      try {
-        await batchDoc.reference
-            .update({
-              'status': 'partial',
-              'updatedAt': FieldValue.serverTimestamp(),
-              'updatedAtLocal': nowLocal,
-            })
-            .timeout(const Duration(seconds: 4));
-      } catch (_) {}
+      // 失敗しても正本（発注表 items・orders._deliveredBatches・在庫）は
+      // トランザクションで整合済みのため、静かに記録するだけにする。
+      var compatSaved = false;
       try {
         await AppSession.doc('order_delivery_status')
             .collection('entries')
@@ -516,8 +532,9 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
               'updatedAtLocal': nowLocal,
             }, SetOptions(merge: true))
             .timeout(const Duration(seconds: 4));
-        deliveryStatusSaved = true;
+        compatSaved = true;
       } catch (_) {}
+
       if (showResult && mounted) {
         final changeText = (beforeQty != null && afterQty != null)
             ? '\n$beforeQty個 → $afterQty個 に更新されました'
@@ -525,48 +542,69 @@ class _DeliveryProcessingPageState extends State<DeliveryProcessingPage> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              orderedCleared
+              compatSaved
                   ? '$storeName：$itemName を $remaining個 納品しました$changeText'
-                  : '$storeName：$itemName を $remaining個 納品しました（納品予定表示は更新できませんでした）$changeText',
+                  : '$storeName：$itemName を $remaining個 納品しました'
+                      '（発注表・在庫は確定済み。互換記録の保存だけ失敗）$changeText',
             ),
-            backgroundColor: orderedCleared ? Colors.green : Colors.orange,
+            backgroundColor: Colors.green,
             duration: const Duration(seconds: 4),
           ),
         );
       }
+    } on _DeliveryAbort catch (e) {
+      if (showResult && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('納品処理を中止しました: ${e.message}'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      if (!showResult) {
+        throw Exception(e.message);
+      }
     } on TimeoutException catch (e) {
-      await rollbackDeliveryStatus();
       if (!showResult) rethrow;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('納品処理失敗: ${e.message}'),
+            content: Text(
+              '納品処理失敗: ${e.message ?? 'タイムアウト'}\n'
+              '反映されていない可能性があるため、画面を再読み込みして残数を確認してください',
+            ),
             backgroundColor: Colors.red,
           ),
         );
       }
     } on FirebaseException catch (e) {
-      await rollbackDeliveryStatus();
       if (!showResult) rethrow;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('納品処理失敗: ${e.message ?? e.code}'),
+            content: Text(
+              '納品処理失敗: ${e.message ?? e.code}\n'
+              '反映されていない可能性があるため、画面を再読み込みして残数を確認してください',
+            ),
             backgroundColor: Colors.red,
           ),
         );
       }
     } catch (e) {
-      await rollbackDeliveryStatus();
       if (!showResult) rethrow;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('納品処理失敗: $e'), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text(
+              '納品処理失敗: $e\n'
+              '反映されていない可能性があるため、画面を再読み込みして残数を確認してください',
+            ),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     }
   }
-
   Future<void> _deliverSelectedInBatch(
     QueryDocumentSnapshot<Map<String, dynamic>> batch,
   ) async {
