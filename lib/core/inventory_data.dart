@@ -69,7 +69,7 @@ class _OrderEntry {
   final Map<String, int> allStoreStocks;
 
   int get shortage => base - current;
-  int get effectiveShortage => max(0, base - current - orderedQty);
+  int get effectiveShortage => max(0, base - current - max(0, orderedQty));
   bool get hasOrderedQty => orderedQty > 0;
 }
 

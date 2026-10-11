@@ -14,9 +14,14 @@ class PastOrderPdfPage extends StatefulWidget {
 class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
   bool _loading = true;
   String? _error;
+  // PDF本体(pdfBase64)がドキュメント内蔵の旧データは1件あたり数百KB〜1MBに
+  // 及ぶため、一括取得すると読み込みが固まってくるくる回り続ける。
+  // そのため少しずつサーバーから取得する方式にする。
+  static const int _pageSize = 20;
+  static const Duration _timeout = Duration(seconds: 30);
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _batches = [];
-  QueryDocumentSnapshot<Map<String, dynamic>>? _lastBatch;
-  bool _hasMore = false;
+  QueryDocumentSnapshot<Map<String, dynamic>>? _lastDoc;
+  bool _hasMoreServer = false;
   bool _loadingMore = false;
   bool _pdfBusy = false;
   // 指定日以前の発注表から表示する（null なら最新から）。
@@ -135,8 +140,39 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     return Map<String, String>.fromEntries(entries);
   }
 
-  Future<void> _load({bool more = false}) async {
-    if (_loadingMore || (more && (!_hasMore || _loading))) return;
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _filterCanceled(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) => docs.where((doc) => (doc.data()['status'] ?? '') != 'canceled').toList();
+
+  Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _fetchBatchDocs({
+    QueryDocumentSnapshot<Map<String, dynamic>>? startAfter,
+  }) async {
+    var query = AppSession.orderBatches.orderBy('createdAt', descending: true);
+    final until = _untilDate;
+    if (until != null) {
+      query = query.where(
+        'createdAt',
+        isLessThan: Timestamp.fromDate(
+          DateTime(until.year, until.month, until.day + 1),
+        ),
+      );
+    }
+    if (startAfter != null) {
+      query = query.startAfterDocument(startAfter);
+    }
+    final snap = await query
+        .limit(_pageSize)
+        .get()
+        .timeout(
+          _timeout,
+          onTimeout: () => throw TimeoutException(
+            '取り込みが30秒以内に完了しませんでした。回線状況を確認して再試行してください。',
+          ),
+        );
+    return snap.docs;
+  }
+
+  Future<void> _load() async {
     if (!_canViewPastOrders) {
       setState(() {
         _loading = false;
@@ -146,40 +182,17 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     }
 
     setState(() {
-      if (more) {
-        _loadingMore = true;
-      } else {
-        _loading = true;
-      }
+      _loading = true;
       _error = null;
     });
     try {
-      var query = AppSession.orderBatches
-          .orderBy('createdAt', descending: true)
-          .limit(20);
-      final until = _untilDate;
-      if (until != null) {
-        query = query.where(
-          'createdAt',
-          isLessThan: Timestamp.fromDate(
-            DateTime(until.year, until.month, until.day + 1),
-          ),
-        );
-      }
-      if (more && _lastBatch != null) {
-        query = query.startAfterDocument(_lastBatch!);
-      }
-      final snap = await query.get();
+      final rawDocs = await _fetchBatchDocs();
+      final docs = _filterCanceled(rawDocs);
       if (!mounted) return;
       setState(() {
-        if (!more) _lastBatch = null;
-        final batches = snap.docs
-            .where((doc) => (doc.data()['status'] ?? '') != 'canceled')
-            .toList();
-        _batches = more ? [..._batches, ...batches] : batches;
-        if (snap.docs.isNotEmpty) _lastBatch = snap.docs.last;
-        _hasMore = snap.docs.length == 20;
-        _loadingMore = false;
+        _batches = docs;
+        _lastDoc = rawDocs.isNotEmpty ? rawDocs.last : null;
+        _hasMoreServer = rawDocs.length == _pageSize;
         _loading = false;
       });
     } catch (e) {
@@ -209,6 +222,31 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
   Future<void> _clearUntilDate() async {
     _untilDate = null;
     await _load();
+  }
+
+  Future<void> _loadMore() async {
+    if (_loadingMore || _lastDoc == null || !_hasMoreServer) return;
+    setState(() => _loadingMore = true);
+    try {
+      final rawDocs = await _fetchBatchDocs(startAfter: _lastDoc);
+      final docs = _filterCanceled(rawDocs);
+      setState(() {
+        _batches = [..._batches, ...docs];
+        _lastDoc = rawDocs.isNotEmpty ? rawDocs.last : _lastDoc;
+        _hasMoreServer = rawDocs.length == _pageSize;
+        _loadingMore = false;
+      });
+    } catch (e) {
+      setState(() => _loadingMore = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('続きの読み取りに失敗: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   pw.Widget _pastOrderPdfCell(
@@ -892,9 +930,9 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
                 padding: const EdgeInsets.all(24),
                 child: SelectableText('読み取りエラー\n\n$_error'),
               )
-            : _batches.isEmpty && !_hasMore
+            : _batches.isEmpty && !_hasMoreServer
             ? const Center(child: Text('過去の発注表はありません'))
-            : noViewableStores && !_hasMore
+            : noViewableStores && !_hasMoreServer
             ? Padding(
                 padding: const EdgeInsets.all(24),
                 child: Center(
@@ -950,12 +988,10 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
                   Expanded(
                     child: Builder(
                       builder: (context) {
-                        final visibleBatches = _batches;
-                        final hasMore = _hasMore;
+                        final hasMore = _hasMoreServer;
                         return ListView.builder(
                           padding: const EdgeInsets.all(16),
-                          itemCount:
-                              2 + visibleBatches.length + (hasMore ? 1 : 0),
+                          itemCount: 2 + _batches.length + (hasMore ? 1 : 0),
                           itemBuilder: (context, index) {
                             if (index == 0) {
                               return const Card(
@@ -969,19 +1005,27 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
                             }
                             if (index == 1) return const SizedBox(height: 12);
                             final batchIndex = index - 2;
-                            if (batchIndex < visibleBatches.length) {
-                              return _buildBatchCard(
-                                visibleBatches[batchIndex],
-                              );
+                            if (batchIndex < _batches.length) {
+                              return _buildBatchCard(_batches[batchIndex]);
                             }
                             return Padding(
                               padding: const EdgeInsets.symmetric(vertical: 12),
                               child: OutlinedButton.icon(
-                                onPressed: _loadingMore
-                                    ? null
-                                    : () => _load(more: true),
-                                icon: const Icon(Icons.expand_more),
-                                label: Text(_loadingMore ? '読み込み中' : 'もっと見る'),
+                                onPressed: _loadingMore ? null : _loadMore,
+                                icon: _loadingMore
+                                    ? const SizedBox(
+                                        width: 18,
+                                        height: 18,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(Icons.expand_more),
+                                label: Text(
+                                  _loadingMore
+                                      ? '読み込み中…'
+                                      : 'もっと見る（読み込み済み${_batches.length}件）',
+                                ),
                               ),
                             );
                           },
