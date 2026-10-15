@@ -322,8 +322,8 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     return null;
   }
 
-  // 警告判定用グループの合算値（在庫数 = 発注済みの在庫 − 引渡し済み − 未引き渡し、
-  // および発注中の合計）。グループに属さないロットは null。
+  // 警告判定用グループの合算値。stockCount は入荷済み累計から全顧客注文を
+  // 引いた需給残数で、マイナス分だけが不足。発注中が不足を賄えば警告しない。
   ({String label, int stockCount, int orderedTotal})? _homeCareWarningGroupFor(
     String lotKey,
   ) {
@@ -1725,7 +1725,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('発注済みの在庫を変更しました'),
+            content: Text('入荷済み累計を変更しました'),
             backgroundColor: Colors.green,
           ),
         );
@@ -1811,7 +1811,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         content: Text(
           '${lot.name.isEmpty ? item.name : lot.name}\n'
           '$lotCount ロット × $lotSize 個 = $qty 個\n\n'
-          '発注履歴に記録します。入荷確認するまで「発注済みの在庫」には加算されません。',
+          '発注履歴に記録します。入荷確認するまで「入荷済み累計」には加算されません。',
         ),
         actions: [
           TextButton(
@@ -1899,7 +1899,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         title: const Text('入荷を確認しますか？'),
         content: Text(
           '${entry.lotCount} ロット × ${entry.lotSize} 個 = ${entry.qty} 個\n\n'
-          'この発注を入荷済みにし、「発注済みの在庫」に ${entry.qty} 個を加算します。',
+          'この発注を入荷済みにし、「入荷済み累計」に ${entry.qty} 個を加算します。',
         ),
         actions: [
           TextButton(
@@ -3566,10 +3566,39 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     ),
   );
 
-  // 在庫数の行。数字はそのロット単独の値を表示する。
-  // 判定は、マイナスでも発注中で賄えるなら黒字で注記、賄えなければ赤字で警告。
-  // warningGroup があるときは、判定だけをグループ合算の値で行う。
-  Widget _lotStockCountStat({
+  // 未発注不足の行。顧客注文に対する不足から発注中を差し引き、まだ手当て
+  // できていない数量だけをマイナス・赤字で表示する。
+  Widget _lotUnorderedShortageStat({
+    required int demandBalance,
+    required int orderedTotal,
+    ({String label, int stockCount, int orderedTotal})? warningGroup,
+  }) {
+    final shortage = max(0, -demandBalance);
+    final uncovered = max(0, shortage - orderedTotal);
+    final judgeStock = warningGroup?.stockCount ?? demandBalance;
+    final judgeOrdered = warningGroup?.orderedTotal ?? orderedTotal;
+    final groupUncovered = max(0, -judgeStock - judgeOrdered);
+    if (groupUncovered > 0) {
+      return _lotBigStat(
+        '未発注不足',
+        '−${warningGroup == null ? uncovered : groupUncovered} 個',
+        valueColor: Colors.red.shade700,
+        note: warningGroup == null
+            ? '追加発注が必要です'
+            : '追加発注が必要です（${warningGroup.label} 合算）',
+      );
+    }
+    if (shortage == 0) return _lotBigStat('未発注不足', '0 個');
+    return _lotBigStat(
+      '未発注不足',
+      '0 個',
+      note: judgeStock >= 0
+          ? '${warningGroup?.label ?? ''} 合算で在庫あり'
+          : '発注済みで対応中',
+    );
+  }
+
+  Widget _lotLegacyStockCountStat({
     required int stockCount,
     required int orderedTotal,
     ({String label, int stockCount, int orderedTotal})? warningGroup,
@@ -3599,13 +3628,11 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
 
   // ── 新商品タブ：集計表示ボックス（顧客コード欄なし） ─────────────
   // 「新商品」「ホームケアセット」共通の集計表示ボックス（青いボックス、
-  // 顧客コード欄なし）。以下の3つを最上部に大きく表示する:
-  //   発注済みの在庫 = remaining（当社に届いている総数）
-  //   未引き渡し在庫 = pendingTotal（delivered==false の qty 合計）
-  //   在庫数        = 発注済みの在庫 − 未引き渡し在庫（マイナスは赤字警告）
-  // ホームケアセット（remainingIsCumulative: true）は remaining が入荷の累計のため、
-  //   在庫数 = 発注済みの在庫 − 引渡し済み − 未引き渡し在庫
-  // とし、マイナスでも発注中（orderedTotal）で賄えるなら警告を出さない。
+  // 顧客コード欄なし）。ホームケアセットでは次を分けて表示する:
+  //   在庫       = 入荷済み累計 − 引渡し済み − 取置き
+  //   不足       = 全顧客注文 − 入荷済み累計（0 未満にはしない）
+  //   未発注不足 = 不足 − 発注中（0 未満にはしない）
+  // 発注中は現物在庫に含めず、不足を全て賄えば赤字警告だけを解除する。
   // remaining は管理者・統括管理者が編集できる（_canManageSpecialStock）。
   Widget _buildLotSummaryBox({
     required String title,
@@ -3648,9 +3675,14 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       ),
     );
 
-    final stockCount = remainingIsCumulative
+    final demandBalance = remainingIsCumulative
         ? remaining - deliveredTotal - pendingTotal
         : remaining - pendingTotal;
+    final inventoryCount = remainingIsCumulative
+        ? max(0, remaining - deliveredTotal - reservedTotal)
+        : max(0, demandBalance);
+    final unreservedTotal = max(0, pendingTotal - reservedTotal);
+    final shortageTotal = max(0, -demandBalance);
 
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
@@ -3693,17 +3725,33 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _lotBigStat('発注済みの在庫', '$remaining 個'),
+                _lotBigStat(
+                  remainingIsCumulative ? '入荷済み累計' : '発注済みの在庫',
+                  '$remaining 個',
+                ),
                 if (remainingIsCumulative)
                   _lotBigStat('引渡し済み', '$deliveredTotal 個'),
-                _lotBigStat('未引き渡し在庫', '$pendingTotal 個'),
+                if (remainingIsCumulative) ...[
+                  _lotBigStat('取置き', '$reservedTotal 個'),
+                  _lotBigStat('在庫', '$inventoryCount 個'),
+                  _lotBigStat('未取置き注文', '$unreservedTotal 個'),
+                  _lotBigStat('不足', '$shortageTotal 個'),
+                ] else
+                  _lotBigStat('未引き渡し在庫', '$pendingTotal 個'),
                 if (orderedTotal > 0) _lotBigStat('発注中', '$orderedTotal 個'),
                 const Divider(height: 14),
-                _lotStockCountStat(
-                  stockCount: stockCount,
-                  orderedTotal: orderedTotal,
-                  warningGroup: warningGroup,
-                ),
+                if (remainingIsCumulative)
+                  _lotUnorderedShortageStat(
+                    demandBalance: demandBalance,
+                    orderedTotal: orderedTotal,
+                    warningGroup: warningGroup,
+                  )
+                else
+                  _lotLegacyStockCountStat(
+                    stockCount: demandBalance,
+                    orderedTotal: orderedTotal,
+                    warningGroup: warningGroup,
+                  ),
               ],
             ),
           ),
@@ -3743,10 +3791,10 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                   child: TextField(
                     controller: remainingCtrl,
                     keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: '発注済みの在庫',
+                    decoration: InputDecoration(
+                      labelText: remainingIsCumulative ? '入荷済み累計' : '発注済みの在庫',
                       isDense: true,
-                      border: OutlineInputBorder(),
+                      border: const OutlineInputBorder(),
                     ),
                   ),
                 ),
@@ -3800,7 +3848,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
             ),
             const SizedBox(height: 4),
             Text(
-              '「発注済みの在庫」（当社に届いている総数）・取置き済みは'
+              '「入荷済み累計」（当社に届いた総数）・取置き済みは'
               '管理者/統括管理者のみ変更できます。',
               style: TextStyle(fontSize: 11, color: Colors.blueGrey.shade700),
             ),
@@ -3924,7 +3972,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
             ),
             const SizedBox(height: 4),
             Text(
-              '発注しても「発注済みの在庫」は増えません。入荷後に「入荷した」を押すと加算されます。',
+              '発注しても入荷済みの在庫は増えません。入荷後に「入荷した」を押すと加算されます。',
               style: TextStyle(fontSize: 11, color: Colors.blueGrey.shade700),
             ),
           ],
@@ -4391,9 +4439,9 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '在庫数 = 発注済みの在庫（当社に入荷した累計）'
-                  ' − 引渡し済み − 未引き渡し在庫（引渡し前の顧客別仮発注の合計）。'
-                  'マイナスでも発注中の数量で賄える場合は警告しません。',
+                  '在庫 = 入荷済み累計 − 引渡し済み − 取置き。'
+                  '顧客注文が入荷済み累計を超えた分を不足として扱い、'
+                  '発注中で不足を賄えない分だけ未発注不足として赤く表示します。',
                   style: TextStyle(
                     fontSize: 12,
                     color: Colors.blueGrey.shade700,
@@ -4789,7 +4837,7 @@ class _HomeCareLotStock {
   final String name;
   final int lotSize;
 
-  // 発注済みの在庫（当社に届いている総数）。
+  // 入荷済み累計（当社に届いている総数）。
   // ロット発注・統括管理者の手入力でのみ増減する。
   final int remaining;
 
