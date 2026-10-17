@@ -43,6 +43,7 @@ part 'pages/item_master_page.dart';
 part 'pages/discontinued_testers_page.dart';
 part 'pages/discontinued_products_page.dart';
 part 'pages/billing_page.dart';
+part 'pages/billing_archive_page.dart';
 part 'pages/pos_page.dart';
 part 'pages/pos_summary_page.dart';
 part 'pages/pos_register_session_history_page.dart';
@@ -56,7 +57,7 @@ part 'core/delivered_archive.dart';
 part 'core/item_type_utils.dart';
 part 'core/value_utils.dart';
 
-const String _appVersion = '1.2.9';
+const String _appVersion = '1.3.0';
 
 // iOS Safari / Android Chrome のポップアップブロック回避:
 // AnchorElement を直接クリックすることでユーザージェスチャーコンテキストを維持する

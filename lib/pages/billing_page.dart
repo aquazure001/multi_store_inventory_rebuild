@@ -5487,6 +5487,17 @@ class _BillingPageState extends State<BillingPage> {
         title: const Text('請求・受領管理'),
         actions: [
           IconButton(
+            onPressed: _saving
+                ? null
+                : () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const BillingArchivePage(),
+                    ),
+                  ),
+            icon: const Icon(Icons.folder_open_outlined),
+            tooltip: '過去の保存書類',
+          ),
+          IconButton(
             onPressed: _saving ? null : _load,
             icon: const Icon(Icons.refresh),
           ),

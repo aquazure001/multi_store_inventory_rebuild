@@ -26,6 +26,14 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
   bool _pdfBusy = false;
   // 指定日以前の発注表から表示する（null なら最新から）。
   DateTime? _untilDate;
+  String _statusFilter = 'all';
+  String _storeFilter = '';
+  String _monthFilter = '';
+
+  DateTime get _retentionStart {
+    final now = DateTime.now();
+    return DateTime(now.year - 2, now.month, now.day);
+  }
 
   // 発注リストと同じ Printing.sharePdf で開く。
   // 以前の <a download> 方式は、Firestore から保存PDFを読んだ後（非同期処理の後）
@@ -140,14 +148,47 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     return Map<String, String>.fromEntries(entries);
   }
 
-  List<QueryDocumentSnapshot<Map<String, dynamic>>> _filterCanceled(
-    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
-  ) => docs.where((doc) => (doc.data()['status'] ?? '') != 'canceled').toList();
+  bool _matchesArchiveFilters(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data();
+    final canceled = (data['status'] ?? '') == 'canceled';
+    if (_statusFilter == 'active' && canceled) return false;
+    if (_statusFilter == 'canceled' && !canceled) return false;
+
+    final date = _batchDate(data);
+    final monthKey = '${date.year}-${date.month.toString().padLeft(2, '0')}';
+    if (_monthFilter.isNotEmpty && monthKey != _monthFilter) return false;
+
+    if (_storeFilter.isNotEmpty) {
+      final hasStore = _batchItems(
+        data,
+      ).any((item) => (item['storeId'] ?? '').toString() == _storeFilter);
+      if (!hasStore) return false;
+    }
+    return true;
+  }
+
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> get _visibleBatches =>
+      _batches.where(_matchesArchiveFilters).toList();
+
+  List<String> get _availableMonths {
+    final months = <String>{};
+    for (final batch in _batches) {
+      final date = _batchDate(batch.data());
+      months.add('${date.year}-${date.month.toString().padLeft(2, '0')}');
+    }
+    final result = months.toList()..sort((a, b) => b.compareTo(a));
+    return result;
+  }
 
   Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _fetchBatchDocs({
     QueryDocumentSnapshot<Map<String, dynamic>>? startAfter,
   }) async {
-    var query = AppSession.orderBatches.orderBy('createdAt', descending: true);
+    var query = AppSession.orderBatches
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(_retentionStart),
+        )
+        .orderBy('createdAt', descending: true);
     final until = _untilDate;
     if (until != null) {
       query = query.where(
@@ -187,10 +228,9 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     });
     try {
       final rawDocs = await _fetchBatchDocs();
-      final docs = _filterCanceled(rawDocs);
       if (!mounted) return;
       setState(() {
-        _batches = docs;
+        _batches = rawDocs;
         _lastDoc = rawDocs.isNotEmpty ? rawDocs.last : null;
         _hasMoreServer = rawDocs.length == _pageSize;
         _loading = false;
@@ -210,7 +250,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     final picked = await showDatePicker(
       context: context,
       initialDate: _untilDate ?? now,
-      firstDate: DateTime(2024),
+      firstDate: _retentionStart,
       lastDate: now,
       helpText: 'この日以前の発注表を表示',
     );
@@ -229,9 +269,8 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     setState(() => _loadingMore = true);
     try {
       final rawDocs = await _fetchBatchDocs(startAfter: _lastDoc);
-      final docs = _filterCanceled(rawDocs);
       setState(() {
-        _batches = [..._batches, ...docs];
+        _batches = [..._batches, ...rawDocs];
         _lastDoc = rawDocs.isNotEmpty ? rawDocs.last : _lastDoc;
         _hasMoreServer = rawDocs.length == _pageSize;
         _loadingMore = false;
@@ -797,15 +836,40 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
         : (pdfKind == 'item' ? '商品別' : '保存済み');
 
     return Card(
+      color: canceled ? Colors.grey.shade100 : null,
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              _batchTitle(data),
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _batchTitle(data),
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                if (canceled)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text(
+                      '取消済み',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+              ],
             ),
             const SizedBox(height: 4),
             Text(
@@ -817,7 +881,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
-                  onPressed: canceled || _pdfBusy
+                  onPressed: _pdfBusy
                       ? null
                       : () => _runPdf(() => _openSavedPdf(batch)),
                   icon: const Icon(Icons.picture_as_pdf, size: 18),
@@ -833,9 +897,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
                 SizedBox(
                   width: double.infinity,
                   child: OutlinedButton.icon(
-                    onPressed: canceled
-                        ? null
-                        : () => _separateEmbeddedPdf(batch),
+                    onPressed: () => _separateEmbeddedPdf(batch),
                     icon: const Icon(Icons.compress, size: 18),
                     label: const Text('保存PDFを分離して軽量化'),
                   ),
@@ -847,7 +909,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
               children: [
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: items.isEmpty || canceled || _pdfBusy
+                    onPressed: items.isEmpty || _pdfBusy
                         ? null
                         : () => _runPdf(() => _exportPdfByStore(batch)),
                     icon: const Icon(Icons.refresh, size: 18),
@@ -857,7 +919,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: items.isEmpty || canceled || _pdfBusy
+                    onPressed: items.isEmpty || _pdfBusy
                         ? null
                         : () => _runPdf(() => _exportPdfByItem(batch)),
                     icon: const Icon(Icons.refresh, size: 18),
@@ -886,6 +948,108 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     );
   }
 
+  Widget _buildArchiveFilters(Map<String, String> stores) {
+    final months = _availableMonths;
+    final selectedMonth = months.contains(_monthFilter) ? _monthFilter : '';
+    final selectedStore = stores.containsKey(_storeFilter) ? _storeFilter : '';
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: Colors.deepPurple.shade100),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '保存期間: 過去2年（${_retentionStart.year}年${_retentionStart.month}月${_retentionStart.day}日以降）',
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilterChip(
+                label: const Text('すべて'),
+                selected: _statusFilter == 'all',
+                onSelected: (_) => setState(() => _statusFilter = 'all'),
+              ),
+              FilterChip(
+                label: const Text('有効'),
+                selected: _statusFilter == 'active',
+                onSelected: (_) => setState(() => _statusFilter = 'active'),
+              ),
+              FilterChip(
+                label: const Text('取消済み'),
+                selected: _statusFilter == 'canceled',
+                onSelected: (_) => setState(() => _statusFilter = 'canceled'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  key: ValueKey('past-order-month-$selectedMonth'),
+                  initialValue: selectedMonth,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: '年月',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                  items: [
+                    const DropdownMenuItem(value: '', child: Text('すべて')),
+                    for (final month in months)
+                      DropdownMenuItem(
+                        value: month,
+                        child: Text(
+                          '${month.substring(0, 4)}年${int.parse(month.substring(5))}月',
+                        ),
+                      ),
+                  ],
+                  onChanged: (value) =>
+                      setState(() => _monthFilter = value ?? ''),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  key: ValueKey('past-order-store-$selectedStore'),
+                  initialValue: selectedStore,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: '店舗',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                  items: [
+                    const DropdownMenuItem(value: '', child: Text('すべて')),
+                    for (final entry in stores.entries)
+                      DropdownMenuItem(
+                        value: entry.key,
+                        child: Text(
+                          entry.value,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                  ],
+                  onChanged: (value) =>
+                      setState(() => _storeFilter = value ?? ''),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final allPastOrderStores = _rawPastOrderStores();
@@ -894,6 +1058,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
         visiblePastOrderStores.length < allPastOrderStores.length;
     final noViewableStores =
         allPastOrderStores.isNotEmpty && visiblePastOrderStores.isEmpty;
+    final visibleBatches = _visibleBatches;
 
     return Scaffold(
       backgroundColor: const Color(0xFFFFF7FF),
@@ -956,6 +1121,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
             : Column(
                 children: [
                   if (_pdfBusy) const LinearProgressIndicator(),
+                  _buildArchiveFilters(visiblePastOrderStores),
                   if (isRestricted)
                     Container(
                       width: double.infinity,
@@ -989,9 +1155,13 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
                     child: Builder(
                       builder: (context) {
                         final hasMore = _hasMoreServer;
+                        final showEmpty = visibleBatches.isEmpty && !hasMore;
                         return ListView.builder(
                           padding: const EdgeInsets.all(16),
-                          itemCount: 2 + _batches.length + (hasMore ? 1 : 0),
+                          itemCount:
+                              2 +
+                              visibleBatches.length +
+                              (hasMore || showEmpty ? 1 : 0),
                           itemBuilder: (context, index) {
                             if (index == 0) {
                               return const Card(
@@ -1005,8 +1175,16 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
                             }
                             if (index == 1) return const SizedBox(height: 12);
                             final batchIndex = index - 2;
-                            if (batchIndex < _batches.length) {
-                              return _buildBatchCard(_batches[batchIndex]);
+                            if (batchIndex < visibleBatches.length) {
+                              return _buildBatchCard(
+                                visibleBatches[batchIndex],
+                              );
+                            }
+                            if (showEmpty) {
+                              return const Padding(
+                                padding: EdgeInsets.all(24),
+                                child: Center(child: Text('条件に一致する発注表はありません')),
+                              );
                             }
                             return Padding(
                               padding: const EdgeInsets.symmetric(vertical: 12),
