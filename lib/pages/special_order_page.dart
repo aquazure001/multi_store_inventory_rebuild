@@ -682,6 +682,14 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         .fold(0, (total, entry) => total + entry.qty);
   }
 
+  // 発注中合計: 新商品・通常の特別発注品についても、未入荷のロット発注を
+  // 未発注不足の判定に含める。
+  int _newProductOrderedLotQtyForLot(String lotKey) {
+    return _newProductLotOrdersForLot(lotKey)
+        .where((order) => !order.isArrived)
+        .fold(0, (total, order) => total + order.qty);
+  }
+
   String _fmtDate(DateTime d) =>
       '${d.year}年${d.month.toString().padLeft(2, '0')}月'
       '${d.day.toString().padLeft(2, '0')}日';
@@ -3644,6 +3652,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     required int reservedTotal,
     required int remaining,
     bool remainingIsCumulative = false,
+    bool showUnorderedShortage = false,
     int orderedTotal = 0,
     // 警告判定用グループの合算値。あれば赤字/黒字の判定だけこちらで行う。
     ({String label, int stockCount, int orderedTotal})? warningGroup,
@@ -3740,7 +3749,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
                   _lotBigStat('未引き渡し在庫', '$pendingTotal 個'),
                 if (orderedTotal > 0) _lotBigStat('発注中', '$orderedTotal 個'),
                 const Divider(height: 14),
-                if (remainingIsCumulative)
+                if (remainingIsCumulative || showUnorderedShortage)
                   _lotUnorderedShortageStat(
                     demandBalance: demandBalance,
                     orderedTotal: orderedTotal,
@@ -4079,13 +4088,15 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _buildLotSummaryBox(
-          title: '新商品 在庫サマリー',
+          title: '${item.type} 在庫サマリー',
           count: count,
           total: total,
           pendingTotal: pendingTotal,
           deliveredTotal: deliveredTotal,
           reservedTotal: _reservedTotalForNewProductLot(lot.key),
           remaining: lot.remaining,
+          showUnorderedShortage: true,
+          orderedTotal: _newProductOrderedLotQtyForLot(lot.key),
           currentStock: lot.currentStock,
           reservedStoreBreakdown: _reservedStoreBreakdownForNewProductLot(
             lot.key,
