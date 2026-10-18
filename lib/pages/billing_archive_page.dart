@@ -23,6 +23,7 @@ class _BillingArchivePageState extends State<BillingArchivePage> {
   bool _loadingMore = false;
   bool _hasMore = false;
   bool _pdfBusy = false;
+  html.WindowBase? _pendingPdfWindow;
   String? _error;
   String _kindFilter = 'all';
   String _storeFilter = '';
@@ -42,6 +43,7 @@ class _BillingArchivePageState extends State<BillingArchivePage> {
 
   @override
   void dispose() {
+    _releasePdfWindow();
     _searchController
       ..removeListener(_refreshFilters)
       ..dispose();
@@ -200,12 +202,75 @@ class _BillingArchivePageState extends State<BillingArchivePage> {
 
   String _dateText(DateTime date) => '${date.year}年${date.month}月${date.day}日';
 
+  void _reservePdfWindow() {
+    _releasePdfWindow();
+    try {
+      _pendingPdfWindow = html.window.open('pdf_loading.html', '_blank');
+    } catch (_) {
+      _pendingPdfWindow = null;
+    }
+  }
+
+  void _releasePdfWindow() {
+    final win = _pendingPdfWindow;
+    _pendingPdfWindow = null;
+    if (_isPdfWindowOpen(win)) {
+      try {
+        win!.close();
+      } catch (_) {}
+    }
+  }
+
+  bool _isPdfWindowOpen(html.WindowBase? win) {
+    if (win == null) return false;
+    try {
+      return win.closed != true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _showPdfBytes({
+    required Uint8List bytes,
+    required String filename,
+  }) async {
+    final safeFileName = filename.trim().isEmpty
+        ? 'document.pdf'
+        : filename.trim();
+    final win = _pendingPdfWindow;
+    _pendingPdfWindow = null;
+    if (_isPdfWindowOpen(win)) {
+      final blob = html.Blob([bytes], 'application/pdf');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      win!.location.href = url;
+      Future<void>.delayed(
+        const Duration(minutes: 2),
+        () => html.Url.revokeObjectUrl(url),
+      );
+      return;
+    }
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            '新しいタブを開けなかったため、PDFをダウンロードします。'
+            'ブラウザでこのサイトのポップアップを許可してください',
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    }
+    await Printing.sharePdf(bytes: bytes, filename: safeFileName);
+  }
+
   Future<void> _openSavedPdf({
     required CollectionReference<Map<String, dynamic>> collection,
     required String docId,
     required String fallbackFileName,
   }) async {
     if (_pdfBusy) return;
+    _reservePdfWindow();
     setState(() => _pdfBusy = true);
     try {
       final doc = await collection
@@ -216,7 +281,7 @@ class _BillingArchivePageState extends State<BillingArchivePage> {
       final raw = (data['pdfBase64'] ?? '').toString();
       if (raw.isEmpty) throw Exception('保存済みPDFがありません');
       final savedName = (data['pdfFileName'] ?? '').toString();
-      await Printing.sharePdf(
+      await _showPdfBytes(
         bytes: base64Decode(raw),
         filename: savedName.isEmpty ? fallbackFileName : savedName,
       );
@@ -227,6 +292,7 @@ class _BillingArchivePageState extends State<BillingArchivePage> {
         ).showSnackBar(SnackBar(content: Text('PDFを開けません: $e')));
       }
     } finally {
+      _releasePdfWindow();
       if (mounted) setState(() => _pdfBusy = false);
     }
   }
