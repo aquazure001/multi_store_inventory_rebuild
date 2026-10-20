@@ -72,6 +72,15 @@ class AppSession {
   static CollectionReference<Map<String, dynamic>> get billingReceiptPdfs =>
       doc('billing_receipt_pdfs').collection('entries');
 
+  static CollectionReference<Map<String, dynamic>> get billingRecipients =>
+      doc('billing_recipients').collection('entries');
+
+  static CollectionReference<Map<String, dynamic>> get billingIssuerProfiles =>
+      doc('billing_issuer_profiles').collection('entries');
+
+  static CollectionReference<Map<String, dynamic>> get billingAuditLogs =>
+      doc('billing_audit_logs').collection('entries');
+
   static CollectionReference<Map<String, dynamic>> get posSales =>
       doc('pos_sales').collection('entries');
 

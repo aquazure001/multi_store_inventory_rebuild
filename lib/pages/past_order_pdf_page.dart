@@ -24,6 +24,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
   bool _hasMoreServer = false;
   bool _loadingMore = false;
   bool _pdfBusy = false;
+  html.WindowBase? _pendingPdfWindow;
   // 指定日以前の発注表から表示する（null なら最新から）。
   DateTime? _untilDate;
   String _statusFilter = 'all';
@@ -35,18 +36,68 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
     return DateTime(now.year - 2, now.month, now.day);
   }
 
-  // 発注リストと同じ Printing.sharePdf で開く。
-  // 以前の <a download> 方式は、Firestore から保存PDFを読んだ後（非同期処理の後）
-  // だとブラウザにユーザー操作と見なされず、スマホ等でPDFが開かなかった。
+  void _reservePdfWindow() {
+    _releasePdfWindow();
+    try {
+      _pendingPdfWindow = html.window.open('pdf_loading.html', '_blank');
+    } catch (_) {
+      _pendingPdfWindow = null;
+    }
+  }
+
+  void _releasePdfWindow() {
+    final win = _pendingPdfWindow;
+    _pendingPdfWindow = null;
+    if (_isPdfWindowOpen(win)) {
+      try {
+        win!.close();
+      } catch (_) {}
+    }
+  }
+
+  bool _isPdfWindowOpen(html.WindowBase? win) {
+    if (win == null) return false;
+    try {
+      return win.closed != true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> _sharePdf({
     required Uint8List bytes,
     required String filename,
   }) async {
+    final win = _pendingPdfWindow;
+    _pendingPdfWindow = null;
+    if (_isPdfWindowOpen(win)) {
+      final blob = html.Blob([bytes], 'application/pdf');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      win!.location.href = url;
+      Future<void>.delayed(
+        const Duration(minutes: 2),
+        () => html.Url.revokeObjectUrl(url),
+      );
+      return;
+    }
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            '新しいタブを開けなかったため、PDFをダウンロードします。'
+            'ブラウザでこのサイトのポップアップを許可してください',
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    }
     await Printing.sharePdf(bytes: bytes, filename: filename);
   }
 
   Future<void> _runPdf(Future<void> Function() action) async {
     if (_pdfBusy) return;
+    _reservePdfWindow();
     setState(() => _pdfBusy = true);
     try {
       await action();
@@ -57,6 +108,7 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
         ).showSnackBar(SnackBar(content: Text('PDF出力失敗: $e')));
       }
     } finally {
+      _releasePdfWindow();
       if (mounted) setState(() => _pdfBusy = false);
     }
   }
@@ -67,6 +119,12 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _releasePdfWindow();
+    super.dispose();
   }
 
   int _toInt(dynamic value) => inventoryIntValue(value);
@@ -404,9 +462,15 @@ class _PastOrderPdfPageState extends State<PastOrderPdfPage> {
 
     if (raw.isEmpty && data['hasSavedPdf'] == true) {
       try {
-        final pdfDoc = await AppSession.doc(
-          'order_saved_pdfs',
-        ).collection('entries').doc(batch.id).get();
+        final pdfDoc = await AppSession.doc('order_saved_pdfs')
+            .collection('entries')
+            .doc(batch.id)
+            .get()
+            .timeout(
+              const Duration(seconds: 20),
+              onTimeout: () =>
+                  throw TimeoutException('保存PDFの読み込みが20秒以内に完了しませんでした'),
+            );
         final pdfData = pdfDoc.data() ?? <String, dynamic>{};
         raw = (pdfData['pdfBase64'] ?? '').toString();
         if (savedName.isEmpty) {

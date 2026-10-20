@@ -78,12 +78,42 @@ service cloud.firestore {
         id.matches('^org_' + myOrgId() + '__.*$');
     }
 
-    // 統括管理者のみ読み書き可能なドキュメント（請求・受領管理）
+    // 請求案件・保存PDF。統括管理者は全件、一般ユーザーは自分が
+    // 発行した(createdByUid == auth.uid)データだけを扱う。
     function isBillingDocId(id) {
       return id.matches('.*__billing_invoices$') ||
              id.matches('.*__billing_invoice_pdfs$') ||
              id.matches('.*__billing_receipts$') ||
              id.matches('.*__billing_receipt_pdfs$');
+    }
+
+    function isBillingPersonalDataDocId(id) {
+      return id.matches('.*__billing_recipients$') ||
+             id.matches('.*__billing_issuer_profiles$');
+    }
+
+    function isBillingAuditDocId(id) {
+      return id.matches('.*__billing_audit_logs$');
+    }
+
+    function isOwnBillingEntry(docId) {
+      return isMyOrgDocId(docId) &&
+        resource.data.get('createdByUid', '') == request.auth.uid;
+    }
+
+    function isOwnBillingEntryCreate(docId) {
+      return isMyOrgDocId(docId) &&
+        request.resource.data.get('createdByUid', '') == request.auth.uid;
+    }
+
+    function keepsBillingOwner() {
+      return request.resource.data.get('createdByUid', '') ==
+        resource.data.get('createdByUid', '');
+    }
+
+    function canModifyOwnedBillingEntry(docId) {
+      return isOwnBillingEntry(docId) ||
+        (isSuperAdmin() && resource.data.get('createdByUid', '') == '');
     }
 
     // "org_{orgId}__billing_invoices" 等から、対応する
@@ -223,11 +253,14 @@ service cloud.firestore {
       // 旧形式（org_プレフィックスなし）のドキュメントは読み取りのみ維持
       allow read: if isSignedIn() && (
         isLegacyDocId(docId) ||
-        (isBillingDocId(docId) ? isSuperAdmin() : (isSuperAdmin() || isMyOrgDocId(docId)))
+        ((isBillingDocId(docId) || isBillingPersonalDataDocId(docId) || isBillingAuditDocId(docId))
+          ? isSuperAdmin()
+          : (isSuperAdmin() || isMyOrgDocId(docId)))
       );
 
       allow write: if isSignedIn() && !isLegacyDocId(docId) && (
-        isBillingDocId(docId) ? isSuperAdmin() :
+        (isBillingDocId(docId) || isBillingPersonalDataDocId(docId) || isBillingAuditDocId(docId))
+          ? isSuperAdmin() :
         isAdminWriteDocId(docId) ? (isSuperAdmin() || isMyOrgAdminDocId(docId)) :
         (isSuperAdmin() || isMyOrgDocId(docId))
       );
@@ -251,16 +284,43 @@ service cloud.firestore {
         // 統括管理者であっても拒否される。
         allow get: if isSignedIn() && (
           isBillingDocId(docId)
-            ? (isSuperAdmin() && billingEntryVisible(docId, resource.data.get('storeId', '')))
-            : (isSuperAdmin() || isMyOrgDocId(docId))
+            ? ((isSuperAdmin() && billingEntryVisible(docId, resource.data.get('storeId', ''))) ||
+               isOwnBillingEntry(docId))
+            : isBillingPersonalDataDocId(docId)
+              ? (isSuperAdmin() || isOwnBillingEntry(docId))
+              : isBillingAuditDocId(docId)
+                ? (isSuperAdmin() || isOwnBillingEntry(docId))
+                : (isSuperAdmin() || isMyOrgDocId(docId))
         );
         allow list: if isSignedIn() && (
-          isBillingDocId(docId) ? isSuperAdmin() : (isSuperAdmin() || isMyOrgDocId(docId))
+          isBillingDocId(docId)
+            ? (isSuperAdmin() || isOwnBillingEntry(docId))
+            : (isBillingPersonalDataDocId(docId) || isBillingAuditDocId(docId))
+              ? (isSuperAdmin() || isOwnBillingEntry(docId))
+              : (isSuperAdmin() || isMyOrgDocId(docId))
         );
-        allow write: if isSignedIn() && (
-          isBillingDocId(docId) ? isSuperAdmin() :
-          isAdminWriteDocId(docId) ? (isSuperAdmin() || isMyOrgAdminDocId(docId)) :
-          (isSuperAdmin() || isMyOrgDocId(docId))
+        allow create: if isSignedIn() && (
+          (isBillingDocId(docId) || isBillingPersonalDataDocId(docId) || isBillingAuditDocId(docId))
+            ? isOwnBillingEntryCreate(docId)
+            : isAdminWriteDocId(docId)
+              ? (isSuperAdmin() || isMyOrgAdminDocId(docId))
+              : (isSuperAdmin() || isMyOrgDocId(docId))
+        );
+        allow update: if isSignedIn() && (
+          isBillingAuditDocId(docId) ? false :
+          (isBillingDocId(docId) || isBillingPersonalDataDocId(docId))
+            ? (canModifyOwnedBillingEntry(docId) && keepsBillingOwner())
+            : isAdminWriteDocId(docId)
+              ? (isSuperAdmin() || isMyOrgAdminDocId(docId))
+              : (isSuperAdmin() || isMyOrgDocId(docId))
+        );
+        allow delete: if isSignedIn() && (
+          isBillingAuditDocId(docId) ? false :
+          (isBillingDocId(docId) || isBillingPersonalDataDocId(docId))
+            ? canModifyOwnedBillingEntry(docId)
+            : isAdminWriteDocId(docId)
+              ? (isSuperAdmin() || isMyOrgAdminDocId(docId))
+              : (isSuperAdmin() || isMyOrgDocId(docId))
         );
       }
 

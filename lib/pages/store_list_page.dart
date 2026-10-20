@@ -1240,7 +1240,7 @@ class _StoreListPageState extends State<StoreListPage> {
                   ],
                 ),
               ),
-              if (AppSession.isSuperAdmin)
+              if (AppSession.hasOrg)
                 const PopupMenuItem(
                   value: 'billing',
                   child: Row(

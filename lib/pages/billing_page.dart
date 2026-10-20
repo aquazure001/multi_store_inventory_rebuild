@@ -62,6 +62,8 @@ class _BillingPageState extends State<BillingPage> {
   final Map<String, _BillingPrice> _billingPrices = {};
   final Map<String, Map<String, int>> _storePurchaseRates = {};
   final Map<String, _BillingRecipient> _storeRecipients = {};
+  final Map<String, _BillingRecipientEntry> _personalRecipients = {};
+  _BillingIssuerProfile? _issuerProfile;
   final Map<String, TextEditingController> _priceControllers = {};
   final Map<String, TextEditingController> _purchaseRateControllers = {};
   final TextEditingController _repaymentCurrentController =
@@ -112,12 +114,11 @@ class _BillingPageState extends State<BillingPage> {
 
   int _toInt(dynamic value) => inventoryIntValue(value);
 
+  bool get _isPersonalBilling => !AppSession.isSuperAdmin;
+
   Future<void> _load() async {
-    if (!AppSession.isSuperAdmin) {
-      setState(() {
-        _loading = false;
-        _error = '請求・受領管理を確認できるのは統括管理者のみです';
-      });
+    if (_isPersonalBilling) {
+      await _loadPersonalBilling();
       return;
     }
 
@@ -150,6 +151,10 @@ class _BillingPageState extends State<BillingPage> {
         // 軽い読み取り側で取得する。商品/テスター/備品マスタは重いので
         // 後続（バッチ読み取りと並行）で待つ。
         AppSession.doc('stores').get(),
+        AppSession.billingRecipients
+            .where('createdByUid', isEqualTo: AppSession.uid)
+            .get(),
+        AppSession.billingIssuerProfiles.doc(AppSession.uid).get(),
       ]);
       final billingVisibilitySnap =
           loadResults[0] as QuerySnapshot<Map<String, dynamic>>;
@@ -177,6 +182,10 @@ class _BillingPageState extends State<BillingPage> {
       final priceDoc = loadResults[2] as DocumentSnapshot<Map<String, dynamic>>;
       final storesDoc =
           loadResults[3] as DocumentSnapshot<Map<String, dynamic>>;
+      final personalRecipientSnap =
+          loadResults[4] as QuerySnapshot<Map<String, dynamic>>;
+      final issuerProfileSnap =
+          loadResults[5] as DocumentSnapshot<Map<String, dynamic>>;
       // シェル表示用に店舗マスタだけ先行解析する（商品マスタ系は後続）。
       final allParsedStores = _parseStores(
         storesDoc.data() ?? <String, dynamic>{},
@@ -269,6 +278,11 @@ class _BillingPageState extends State<BillingPage> {
       // 宛先設定・任意作成・編集の店舗候補は店舗マスタ全件から出す。
       // 請求明細・発行済み一覧の表示だけは下の処理で非開示/確認待ち店舗を除外する。
       final orgStores = allParsedStores.toList();
+      final personalRecipients = <String, _BillingRecipientEntry>{};
+      for (final doc in personalRecipientSnap.docs) {
+        final entry = _BillingRecipientEntry.fromDoc(doc.id, doc.data());
+        if (!entry.archived) personalRecipients[entry.id] = entry;
+      }
 
       // ページシェル（請求書一覧・単価マスタ・店舗マスタ）を先に表示する。
       // 発注バッチ（全日の発注明細を含む＝最も重い読み取り）と商品/テスター/
@@ -292,6 +306,12 @@ class _BillingPageState extends State<BillingPage> {
         _storeRecipients
           ..clear()
           ..addAll(storeRecipients);
+        _personalRecipients
+          ..clear()
+          ..addAll(personalRecipients);
+        _issuerProfile = issuerProfileSnap.exists
+            ? _BillingIssuerProfile.fromMap(issuerProfileSnap.data() ?? {})
+            : null;
         _repaymentEnabled = repaymentEnabled;
         _orgStores = orgStores;
         _hiddenStoreIds = hiddenStoreIds;
@@ -451,6 +471,107 @@ class _BillingPageState extends State<BillingPage> {
     }
   }
 
+  Future<void> _loadPersonalBilling() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final results = await Future.wait<dynamic>([
+        AppSession.billingInvoices
+            .where('createdByUid', isEqualTo: AppSession.uid)
+            .limit(200)
+            .get(),
+        AppSession.billingRecipients
+            .where('createdByUid', isEqualTo: AppSession.uid)
+            .get(),
+        AppSession.billingIssuerProfiles.doc(AppSession.uid).get(),
+        AppSession.doc('stores').get(),
+        AppSession.doc('billing_prices').get(),
+        _loadMasterData(),
+      ]);
+      final invoiceSnap = results[0] as QuerySnapshot<Map<String, dynamic>>;
+      final recipientSnap = results[1] as QuerySnapshot<Map<String, dynamic>>;
+      final issuerSnap = results[2] as DocumentSnapshot<Map<String, dynamic>>;
+      final storesSnap = results[3] as DocumentSnapshot<Map<String, dynamic>>;
+      final priceSnap = results[4] as DocumentSnapshot<Map<String, dynamic>>;
+      final masterData = results[5] as _MasterDataSnapshot;
+
+      final invoices = <_BillingInvoiceSummary>[];
+      for (final doc in invoiceSnap.docs) {
+        final data = doc.data();
+        if ((data['status'] ?? '').toString() == 'canceled') continue;
+        invoices.add(_BillingInvoiceSummary.fromDoc(doc.id, data));
+      }
+      invoices.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+      final recipients = <String, _BillingRecipientEntry>{};
+      for (final doc in recipientSnap.docs) {
+        final entry = _BillingRecipientEntry.fromDoc(doc.id, doc.data());
+        if (!entry.archived) recipients[entry.id] = entry;
+      }
+
+      final priceData = priceSnap.data() ?? <String, dynamic>{};
+      final savedRecipients = <String, _BillingRecipient>{};
+      final rawRecipients = priceData['storeRecipients'];
+      if (rawRecipients is Map) {
+        for (final entry in rawRecipients.entries) {
+          if (entry.value is! Map) continue;
+          savedRecipients[entry.key.toString()] = _BillingRecipient.fromMap(
+            Map<String, dynamic>.from(
+              (entry.value as Map).map(
+                (key, value) => MapEntry(key.toString(), value),
+              ),
+            ),
+          );
+        }
+      }
+
+      final masters = <String, LegacyItem>{};
+      for (final item in [
+        ...masterData.products,
+        ...masterData.testers,
+        ...masterData.equipments,
+      ]) {
+        final code = _normalizeBillingKeyPart(item.code);
+        if (code.isNotEmpty) masters.putIfAbsent(code, () => item);
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _invoices
+          ..clear()
+          ..addAll(invoices);
+        _personalRecipients
+          ..clear()
+          ..addAll(recipients);
+        _issuerProfile = issuerSnap.exists
+            ? _BillingIssuerProfile.fromMap(issuerSnap.data() ?? {})
+            : null;
+        _orgStores = _parseStores(storesSnap.data() ?? {}).toList();
+        _storeRecipients
+          ..clear()
+          ..addAll(savedRecipients);
+        _manualItemMastersByCode
+          ..clear()
+          ..addAll(masters);
+        _lines.clear();
+        _hiddenStoreIds = {};
+        _pendingAckStores = [];
+        _linesLoading = false;
+        _loading = false;
+        _entryIsMonthly = _entryDocKind == null ? null : false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _linesLoading = false;
+        _error = e.toString();
+      });
+    }
+  }
+
   // 店舗側が開示した請求情報を、統括管理者が確認済みとしてマークする。
   // これにより初めてsuperAdminAcknowledgedがtrueになり、この画面や
   // Firestoreルール上でその店舗のデータが表示・読み取り可能になる。
@@ -493,7 +614,12 @@ class _BillingPageState extends State<BillingPage> {
   String _dateText(DateTime dt) => '${dt.year}年${dt.month}月${dt.day}日';
 
   String _invoiceNo(int sequence) {
-    return 'AQU-${sequence.toString().padLeft(5, '0')}';
+    final prefix =
+        (_issuerProfile?.documentPrefix ??
+                (AppSession.isSuperAdmin ? 'AQU' : 'INV'))
+            .trim()
+            .toUpperCase();
+    return '${prefix.isEmpty ? 'INV' : prefix}-${sequence.toString().padLeft(5, '0')}';
   }
 
   int _nextInvoiceSequence() {
@@ -580,6 +706,8 @@ class _BillingPageState extends State<BillingPage> {
   Map<String, String> _allBillingStores() {
     final map = <String, String>{
       for (final store in _orgStores) store.id: store.name,
+      for (final entry in _personalRecipients.values)
+        entry.optionId: entry.displayLabel,
     };
     for (final line in _lines) {
       if (line.storeId.isNotEmpty && line.storeName.isNotEmpty) {
@@ -602,6 +730,8 @@ class _BillingPageState extends State<BillingPage> {
   Map<String, String> _manualIssuanceStoreOptions() {
     final map = <String, String>{
       for (final store in _orgStores) store.id: store.name,
+      for (final entry in _personalRecipients.values)
+        entry.optionId: entry.displayLabel,
     };
     final entries = map.entries.toList()
       ..sort((a, b) => a.value.compareTo(b.value));
@@ -612,6 +742,13 @@ class _BillingPageState extends State<BillingPage> {
     String storeId,
     String storeName,
   ) {
+    if (storeId.startsWith(_BillingRecipientEntry.optionPrefix)) {
+      final recipientId = storeId.substring(
+        _BillingRecipientEntry.optionPrefix.length,
+      );
+      final external = _personalRecipients[recipientId];
+      if (external != null) return external.recipient;
+    }
     final saved = _storeRecipients[storeId];
     if (saved != null && saved.name.trim().isNotEmpty) return saved;
     final fallbackName = storeName.trim().isEmpty ? '店舗名未設定' : storeName.trim();
@@ -620,6 +757,28 @@ class _BillingPageState extends State<BillingPage> {
       postal: '',
       address1: '',
       address2: '',
+    );
+  }
+
+  String _recipientTypeForOption(String optionId) =>
+      optionId.startsWith(_BillingRecipientEntry.optionPrefix)
+      ? (_personalRecipients[optionId.substring(
+                  _BillingRecipientEntry.optionPrefix.length,
+                )]
+                ?.type ??
+            'external')
+      : 'store';
+
+  _BillingIssuerProfile get _currentIssuer =>
+      _issuerProfile ?? _BillingIssuerProfile.reStart;
+
+  _BillingIssuerProfile? _issuerSnapshot(Map<String, dynamic> data) {
+    final raw = data['issuer'];
+    if (raw is! Map) return null;
+    return _BillingIssuerProfile.fromMap(
+      Map<String, dynamic>.from(
+        raw.map((key, value) => MapEntry(key.toString(), value)),
+      ),
     );
   }
 
@@ -1569,7 +1728,10 @@ class _BillingPageState extends State<BillingPage> {
       'createdBy': AppSession.nickname,
       'createdByUid': AppSession.uid,
       'createdByEmail': AppSession.email,
+      'issuer': _currentIssuer.toMap(),
       'status': 'issued',
+      'paymentStatus': 'unpaid',
+      'caseStatus': 'open',
       'billingMode': repaymentOnly
           ? 'monthly_repayment_only'
           : 'monthly_store_type_filter',
@@ -1863,25 +2025,142 @@ class _BillingPageState extends State<BillingPage> {
       await _openReceiptPdf(invoice);
       return;
     }
-
-    final confirmed = await showDialog<bool>(
+    if (!await _ensureIssuerReady()) return;
+    if (!mounted) return;
+    var selectedKind = _BillingPdfKind.receipt;
+    var paymentMethod = '振込';
+    String? completionError;
+    final paidDate = TextEditingController(
+      text: _dateInputText(DateTime.now()),
+    );
+    final paidAmount = TextEditingController(text: invoice.total.toString());
+    final paymentMemo = TextEditingController();
+    final input = await showDialog<_BillingCompletionInput>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('受領書を作成しますか？'),
-        content: Text('請求書 ${invoice.invoiceNo} をもとに受領書PDFを作成して保存します。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('キャンセル'),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('入金確認・完了書類の発行'),
+          content: SizedBox(
+            width: 520,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('請求書 ${invoice.invoiceNo} / ￥${_yen(invoice.total)}'),
+                  const SizedBox(height: 12),
+                  SegmentedButton<_BillingPdfKind>(
+                    segments: const [
+                      ButtonSegment(
+                        value: _BillingPdfKind.receipt,
+                        label: Text('受領書'),
+                      ),
+                      ButtonSegment(
+                        value: _BillingPdfKind.shuryoshuu,
+                        label: Text('領収書'),
+                      ),
+                    ],
+                    selected: {selectedKind},
+                    onSelectionChanged: (values) =>
+                        setDialogState(() => selectedKind = values.first),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: paidDate,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: '入金日（例：2026-10-20）',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: paidAmount,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: '入金額',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<String>(
+                    initialValue: paymentMethod,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: '支払方法',
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: '振込', child: Text('振込')),
+                      DropdownMenuItem(value: '現金', child: Text('現金')),
+                      DropdownMenuItem(value: 'カード', child: Text('カード')),
+                      DropdownMenuItem(value: 'その他', child: Text('その他')),
+                    ],
+                    onChanged: (value) =>
+                        paymentMethod = value ?? paymentMethod,
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: paymentMemo,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: '入金メモ（任意）',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'この案件では受領書・領収書のどちらか一方だけを発行できます。',
+                    style: TextStyle(fontSize: 12, color: Colors.deepOrange),
+                  ),
+                  if (completionError != null) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      completionError!,
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('作成する'),
-          ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('キャンセル'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final date = _parseOptionalDateInput(paidDate.text);
+                final amount = inventoryIntValue(paidAmount.text);
+                if (date == null) {
+                  setDialogState(() => completionError = '入金日を正しく入力してください');
+                  return;
+                }
+                if (amount != invoice.total) {
+                  setDialogState(
+                    () => completionError =
+                        '完了にするには請求額 ￥${_yen(invoice.total)} と同額を入力してください',
+                  );
+                  return;
+                }
+                Navigator.of(ctx).pop(
+                  _BillingCompletionInput(
+                    kind: selectedKind,
+                    paidAt: date,
+                    amount: amount,
+                    method: paymentMethod,
+                    memo: paymentMemo.text.trim(),
+                  ),
+                );
+              },
+              child: const Text('入金確認して発行'),
+            ),
+          ],
+        ),
       ),
     );
-    if (confirmed != true) return;
+    paidDate.dispose();
+    paidAmount.dispose();
+    paymentMemo.dispose();
+    if (input == null) return;
 
     setState(() => _saving = true);
     _reservePdfWindow();
@@ -1904,7 +2183,7 @@ class _BillingPageState extends State<BillingPage> {
       final issuedAt = DateTime.now();
       final assets = await _loadPdfAssets();
       final pdfBytes = await _buildBillingPdf(
-        kind: _BillingPdfKind.receipt,
+        kind: input.kind,
         assets: assets,
         no: invoice.invoiceNo,
         date: issuedAt,
@@ -1920,9 +2199,16 @@ class _BillingPageState extends State<BillingPage> {
         lines: lines,
         includeRepaymentInTotal:
             invoice.billingMode == 'monthly_repayment_only',
+        issuerOverride: _issuerSnapshot(invoiceData),
       );
       final receiptRef = AppSession.billingReceipts.doc();
-      await receiptRef.set({
+      final documentLabel = input.kind == _BillingPdfKind.shuryoshuu
+          ? '領収書'
+          : '受領書';
+      final documentKind = input.kind == _BillingPdfKind.shuryoshuu
+          ? 'shuryoshuu'
+          : 'receipt';
+      final receiptData = <String, dynamic>{
         'id': receiptRef.id,
         'invoiceId': invoice.id,
         'invoiceNo': invoice.invoiceNo,
@@ -1937,6 +2223,14 @@ class _BillingPageState extends State<BillingPage> {
         'createdBy': AppSession.nickname,
         'createdByUid': AppSession.uid,
         'createdByEmail': AppSession.email,
+        'issuer': (_issuerSnapshot(invoiceData) ?? _currentIssuer).toMap(),
+        'billingMode': 'linked_$documentKind',
+        'documentKind': documentKind,
+        'paymentStatus': 'paid',
+        'paidAtLocal': input.paidAt.toIso8601String(),
+        'paidAmount': input.amount,
+        'paymentMethod': input.method,
+        'paymentMemo': input.memo,
         'status': 'issued',
         'subtotal': invoice.subtotal,
         'tax10': invoice.tax10,
@@ -1948,8 +2242,9 @@ class _BillingPageState extends State<BillingPage> {
         'repaymentMonthlyAmount': invoice.repaymentMonthlyAmount,
         'items': invoiceData['items'],
         'hasSavedPdf': true,
-      });
-      await AppSession.billingReceiptPdfs.doc(receiptRef.id).set({
+      };
+      final receiptPdfRef = AppSession.billingReceiptPdfs.doc(receiptRef.id);
+      final receiptPdfData = <String, dynamic>{
         'receiptId': receiptRef.id,
         'invoiceId': invoice.id,
         'invoiceNo': invoice.invoiceNo,
@@ -1964,23 +2259,58 @@ class _BillingPageState extends State<BillingPage> {
         'createdBy': AppSession.nickname,
         'createdByUid': AppSession.uid,
         'createdByEmail': AppSession.email,
+        'documentKind': documentKind,
         'pdfBase64': base64Encode(pdfBytes),
-        'pdfFileName': '受領書_${invoice.invoiceNo}.pdf',
-      });
-      await AppSession.billingInvoices.doc(invoice.id).update({
+        'pdfFileName': '${documentLabel}_${invoice.invoiceNo}.pdf',
+      };
+      final invoiceUpdate = <String, dynamic>{
         'receiptId': receiptRef.id,
         'receiptCreatedAt': FieldValue.serverTimestamp(),
         'receiptCreatedAtLocal': issuedAt.toIso8601String(),
+        'paymentStatus': 'paid',
+        'caseStatus': 'completed',
+        'completionDocumentKind': documentKind,
+        'paidAtLocal': input.paidAt.toIso8601String(),
+        'paidAmount': input.amount,
+        'paymentMethod': input.method,
+        'paymentMemo': input.memo,
+      };
+      final auditRef = AppSession.billingAuditLogs.doc();
+      final auditData = <String, dynamic>{
+        'action': 'payment_confirmed_and_document_issued',
+        'invoiceId': invoice.id,
+        'invoiceNo': invoice.invoiceNo,
+        'documentKind': documentKind,
+        'paidAtLocal': input.paidAt.toIso8601String(),
+        'paidAmount': input.amount,
+        'paymentMethod': input.method,
+        'createdAt': FieldValue.serverTimestamp(),
+        'createdAtLocal': DateTime.now().toIso8601String(),
+        'createdBy': AppSession.nickname,
+        'createdByUid': AppSession.uid,
+        'createdByEmail': AppSession.email,
+      };
+      final invoiceRef = AppSession.billingInvoices.doc(invoice.id);
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        final latestInvoice = await transaction.get(invoiceRef);
+        if (!latestInvoice.exists ||
+            (latestInvoice.data()?['receiptId'] ?? '').toString().isNotEmpty) {
+          throw Exception('この請求案件はすでに完了しています');
+        }
+        transaction.set(receiptRef, receiptData);
+        transaction.set(receiptPdfRef, receiptPdfData);
+        transaction.update(invoiceRef, invoiceUpdate);
+        transaction.set(auditRef, auditData);
       });
       await _openBillingPdfBytes(
         bytes: pdfBytes,
-        filename: '受領書_${invoice.invoiceNo}.pdf',
+        filename: '${documentLabel}_${invoice.invoiceNo}.pdf',
       );
       unawaited(_load());
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('受領書を作成して保存しました'),
+          SnackBar(
+            content: Text('$documentLabelを作成し、入金済みとして完了しました'),
             backgroundColor: Colors.green,
           ),
         );
@@ -2014,7 +2344,10 @@ class _BillingPageState extends State<BillingPage> {
     required List<_BillingLine> lines,
     // 任意書類と返済のみの月次請求では、返済額を合計に含める。
     bool includeRepaymentInTotal = false,
+    _BillingIssuerProfile? issuerOverride,
   }) async {
+    final issuer = issuerOverride ?? _currentIssuer;
+    final useRestartBranding = AppSession.isSuperAdmin;
     final pdf = pw.Document();
     final isInvoice = kind == _BillingPdfKind.invoice;
     final isShuryoshuu = kind == _BillingPdfKind.shuryoshuu;
@@ -2064,7 +2397,11 @@ class _BillingPageState extends State<BillingPage> {
           ),
           build: (_) => pw.Stack(
             children: [
-              _billingPdfBackground(assets.logo, mascot),
+              _billingPdfBackground(
+                assets.logo,
+                mascot,
+                showRestartLogo: useRestartBranding,
+              ),
               pw.Positioned(
                 left: 58,
                 right: 58,
@@ -2151,28 +2488,25 @@ class _BillingPageState extends State<BillingPage> {
                             child: pw.Stack(
                               children: [
                                 _billingAddressBlock(
-                                  title: '株式会社Re,stArt',
-                                  lines: const [
-                                    '〒942-0061',
-                                    '新潟県上越市春日新田2-2-2',
-                                    '適格事業者登録番号：T4110001034998',
-                                  ],
+                                  title: issuer.name,
+                                  lines: issuer.pdfAddressLines,
                                   dotColor: PdfColor.fromHex('#E785A1'),
                                   fontBold: assets.boldFont,
                                 ),
-                                pw.Positioned(
-                                  right: 6,
-                                  top: 58,
-                                  child: pw.Opacity(
-                                    opacity: 0.92,
-                                    child: pw.Image(
-                                      assets.stamp,
-                                      width: 59.5,
-                                      height: 59.5,
-                                      fit: pw.BoxFit.contain,
+                                if (useRestartBranding)
+                                  pw.Positioned(
+                                    right: 6,
+                                    top: 58,
+                                    child: pw.Opacity(
+                                      opacity: 0.92,
+                                      child: pw.Image(
+                                        assets.stamp,
+                                        width: 59.5,
+                                        height: 59.5,
+                                        fit: pw.BoxFit.contain,
+                                      ),
                                     ),
                                   ),
-                                ),
                               ],
                             ),
                           ),
@@ -2231,8 +2565,8 @@ class _BillingPageState extends State<BillingPage> {
                       padding: const pw.EdgeInsets.symmetric(horizontal: 8),
                       child: pw.Text(
                         repaymentEnabled
-                            ? '対象店舗：$storeName　種別：$billingTypeText　対象期間：${billingMonth != null ? _periodText(billingMonth) : '指定なし'}　定期返済：第$repaymentCurrent回 / 全$repaymentTotal回　毎月 ￥${_yen(repaymentMonthlyAmount)}'
-                            : '対象店舗：$storeName　種別：$billingTypeText　対象期間：${billingMonth != null ? _periodText(billingMonth) : '指定なし'}',
+                            ? '宛先：$storeName　種別：$billingTypeText　対象期間：${billingMonth != null ? _periodText(billingMonth) : '指定なし'}　定期返済：第$repaymentCurrent回 / 全$repaymentTotal回　毎月 ￥${_yen(repaymentMonthlyAmount)}'
+                            : '宛先：$storeName　種別：$billingTypeText　対象期間：${billingMonth != null ? _periodText(billingMonth) : '指定なし'}',
                         style: pw.TextStyle(
                           font: assets.boldFont,
                           fontSize: 9.0,
@@ -2262,7 +2596,7 @@ class _BillingPageState extends State<BillingPage> {
                       ),
                       pw.SizedBox(height: 12),
                       if (isInvoice)
-                        _billingBankInfo(assets.boldFont)
+                        _billingBankInfo(assets.boldFont, issuer)
                       else
                         pw.Container(
                           padding: const pw.EdgeInsets.all(10),
@@ -2288,7 +2622,11 @@ class _BillingPageState extends State<BillingPage> {
     return pdf.save();
   }
 
-  pw.Widget _billingPdfBackground(pw.MemoryImage logo, pw.MemoryImage mascot) {
+  pw.Widget _billingPdfBackground(
+    pw.MemoryImage logo,
+    pw.MemoryImage mascot, {
+    required bool showRestartLogo,
+  }) {
     final sky = PdfColor.fromHex('#DDF4FF');
     final green = PdfColor.fromHex('#8FD35F');
     final brown = PdfColor.fromHex('#5A4A40');
@@ -2379,22 +2717,23 @@ class _BillingPageState extends State<BillingPage> {
               ),
             ),
           ),
-          pw.Positioned(
-            left: 205,
-            right: 205,
-            bottom: 13,
-            child: pw.Container(
-              padding: const pw.EdgeInsets.symmetric(
-                horizontal: 10,
-                vertical: 4,
+          if (showRestartLogo)
+            pw.Positioned(
+              left: 205,
+              right: 205,
+              bottom: 13,
+              child: pw.Container(
+                padding: const pw.EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: pw.BoxDecoration(
+                  color: PdfColors.white,
+                  borderRadius: pw.BorderRadius.circular(16),
+                ),
+                child: pw.Image(logo, height: 30, fit: pw.BoxFit.contain),
               ),
-              decoration: pw.BoxDecoration(
-                color: PdfColors.white,
-                borderRadius: pw.BorderRadius.circular(16),
-              ),
-              child: pw.Image(logo, height: 30, fit: pw.BoxFit.contain),
             ),
-          ),
           pw.Positioned(
             left: 84,
             bottom: 10,
@@ -2676,33 +3015,31 @@ class _BillingPageState extends State<BillingPage> {
     );
   }
 
-  pw.Widget _billingBankInfo(pw.Font fontBold) => pw.Row(
-    crossAxisAlignment: pw.CrossAxisAlignment.start,
-    children: [
-      pw.Expanded(
-        child: _billingBankBlock(
-          'お振込先',
-          const [
-            '楽天銀行　第四営業支店',
-            '普通　7019450',
-            '口座名義　株式会社Re,stArt',
-            '（カブ リスタート）代表取締役　清水 広美',
+  pw.Widget _billingBankInfo(pw.Font fontBold, _BillingIssuerProfile issuer) =>
+      pw.Row(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Expanded(
+            child: _billingBankBlock(
+              'お振込先',
+              issuer.primaryBankLines,
+              PdfColor.fromHex('#D86510'),
+              fontBold,
+            ),
+          ),
+          if (issuer.secondaryBankLines.isNotEmpty) ...[
+            pw.SizedBox(width: 24),
+            pw.Expanded(
+              child: _billingBankBlock(
+                'お振込み先２',
+                issuer.secondaryBankLines,
+                PdfColor.fromHex('#2B9BDA'),
+                fontBold,
+              ),
+            ),
           ],
-          PdfColor.fromHex('#D86510'),
-          fontBold,
-        ),
-      ),
-      pw.SizedBox(width: 24),
-      pw.Expanded(
-        child: _billingBankBlock(
-          'お振込み先２',
-          const ['GMOあおぞら銀行　法人営業部', '普通　1589610', '株式会社Re,stArt', 'カ）リスタート'],
-          PdfColor.fromHex('#2B9BDA'),
-          fontBold,
-        ),
-      ),
-    ],
-  );
+        ],
+      );
 
   pw.Widget _billingBankBlock(
     String title,
@@ -2727,6 +3064,315 @@ class _BillingPageState extends State<BillingPage> {
       ),
     ],
   );
+
+  Future<bool> _ensureIssuerReady() async {
+    if (!_isPersonalBilling || (_issuerProfile?.isComplete ?? false)) {
+      return true;
+    }
+    await _editIssuerProfile();
+    return _issuerProfile?.isComplete ?? false;
+  }
+
+  Future<void> _editIssuerProfile() async {
+    final initial =
+        _issuerProfile ??
+        (AppSession.isSuperAdmin
+            ? _BillingIssuerProfile.reStart
+            : const _BillingIssuerProfile(
+                name: '',
+                documentPrefix: 'INV',
+                postal: '',
+                address1: '',
+                address2: '',
+                registrationNumber: '',
+                primaryBankLines: [],
+              ));
+    final name = TextEditingController(text: initial.name);
+    final documentPrefix = TextEditingController(text: initial.documentPrefix);
+    final postal = TextEditingController(text: initial.postal);
+    final address1 = TextEditingController(text: initial.address1);
+    final address2 = TextEditingController(text: initial.address2);
+    final registration = TextEditingController(
+      text: initial.registrationNumber,
+    );
+    final bank = TextEditingController(
+      text: initial.primaryBankLines.join('\n'),
+    );
+    final bank2 = TextEditingController(
+      text: initial.secondaryBankLines.join('\n'),
+    );
+    final result = await showDialog<_BillingIssuerProfile>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('発行者・振込先設定'),
+        content: SizedBox(
+          width: 620,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: name,
+                  decoration: const InputDecoration(labelText: '発行者名（必須）'),
+                ),
+                TextField(
+                  controller: documentPrefix,
+                  textCapitalization: TextCapitalization.characters,
+                  decoration: const InputDecoration(
+                    labelText: '書類番号の接頭辞（例：ABC）',
+                  ),
+                ),
+                TextField(
+                  controller: postal,
+                  decoration: const InputDecoration(labelText: '郵便番号'),
+                ),
+                TextField(
+                  controller: address1,
+                  decoration: const InputDecoration(labelText: '住所1'),
+                ),
+                TextField(
+                  controller: address2,
+                  decoration: const InputDecoration(labelText: '住所2・建物名'),
+                ),
+                TextField(
+                  controller: registration,
+                  decoration: const InputDecoration(labelText: '適格事業者登録番号'),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: bank,
+                  minLines: 3,
+                  maxLines: 5,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    labelText: '振込先（必須・1行ずつ入力）',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: bank2,
+                  minLines: 2,
+                  maxLines: 5,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    labelText: '振込先2（任意・1行ずつ入力）',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final bankLines = bank.text
+                  .split('\n')
+                  .map((e) => e.trim())
+                  .where((e) => e.isNotEmpty)
+                  .toList();
+              if (name.text.trim().isEmpty || bankLines.isEmpty) return;
+              Navigator.of(ctx).pop(
+                _BillingIssuerProfile(
+                  name: name.text.trim(),
+                  documentPrefix: documentPrefix.text.trim().toUpperCase(),
+                  postal: postal.text.trim(),
+                  address1: address1.text.trim(),
+                  address2: address2.text.trim(),
+                  registrationNumber: registration.text.trim(),
+                  primaryBankLines: bankLines,
+                  secondaryBankLines: bank2.text
+                      .split('\n')
+                      .map((e) => e.trim())
+                      .where((e) => e.isNotEmpty)
+                      .toList(),
+                ),
+              );
+            },
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    for (final controller in [
+      name,
+      documentPrefix,
+      postal,
+      address1,
+      address2,
+      registration,
+      bank,
+      bank2,
+    ]) {
+      controller.dispose();
+    }
+    if (result == null) return;
+    await AppSession.billingIssuerProfiles.doc(AppSession.uid).set({
+      ...result.toMap(),
+      'createdByUid': AppSession.uid,
+      'createdByEmail': AppSession.email,
+      'updatedAt': FieldValue.serverTimestamp(),
+      'updatedAtLocal': DateTime.now().toIso8601String(),
+    }, SetOptions(merge: true));
+    if (mounted) setState(() => _issuerProfile = result);
+  }
+
+  Future<void> _manageRecipients() async {
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('外部・個人の宛名台帳'),
+        content: SizedBox(
+          width: 520,
+          child: _personalRecipients.isEmpty
+              ? const Text('登録済みの宛名はありません')
+              : ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final entry in _personalRecipients.values)
+                      ListTile(
+                        title: Text(entry.recipient.name),
+                        subtitle: Text(
+                          entry.type == 'individual' ? '個人' : '外部事業者',
+                        ),
+                        trailing: const Icon(Icons.edit_outlined),
+                        onTap: () => Navigator.of(ctx).pop(entry.id),
+                      ),
+                  ],
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('閉じる'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.of(ctx).pop('__new__'),
+            icon: const Icon(Icons.add),
+            label: const Text('新規追加'),
+          ),
+        ],
+      ),
+    );
+    if (selected == null) return;
+    await _editRecipient(
+      selected == '__new__' ? null : _personalRecipients[selected],
+    );
+  }
+
+  Future<void> _editRecipient(_BillingRecipientEntry? existing) async {
+    var type = existing?.type ?? 'external';
+    final recipient =
+        existing?.recipient ??
+        const _BillingRecipient(
+          name: '',
+          postal: '',
+          address1: '',
+          address2: '',
+        );
+    final name = TextEditingController(text: recipient.name);
+    final postal = TextEditingController(text: recipient.postal);
+    final address1 = TextEditingController(text: recipient.address1);
+    final address2 = TextEditingController(text: recipient.address2);
+    final result = await showDialog<(_BillingRecipient, String)>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(existing == null ? '宛名を追加' : '宛名を編集'),
+          content: SizedBox(
+            width: 520,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(value: 'external', label: Text('外部事業者')),
+                      ButtonSegment(value: 'individual', label: Text('個人')),
+                    ],
+                    selected: {type},
+                    onSelectionChanged: (values) =>
+                        setDialogState(() => type = values.first),
+                  ),
+                  TextField(
+                    controller: name,
+                    decoration: const InputDecoration(labelText: '宛名（必須）'),
+                  ),
+                  TextField(
+                    controller: postal,
+                    decoration: const InputDecoration(labelText: '郵便番号'),
+                  ),
+                  TextField(
+                    controller: address1,
+                    decoration: const InputDecoration(labelText: '住所1'),
+                  ),
+                  TextField(
+                    controller: address2,
+                    decoration: const InputDecoration(labelText: '住所2・建物名'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            if (existing != null)
+              TextButton(
+                onPressed: () async {
+                  await AppSession.billingRecipients.doc(existing.id).set({
+                    'archived': true,
+                    'updatedAt': FieldValue.serverTimestamp(),
+                  }, SetOptions(merge: true));
+                  if (ctx.mounted) Navigator.of(ctx).pop();
+                  await _load();
+                },
+                child: const Text('削除'),
+              ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('キャンセル'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                if (name.text.trim().isEmpty) return;
+                Navigator.of(ctx).pop((
+                  _BillingRecipient(
+                    name: name.text.trim(),
+                    postal: postal.text.trim(),
+                    address1: address1.text.trim(),
+                    address2: address2.text.trim(),
+                  ),
+                  type,
+                ));
+              },
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+    for (final controller in [name, postal, address1, address2]) {
+      controller.dispose();
+    }
+    if (result == null) return;
+    final ref = existing == null
+        ? AppSession.billingRecipients.doc()
+        : AppSession.billingRecipients.doc(existing.id);
+    await ref.set({
+      'id': ref.id,
+      'type': result.$2,
+      ...result.$1.toMap(),
+      'archived': false,
+      'createdByUid': AppSession.uid,
+      'createdByEmail': AppSession.email,
+      if (existing == null) 'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+      'updatedAtLocal': DateTime.now().toIso8601String(),
+    }, SetOptions(merge: true));
+    await _load();
+  }
 
   // ── 入り口の2段階選択フロー ──────────────────────
   // ①書類種別（請求書/受領書/領収書）→②発行方法（月次/任意）→③対応するフォーム。
@@ -2823,20 +3469,24 @@ class _BillingPageState extends State<BillingPage> {
               ],
             ),
             const SizedBox(height: 8),
-            Card(
-              margin: EdgeInsets.zero,
-              color: const Color(0xFFFFF7FF),
-              child: ListTile(
-                leading: const Icon(Icons.calendar_month),
-                title: const Text('月次請求（自動集計）'),
-                subtitle: Text(
-                  isReceipt ? '発行済み請求書一覧から個別に発行します' : '対象月・店舗を選んで発注明細から自動集計します',
+            if (!_isPersonalBilling) ...[
+              Card(
+                margin: EdgeInsets.zero,
+                color: const Color(0xFFFFF7FF),
+                child: ListTile(
+                  leading: const Icon(Icons.calendar_month),
+                  title: const Text('月次請求（自動集計）'),
+                  subtitle: Text(
+                    isReceipt
+                        ? '発行済み請求書一覧から個別に発行します'
+                        : '対象月・店舗を選んで発注明細から自動集計します',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => setState(() => _entryIsMonthly = true),
                 ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => setState(() => _entryIsMonthly = true),
               ),
-            ),
-            const SizedBox(height: 8),
+              const SizedBox(height: 8),
+            ],
             Card(
               margin: EdgeInsets.zero,
               color: const Color(0xFFFFF7FF),
@@ -3348,7 +3998,7 @@ class _BillingPageState extends State<BillingPage> {
                         !line.billed && !_alreadyIssuedForSelectedMonthStore,
                     keyboardType: TextInputType.number,
                     onChanged: (_) =>
-                        _normalizeBillingController(priceController!),
+                        _normalizeBillingController(priceController),
                     decoration: const InputDecoration(
                       border: OutlineInputBorder(),
                       labelText: '定価',
@@ -3365,7 +4015,7 @@ class _BillingPageState extends State<BillingPage> {
                         !line.billed && !_alreadyIssuedForSelectedMonthStore,
                     keyboardType: TextInputType.number,
                     onChanged: (_) =>
-                        _normalizeBillingController(rateController!),
+                        _normalizeBillingController(rateController),
                     decoration: const InputDecoration(
                       border: OutlineInputBorder(),
                       labelText: '仕入率',
@@ -4592,6 +5242,8 @@ class _BillingPageState extends State<BillingPage> {
   }
 
   Future<void> _createManualInvoice() async {
+    if (!await _ensureIssuerReady()) return;
+    if (!mounted) return;
     final availableStores = _manualIssuanceStoreOptions();
     if (availableStores.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -4905,12 +5557,17 @@ class _BillingPageState extends State<BillingPage> {
         'createdByEmail': AppSession.email,
         'status': 'issued',
         'billingMode': 'manual',
+        'issuer': _currentIssuer.toMap(),
+        'paymentStatus': 'unpaid',
+        'caseStatus': 'open',
         'billingItemTypes': ['任意'],
         'billingMonth': billingMonthKey,
         'paymentDueDateLocal': dueDate.toIso8601String(),
         'paymentDueText': _dateText(dueDate),
         'storeId': storeId,
         'storeName': storeName,
+        'recipientType': _recipientTypeForOption(storeId),
+        'recipientOptionId': storeId,
         'recipient': recipient.toMap(),
         'lineKeys': <String>[],
         'subtotal': subtotal,
@@ -4976,6 +5633,8 @@ class _BillingPageState extends State<BillingPage> {
   // 受領書・領収書は内容・保存構造が同一で、名称と関連文言のみが異なるため
   // kind で分岐する共通実装とする（billingMode: manual_receipt_only / manual_shuryoshuu_only）。
   Future<void> _createManualReceiptOrShuryoshuu(_BillingPdfKind kind) async {
+    if (!await _ensureIssuerReady()) return;
+    if (!mounted) return;
     final isShuryoshuu = kind == _BillingPdfKind.shuryoshuu;
     final billingMode = isShuryoshuu
         ? 'manual_shuryoshuu_only'
@@ -5268,6 +5927,12 @@ class _BillingPageState extends State<BillingPage> {
         'createdByUid': AppSession.uid,
         'createdByEmail': AppSession.email,
         'status': 'issued',
+        'paymentStatus': 'paid',
+        'issuer': _currentIssuer.toMap(),
+        'caseStatus': 'completed',
+        'completionDocumentKind': kind == _BillingPdfKind.shuryoshuu
+            ? 'shuryoshuu'
+            : 'receipt',
         'subtotal': subtotal,
         'subtotal10': subtotal10,
         'subtotal8': subtotal8,
@@ -5292,6 +5957,8 @@ class _BillingPageState extends State<BillingPage> {
         'billingMonth': billingMonthKey,
         'storeId': storeId,
         'storeName': storeName,
+        'recipientType': _recipientTypeForOption(storeId),
+        'recipientOptionId': storeId,
         'recipient': recipient.toMap(),
         'createdAt': FieldValue.serverTimestamp(),
         'createdAtLocal': issuedAt.toIso8601String(),
@@ -5313,10 +5980,18 @@ class _BillingPageState extends State<BillingPage> {
         'createdByEmail': AppSession.email,
         'status': 'issued',
         'billingMode': billingMode,
+        'issuer': _currentIssuer.toMap(),
+        'paymentStatus': 'paid',
+        'caseStatus': 'completed',
+        'completionDocumentKind': kind == _BillingPdfKind.shuryoshuu
+            ? 'shuryoshuu'
+            : 'receipt',
         'billingItemTypes': [billingTypeLabel],
         'billingMonth': billingMonthKey,
         'storeId': storeId,
         'storeName': storeName,
+        'recipientType': _recipientTypeForOption(storeId),
+        'recipientOptionId': storeId,
         'recipient': recipient.toMap(),
         'lineKeys': <String>[],
         'subtotal': subtotal,
@@ -5405,6 +6080,23 @@ class _BillingPageState extends State<BillingPage> {
                         fontWeight: FontWeight.bold,
                       ),
                     ),
+                    const SizedBox(height: 6),
+                    Chip(
+                      avatar: Icon(
+                        invoice.isCompleted
+                            ? Icons.check_circle
+                            : Icons.schedule,
+                        size: 17,
+                      ),
+                      label: Text(
+                        invoice.isCompleted
+                            ? '完了（${invoice.isShuryoshuu ? '領収書' : '受領書'}発行済み）'
+                            : '未入金',
+                      ),
+                      backgroundColor: invoice.isCompleted
+                          ? Colors.green.shade50
+                          : Colors.orange.shade50,
+                    ),
                     const SizedBox(height: 4),
                     Text(
                       '${invoice.billingMonthLabel} / ${invoice.billingItemTypesText} / 締切 ${invoice.paymentDueText} / ${invoice.billingMode == 'monthly_repayment_only' ? '定期返済のみ' : '${invoice.itemCount}明細'}',
@@ -5425,38 +6117,41 @@ class _BillingPageState extends State<BillingPage> {
                           ),
                           if (invoice.billingMode != 'monthly_repayment_only')
                             OutlinedButton(
-                              onPressed: _saving
+                              onPressed: _saving || !_canModifyInvoice(invoice)
                                   ? null
                                   : () => _editInvoicePdf(invoice),
                               child: const Text('請求編集'),
                             ),
                           OutlinedButton(
-                            onPressed: _saving
+                            onPressed: _saving || !_canModifyInvoice(invoice)
                                 ? null
                                 : () => _regenerateInvoicePdf(invoice),
                             child: const Text('PDF再生成'),
                           ),
                         ],
                         ElevatedButton(
-                          onPressed: _saving
+                          onPressed:
+                              _saving ||
+                                  (invoice.receiptId.isEmpty &&
+                                      !_canModifyInvoice(invoice))
                               ? null
                               : () => _createReceipt(invoice),
                           child: Text(
                             invoice.receiptId.isEmpty
-                                ? '受領書作成'
+                                ? '入金確認・書類発行'
                                 : (invoice.isShuryoshuu ? '領収書' : '受領書'),
                           ),
                         ),
                         if (invoice.receiptId.isNotEmpty &&
                             invoice.billingMode != 'monthly_repayment_only')
                           OutlinedButton(
-                            onPressed: _saving
+                            onPressed: _saving || !_canModifyInvoice(invoice)
                                 ? null
                                 : () => _editReceiptPdf(invoice),
                             child: Text(invoice.isShuryoshuu ? '領収編集' : '受領編集'),
                           ),
                         TextButton(
-                          onPressed: _saving
+                          onPressed: _saving || !_canModifyInvoice(invoice)
                               ? null
                               : () => _cancelInvoice(invoice),
                           child: Text(
@@ -5479,6 +6174,10 @@ class _BillingPageState extends State<BillingPage> {
     );
   }
 
+  bool _canModifyInvoice(_BillingInvoiceSummary invoice) =>
+      invoice.createdByUid == AppSession.uid ||
+      (AppSession.isSuperAdmin && invoice.createdByUid.isEmpty);
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -5487,16 +6186,27 @@ class _BillingPageState extends State<BillingPage> {
         title: const Text('請求・受領管理'),
         actions: [
           IconButton(
-            onPressed: _saving
-                ? null
-                : () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => const BillingArchivePage(),
-                    ),
-                  ),
-            icon: const Icon(Icons.folder_open_outlined),
-            tooltip: '過去の保存書類',
+            onPressed: _saving ? null : _manageRecipients,
+            icon: const Icon(Icons.contact_page_outlined),
+            tooltip: '外部・個人の宛名台帳',
           ),
+          IconButton(
+            onPressed: _saving ? null : _editIssuerProfile,
+            icon: const Icon(Icons.account_balance_outlined),
+            tooltip: '発行者・振込先設定',
+          ),
+          if (!_isPersonalBilling)
+            IconButton(
+              onPressed: _saving
+                  ? null
+                  : () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const BillingArchivePage(),
+                      ),
+                    ),
+              icon: const Icon(Icons.folder_open_outlined),
+              tooltip: '過去の保存書類',
+            ),
           IconButton(
             onPressed: _saving ? null : _load,
             icon: const Icon(Icons.refresh),
@@ -5514,8 +6224,8 @@ class _BillingPageState extends State<BillingPage> {
             : ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
-                  const Text(
-                    '統括管理者専用',
+                  Text(
+                    _isPersonalBilling ? '本人が発行した書類だけを表示・編集します' : '統括管理者',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: Colors.deepPurple,
@@ -6035,6 +6745,134 @@ class _ManualReceiptInput {
   final List<_ManualBillingLineControllers> rows;
 }
 
+class _BillingRecipientEntry {
+  const _BillingRecipientEntry({
+    required this.id,
+    required this.type,
+    required this.recipient,
+    required this.archived,
+  });
+
+  static const optionPrefix = 'recipient__';
+  final String id;
+  final String type;
+  final _BillingRecipient recipient;
+  final bool archived;
+
+  String get optionId => '$optionPrefix$id';
+  String get displayLabel =>
+      '${type == 'individual' ? '個人' : '外部事業者'}：${recipient.name}';
+
+  factory _BillingRecipientEntry.fromDoc(
+    String id,
+    Map<String, dynamic> data,
+  ) => _BillingRecipientEntry(
+    id: id,
+    type: (data['type'] ?? 'external').toString(),
+    recipient: _BillingRecipient.fromMap(data),
+    archived: data['archived'] == true,
+  );
+}
+
+class _BillingCompletionInput {
+  const _BillingCompletionInput({
+    required this.kind,
+    required this.paidAt,
+    required this.amount,
+    required this.method,
+    required this.memo,
+  });
+
+  final _BillingPdfKind kind;
+  final DateTime paidAt;
+  final int amount;
+  final String method;
+  final String memo;
+}
+
+class _BillingIssuerProfile {
+  const _BillingIssuerProfile({
+    required this.name,
+    required this.documentPrefix,
+    required this.postal,
+    required this.address1,
+    required this.address2,
+    required this.registrationNumber,
+    required this.primaryBankLines,
+    this.secondaryBankLines = const [],
+  });
+
+  static const reStart = _BillingIssuerProfile(
+    name: '株式会社Re,stArt',
+    documentPrefix: 'AQU',
+    postal: '942-0061',
+    address1: '新潟県上越市春日新田2-2-2',
+    address2: '',
+    registrationNumber: 'T4110001034998',
+    primaryBankLines: [
+      '楽天銀行　第四営業支店',
+      '普通　7019450',
+      '口座名義　株式会社Re,stArt',
+      '（カブ リスタート）代表取締役　清水 広美',
+    ],
+    secondaryBankLines: [
+      'GMOあおぞら銀行　法人営業部',
+      '普通　1589610',
+      '株式会社Re,stArt',
+      'カ）リスタート',
+    ],
+  );
+
+  final String name;
+  final String documentPrefix;
+  final String postal;
+  final String address1;
+  final String address2;
+  final String registrationNumber;
+  final List<String> primaryBankLines;
+  final List<String> secondaryBankLines;
+
+  bool get isComplete => name.trim().isNotEmpty && primaryBankLines.isNotEmpty;
+
+  List<String> get pdfAddressLines => [
+    if (postal.trim().isNotEmpty) '〒${postal.trim()}',
+    if (address1.trim().isNotEmpty) address1.trim(),
+    if (address2.trim().isNotEmpty) address2.trim(),
+    if (registrationNumber.trim().isNotEmpty)
+      '適格事業者登録番号：${registrationNumber.trim()}',
+  ];
+
+  Map<String, dynamic> toMap() => {
+    'name': name,
+    'documentPrefix': documentPrefix,
+    'postal': postal,
+    'address1': address1,
+    'address2': address2,
+    'registrationNumber': registrationNumber,
+    'primaryBankLines': primaryBankLines,
+    'secondaryBankLines': secondaryBankLines,
+  };
+
+  factory _BillingIssuerProfile.fromMap(Map<String, dynamic> data) {
+    List<String> lines(dynamic value) => value is List
+        ? value
+              .map((e) => e.toString())
+              .where((e) => e.trim().isNotEmpty)
+              .toList()
+        : <String>[];
+    return _BillingIssuerProfile(
+      name: (data['name'] ?? '').toString(),
+      documentPrefix: (data['documentPrefix'] ?? 'INV').toString(),
+      postal: (data['postal'] ?? '').toString(),
+      address1: (data['address1'] ?? '').toString(),
+      address2: (data['address2'] ?? '').toString(),
+      registrationNumber: (data['registrationNumber'] ?? '').toString(),
+      primaryBankLines: lines(data['primaryBankLines']),
+      secondaryBankLines: lines(data['secondaryBankLines']),
+    );
+  }
+}
+
 class _BillingInvoiceSummary {
   const _BillingInvoiceSummary({
     required this.id,
@@ -6058,6 +6896,10 @@ class _BillingInvoiceSummary {
     required this.repaymentMonthlyAmount,
     required this.itemCount,
     required this.receiptId,
+    required this.paymentStatus,
+    required this.caseStatus,
+    required this.completionDocumentKind,
+    required this.createdByUid,
   });
 
   final String id;
@@ -6081,6 +6923,10 @@ class _BillingInvoiceSummary {
   final int repaymentMonthlyAmount;
   final int itemCount;
   final String receiptId;
+  final String paymentStatus;
+  final String caseStatus;
+  final String completionDocumentKind;
+  final String createdByUid;
 
   DateTime get billingMonthDate {
     if (billingMonth.length == 6) {
@@ -6097,7 +6943,11 @@ class _BillingInvoiceSummary {
   String get billingItemTypesText =>
       billingItemTypes.isEmpty ? '商品・テスター・備品' : billingItemTypes.join('・');
 
-  bool get isShuryoshuu => billingMode == 'manual_shuryoshuu_only';
+  bool get isShuryoshuu =>
+      billingMode == 'manual_shuryoshuu_only' ||
+      completionDocumentKind == 'shuryoshuu';
+
+  bool get isCompleted => caseStatus == 'completed' || receiptId.isNotEmpty;
 
   factory _BillingInvoiceSummary.fromDoc(String id, Map<String, dynamic> data) {
     final ts = data['createdAt'];
@@ -6107,7 +6957,7 @@ class _BillingInvoiceSummary {
               DateTime.now();
     final rawItems = data['items'];
     final invoiceNo = (data['invoiceNo'] ?? id).toString();
-    final parsedSeq = RegExp(r'AQU-(\d+)$').firstMatch(invoiceNo);
+    final parsedSeq = RegExp(r'-(\d+)$').firstMatch(invoiceNo);
     final invoiceSeq = inventoryIntValue(data['invoiceSeq']) > 0
         ? inventoryIntValue(data['invoiceSeq'])
         : (parsedSeq == null ? 0 : int.tryParse(parsedSeq.group(1)!) ?? 0);
@@ -6144,6 +6994,10 @@ class _BillingInvoiceSummary {
           ? rawItems.length
           : (data['lineKeys'] is List ? (data['lineKeys'] as List).length : 0),
       receiptId: (data['receiptId'] ?? '').toString(),
+      paymentStatus: (data['paymentStatus'] ?? '').toString(),
+      caseStatus: (data['caseStatus'] ?? '').toString(),
+      completionDocumentKind: (data['completionDocumentKind'] ?? '').toString(),
+      createdByUid: (data['createdByUid'] ?? '').toString(),
     );
   }
 }
