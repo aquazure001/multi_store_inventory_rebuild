@@ -427,7 +427,11 @@ class _BillingPageState extends State<BillingPage> {
       final lines = <_BillingLine>[];
       for (final batch in batchSnap.docs) {
         final data = batch.data();
-        if ((data['status'] ?? '').toString() == 'canceled') continue;
+        final canceled = (data['status'] ?? '').toString() == 'canceled';
+        final canceledBy = (data['canceledBy'] ?? '').toString();
+        // Phase 3 migration marked historical batches as canceled only to clear
+        // outstanding delivery state. They remain valid billing source records.
+        if (canceled && canceledBy != 'system-phase3') continue;
         final orderDate = _batchDate(data);
         final rawItems = data['items'];
         if (rawItems is! List) continue;
