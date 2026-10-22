@@ -38,6 +38,8 @@ class _BillingPageState extends State<BillingPage> {
   // ページシェル（請求書一覧・フォーム）を先に表示し、重いバッチ読み取りは
   // 背景で行う二段階ローディング用。
   bool _linesLoading = false;
+  String? _monthLoadError;
+  int _monthLoadGeneration = 0;
   bool _saving = false;
   bool _showBilled = false;
   String? _error;
@@ -54,6 +56,8 @@ class _BillingPageState extends State<BillingPage> {
   // 確認操作を促す。
   List<LegacyStore> _pendingAckStores = [];
   final List<_BillingLine> _lines = [];
+  final Map<String, List<_BillingLine>> _monthLinesCache = {};
+  Set<String> _excludedBillingStoreIds = {};
   final List<_BillingInvoiceSummary> _invoices = [];
   final Set<String> _billedKeys = <String>{};
   final Set<String> _issuedMonthStoreKeys = <String>{};
@@ -284,9 +288,8 @@ class _BillingPageState extends State<BillingPage> {
         if (!entry.archived) personalRecipients[entry.id] = entry;
       }
 
-      // ページシェル（請求書一覧・単価マスタ・店舗マスタ）を先に表示する。
-      // 発注バッチ（全日の発注明細を含む＝最も重い読み取り）と商品/テスター/
-      // 備品マスタは続けて並行取得し、明細リストだけ後から差し込む。
+      // ページシェルを先に表示する。発注明細は選択月だけを後から取得し、
+      // 過去24か月分を一括で読まない。
       setState(() {
         _billedKeys
           ..clear()
@@ -315,6 +318,7 @@ class _BillingPageState extends State<BillingPage> {
         _repaymentEnabled = repaymentEnabled;
         _orgStores = orgStores;
         _hiddenStoreIds = hiddenStoreIds;
+        _excludedBillingStoreIds = excludedStoreIds;
         if (_selectedStoreId.isEmpty) {
           final stores = _storesForMonth(_selectedMonth);
           if (stores.isNotEmpty) _selectedStoreId = stores.keys.first;
@@ -322,19 +326,17 @@ class _BillingPageState extends State<BillingPage> {
         _applyRecipientToControllers(_selectedStoreId);
         _loading = false;
         _linesLoading = true;
+        _monthLoadError = null;
       });
 
-      // 二段階後半: 重い読み取り同士を並列化。
-      // 発注バッチ（明細群）と商品/テスター/備品マスタ（任意フォーム用）。
+      // 商品マスタと選択月の明細を並列取得する。月明細側は一度開いた月を
+      // 最大6か月までメモリキャッシュする。
+      final selectedMonthAtLoad = _selectedMonth;
       final heavyResults = await Future.wait<dynamic>([
-        AppSession.orderBatches
-            .orderBy('createdAt', descending: true)
-            .limit(40)
-            .get(),
         masterFuture,
+        _loadMonthData(selectedMonthAtLoad, forceRefresh: true),
       ]);
-      final batchSnap = heavyResults[0] as QuerySnapshot<Map<String, dynamic>>;
-      final masterData = heavyResults[1] as _MasterDataSnapshot;
+      final masterData = heavyResults[0] as _MasterDataSnapshot;
       final manualItemMastersByCode = <String, LegacyItem>{};
       for (final item in [
         ...masterData.products,
@@ -349,6 +351,79 @@ class _BillingPageState extends State<BillingPage> {
           .where((s) => pendingAckStoreIds.contains(s.id))
           .toList();
 
+      setState(() {
+        _manualItemMastersByCode
+          ..clear()
+          ..addAll(manualItemMastersByCode);
+        _pendingAckStores = pendingAckStores;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _loading = false;
+          _linesLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadMonthData(
+    DateTime month, {
+    bool forceRefresh = false,
+  }) async {
+    final normalizedMonth = DateTime(month.year, month.month);
+    final monthKey = _monthKey(normalizedMonth);
+    final generation = ++_monthLoadGeneration;
+
+    if (!forceRefresh) {
+      final cached = _monthLinesCache.remove(monthKey);
+      if (cached != null) {
+        _monthLinesCache[monthKey] = cached;
+        if (!mounted || generation != _monthLoadGeneration) return;
+        _applyLoadedMonthLines(normalizedMonth, cached);
+        return;
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _linesLoading = true;
+        _monthLoadError = null;
+        _lines.clear();
+        _selectedBillingLineKeys.clear();
+      });
+    }
+
+    try {
+      final start = DateTime(normalizedMonth.year, normalizedMonth.month);
+      final next = DateTime(normalizedMonth.year, normalizedMonth.month + 1);
+      final results = await Future.wait<dynamic>([
+        AppSession.orderBatches
+            .where(
+              'createdAt',
+              isGreaterThanOrEqualTo: Timestamp.fromDate(start),
+            )
+            .where('createdAt', isLessThan: Timestamp.fromDate(next))
+            .orderBy('createdAt', descending: true)
+            .get(),
+        AppSession.billingInvoices
+            .where('billingMonth', isEqualTo: monthKey)
+            .get(),
+      ]);
+      final batchSnap = results[0] as QuerySnapshot<Map<String, dynamic>>;
+      final invoiceSnap = results[1] as QuerySnapshot<Map<String, dynamic>>;
+
+      final billedKeys = <String>{};
+      for (final doc in invoiceSnap.docs) {
+        final data = doc.data();
+        if ((data['status'] ?? '').toString() == 'canceled') continue;
+        final rawKeys = data['lineKeys'];
+        if (rawKeys is List) {
+          billedKeys.addAll(rawKeys.map((e) => e.toString()));
+        }
+      }
+
       final lines = <_BillingLine>[];
       for (final batch in batchSnap.docs) {
         final data = batch.data();
@@ -356,36 +431,37 @@ class _BillingPageState extends State<BillingPage> {
         final orderDate = _batchDate(data);
         final rawItems = data['items'];
         if (rawItems is! List) continue;
-        for (int i = 0; i < rawItems.length; i++) {
+        for (var i = 0; i < rawItems.length; i++) {
           final raw = rawItems[i];
           if (raw is! Map) continue;
           final item = Map<String, dynamic>.from(
-            raw.map((k, v) => MapEntry(k.toString(), v)),
+            raw.map((key, value) => MapEntry(key.toString(), value)),
           );
           final qty = _toInt(item['qty']);
           if (qty <= 0) continue;
-          if (excludedStoreIds.contains((item['storeId'] ?? '').toString())) {
-            continue;
-          }
-          final line = _BillingLine(
-            key: '${batch.id}_$i',
-            batchId: batch.id,
-            batchTitle: _batchTitle(data),
-            orderDate: orderDate,
-            storeId: (item['storeId'] ?? '').toString(),
-            storeName: (item['storeName'] ?? '').toString(),
-            itemType: inventoryTypeLabelFromKey(
-              normalizeInventoryTypeKey(
-                typeKey: (item['typeKey'] ?? '').toString(),
-                itemType: (item['itemType'] ?? '').toString(),
+          final storeId = (item['storeId'] ?? '').toString();
+          if (_excludedBillingStoreIds.contains(storeId)) continue;
+          final lineKey = '${batch.id}_$i';
+          lines.add(
+            _BillingLine(
+              key: lineKey,
+              batchId: batch.id,
+              batchTitle: _batchTitle(data),
+              orderDate: orderDate,
+              storeId: storeId,
+              storeName: (item['storeName'] ?? '').toString(),
+              itemType: inventoryTypeLabelFromKey(
+                normalizeInventoryTypeKey(
+                  typeKey: (item['typeKey'] ?? '').toString(),
+                  itemType: (item['itemType'] ?? '').toString(),
+                ),
               ),
+              itemCode: (item['itemCode'] ?? '').toString(),
+              itemName: (item['itemName'] ?? '').toString(),
+              qty: qty,
+              billed: billedKeys.contains(lineKey),
             ),
-            itemCode: (item['itemCode'] ?? '').toString(),
-            itemName: (item['itemName'] ?? '').toString(),
-            qty: qty,
-            billed: billedKeys.contains('${batch.id}_$i'),
           );
-          lines.add(line);
         }
       }
       lines.sort((a, b) {
@@ -400,75 +476,74 @@ class _BillingPageState extends State<BillingPage> {
         return _naturalCompare(a.itemName, b.itemName);
       });
 
-      for (final line in lines) {
-        if (!_isSameMonth(line.orderDate, _selectedMonth)) continue;
-        if (!_showBilled && line.billed) continue;
-        final priceKey = _priceKeyFor(line);
-        final rateKey = _purchaseRateKeyFor(line);
-        final master = billingPrices[priceKey];
-        final priceController = _priceControllers.putIfAbsent(priceKey, () {
-          final controller = TextEditingController();
-          controller.addListener(() {
-            if (mounted) setState(() {});
-          });
-          return controller;
-        });
-        if ((priceController.text.trim().isEmpty || line.billed) &&
-            master != null &&
-            master.unitPrice > 0) {
-          priceController.text = master.unitPrice.toString();
-        }
-        final rateController = _purchaseRateControllers.putIfAbsent(
-          rateKey,
-          () {
-            final controller = TextEditingController();
-            controller.addListener(() {
-              if (mounted) setState(() {});
-            });
-            return controller;
-          },
-        );
-        final savedStoreRate = storePurchaseRates[line.storeId]?[priceKey] ?? 0;
-        final fallbackRate = savedStoreRate > 0
-            ? savedStoreRate
-            : (master?.purchaseRate ?? 0);
-        if ((rateController.text.trim().isEmpty || line.billed) &&
-            fallbackRate > 0) {
-          rateController.text = fallbackRate.toString();
-        }
+      _monthLinesCache.remove(monthKey);
+      while (_monthLinesCache.length >= 6) {
+        _monthLinesCache.remove(_monthLinesCache.keys.first);
       }
+      _monthLinesCache[monthKey] = List<_BillingLine>.unmodifiable(lines);
 
-      setState(() {
-        _lines
-          ..clear()
-          ..addAll(lines);
-        final selectableLineKeys = lines
-            .where((line) => !line.billed)
-            .map((line) => line.key)
-            .toSet();
-        _selectedBillingLineKeys.removeWhere(
-          (key) => !selectableLineKeys.contains(key),
-        );
-        if (_selectedStoreId.isEmpty) {
-          final stores = _storesForMonth(_selectedMonth);
-          if (stores.isNotEmpty) _selectedStoreId = stores.keys.first;
-        }
-        // マスタ到着分（任意フォーム用の品目マスタ・確認待ち店舗バナー）。
-        _manualItemMastersByCode
-          ..clear()
-          ..addAll(manualItemMastersByCode);
-        _pendingAckStores = pendingAckStores;
-        _linesLoading = false;
-      });
+      if (!mounted || generation != _monthLoadGeneration) return;
+      _billedKeys
+        ..clear()
+        ..addAll(billedKeys);
+      _applyLoadedMonthLines(normalizedMonth, lines);
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _error = e.toString();
-          _loading = false;
-          _linesLoading = false;
+      if (!mounted || generation != _monthLoadGeneration) return;
+      setState(() {
+        _linesLoading = false;
+        _monthLoadError = '対象月の明細を読み込めませんでした: $e';
+      });
+    }
+  }
+
+  void _applyLoadedMonthLines(DateTime month, List<_BillingLine> lines) {
+    if (!mounted || _monthKey(month) != _monthKey(_selectedMonth)) return;
+    for (final line in lines) {
+      final priceKey = _priceKeyFor(line);
+      final rateKey = _purchaseRateKeyFor(line);
+      final master = _billingPrices[priceKey];
+      final priceController = _priceControllers.putIfAbsent(priceKey, () {
+        final controller = TextEditingController();
+        controller.addListener(() {
+          if (mounted) setState(() {});
         });
+        return controller;
+      });
+      if ((priceController.text.trim().isEmpty || line.billed) &&
+          master != null &&
+          master.unitPrice > 0) {
+        priceController.text = master.unitPrice.toString();
+      }
+      final rateController = _purchaseRateControllers.putIfAbsent(rateKey, () {
+        final controller = TextEditingController();
+        controller.addListener(() {
+          if (mounted) setState(() {});
+        });
+        return controller;
+      });
+      final savedStoreRate = _storePurchaseRates[line.storeId]?[priceKey] ?? 0;
+      final fallbackRate = savedStoreRate > 0
+          ? savedStoreRate
+          : (master?.purchaseRate ?? 0);
+      if ((rateController.text.trim().isEmpty || line.billed) &&
+          fallbackRate > 0) {
+        rateController.text = fallbackRate.toString();
       }
     }
+
+    setState(() {
+      _lines
+        ..clear()
+        ..addAll(lines);
+      _selectedBillingLineKeys.clear();
+      final stores = _storesForMonth(month);
+      if (_selectedStoreId.isEmpty || !stores.containsKey(_selectedStoreId)) {
+        _selectedStoreId = stores.isEmpty ? '' : stores.keys.first;
+        _applyRecipientToControllers(_selectedStoreId);
+      }
+      _linesLoading = false;
+      _monthLoadError = null;
+    });
   }
 
   Future<void> _loadPersonalBilling() async {
@@ -678,14 +753,12 @@ class _BillingPageState extends State<BillingPage> {
       _dateText(_paymentDueDateForMonth(month));
 
   List<DateTime> _availableMonths() {
-    final keys = <String, DateTime>{};
-    for (final line in _lines) {
-      final month = DateTime(line.orderDate.year, line.orderDate.month);
-      keys[_monthKey(month)] = month;
-    }
-    keys[_monthKey(_selectedMonth)] = _selectedMonth;
-    final months = keys.values.toList()..sort((a, b) => b.compareTo(a));
-    return months;
+    final now = DateTime.now();
+    final currentMonth = DateTime(now.year, now.month);
+    return List<DateTime>.generate(
+      24,
+      (index) => DateTime(currentMonth.year, currentMonth.month - index),
+    );
   }
 
   Map<String, String> _storesForMonth(DateTime month) {
@@ -3667,11 +3740,9 @@ class _BillingPageState extends State<BillingPage> {
                 if (year == null || month == null) return;
                 setState(() {
                   _selectedMonth = DateTime(year, month);
-                  final monthStores = _storesForMonth(_selectedMonth);
-                  _selectedStoreId = monthStores.containsKey(_selectedStoreId)
-                      ? _selectedStoreId
-                      : (monthStores.isEmpty ? '' : monthStores.keys.first);
+                  _selectedBillingLineKeys.clear();
                 });
+                unawaited(_loadMonthData(_selectedMonth));
               },
             ),
             const SizedBox(height: 8),
@@ -6334,6 +6405,21 @@ class _BillingPageState extends State<BillingPage> {
                         child: Padding(
                           padding: EdgeInsets.all(20),
                           child: Center(child: CircularProgressIndicator()),
+                        ),
+                      )
+                    else if (_monthLoadError != null)
+                      Card(
+                        child: ListTile(
+                          leading: const Icon(Icons.error_outline),
+                          title: Text(_monthLoadError!),
+                          trailing: IconButton(
+                            onPressed: () => _loadMonthData(
+                              _selectedMonth,
+                              forceRefresh: true,
+                            ),
+                            icon: const Icon(Icons.refresh),
+                            tooltip: '再読み込み',
+                          ),
                         ),
                       )
                     else if (_visibleLines.isEmpty)
