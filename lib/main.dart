@@ -72,7 +72,7 @@ void _openLink(String url) {
 
 // App Check（監視モード）。Firebaseコンソール側で enforce しない限り、
 // トークンが取れなくてもリクエストは拒否されない。
-// Web の reCAPTCHA v3 サイトキーはソースに置かず、ビルド時に
+// Web の reCAPTCHA Enterprise サイトキーはソースに置かず、ビルド時に
 // --dart-define=RECAPTCHA_SITE_KEY=<サイトキー> で渡す。
 const String _recaptchaSiteKey = String.fromEnvironment('RECAPTCHA_SITE_KEY');
 
@@ -93,7 +93,7 @@ Future<void> _activateAppCheck() async {
       return;
     }
     await FirebaseAppCheck.instance.activate(
-      providerWeb: ReCaptchaV3Provider(_recaptchaSiteKey),
+      providerWeb: ReCaptchaEnterpriseProvider(_recaptchaSiteKey),
       providerAndroid: const AndroidPlayIntegrityProvider(),
       providerApple: const AppleAppAttestWithDeviceCheckFallbackProvider(),
     );
