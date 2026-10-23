@@ -123,7 +123,10 @@ class _UserLoaderState extends State<_UserLoader> {
   ) async {
     try {
       // ownerUid が自分のUIDと一致する組織のみ自動移行
-      final orgsSnap = await fs.collection('organizations').get();
+      final orgsSnap = await fs
+          .collection('organizations')
+          .where('ownerUid', isEqualTo: uid)
+          .get();
       String? orgId;
       for (final doc in orgsSnap.docs) {
         final data = doc.data();
@@ -752,7 +755,10 @@ class _OrgSetupPageState extends State<OrgSetupPage> {
       final fs = FirebaseFirestore.instance;
 
       // ownerUid が自分のUIDと一致する組織のみ移行可能
-      final orgsSnap = await fs.collection('organizations').get();
+      final orgsSnap = await fs
+          .collection('organizations')
+          .where('ownerUid', isEqualTo: AppSession.uid)
+          .get();
       String? orgId;
       for (final doc in orgsSnap.docs) {
         final data = doc.data();

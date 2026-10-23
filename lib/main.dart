@@ -8,8 +8,10 @@ import 'dart:js' as js;
 import 'package:image/image.dart' as img;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -68,9 +70,43 @@ void _openLink(String url) {
     ..click();
 }
 
+// App Check（監視モード）。Firebaseコンソール側で enforce しない限り、
+// トークンが取れなくてもリクエストは拒否されない。
+// Web の reCAPTCHA v3 サイトキーはソースに置かず、ビルド時に
+// --dart-define=RECAPTCHA_SITE_KEY=<サイトキー> で渡す。
+const String _recaptchaSiteKey = String.fromEnvironment('RECAPTCHA_SITE_KEY');
+
+Future<void> _activateAppCheck() async {
+  try {
+    if (kDebugMode) {
+      // デバッグ時は debug provider。トークンはコンソールに出力されるので
+      // Firebaseコンソールの「デバッグトークンを管理」で登録する。
+      await FirebaseAppCheck.instance.activate(
+        providerWeb: WebDebugProvider(),
+        providerAndroid: const AndroidDebugProvider(),
+        providerApple: const AppleDebugProvider(),
+      );
+      return;
+    }
+    if (kIsWeb && _recaptchaSiteKey.isEmpty) {
+      debugPrint('App Check: RECAPTCHA_SITE_KEY 未設定のため Web では無効化');
+      return;
+    }
+    await FirebaseAppCheck.instance.activate(
+      providerWeb: ReCaptchaV3Provider(_recaptchaSiteKey),
+      providerAndroid: const AndroidPlayIntegrityProvider(),
+      providerApple: const AppleAppAttestWithDeviceCheckFallbackProvider(),
+    );
+  } catch (e) {
+    // 監視モードのため、App Check の初期化失敗でアプリを止めない
+    debugPrint('App Check の初期化に失敗: $e');
+  }
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await _activateAppCheck();
   // オフライン永続化を有効化。
   // ページ遷移のたびにネットワーク往復が発生するのを防ぎ、直近に読んだ
   // ドキュメントはローカル(IndexedDB)キャッシュから即座に返せるようにする。

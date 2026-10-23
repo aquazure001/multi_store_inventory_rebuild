@@ -909,17 +909,16 @@ class _StoreListPageState extends State<StoreListPage> {
             ),
           if (AppSession.isSuperAdmin)
             StreamBuilder<QuerySnapshot>(
-              // 複合インデックス不要にするため status での絞り込みはアプリ側で行う
               stream: FirebaseFirestore.instance
                   .collection('deletionRequests')
+                  .where('status', isEqualTo: 'pending')
                   .orderBy('requestedAt', descending: true)
+                  .limit(201)
                   .snapshots(),
               builder: (context, snap) {
-                final count =
-                    snap.data?.docs
-                        .where((d) => (d.data() as Map)['status'] != 'handled')
-                        .length ??
-                    0;
+                final rawCount = snap.data?.docs.length ?? 0;
+                final hasMore = rawCount > 200;
+                final count = min(rawCount, 200);
                 return Stack(
                   alignment: Alignment.center,
                   children: [
@@ -947,7 +946,7 @@ class _StoreListPageState extends State<StoreListPage> {
                             minHeight: 16,
                           ),
                           child: Text(
-                            '$count',
+                            hasMore ? '200+' : '$count',
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 10,

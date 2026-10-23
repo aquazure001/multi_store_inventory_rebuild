@@ -91,6 +91,8 @@ class _PosRegisterSessionHistoryPageState
   bool _hasResult = false;
   String? _message;
 
+  static const int _queryLimit = 1000;
+
   List<_PosRegisterSessionRecord> _sessions = [];
   int _totalInventoryBasedSales = 0;
   int _totalManualSalesTotal = 0;
@@ -160,6 +162,7 @@ class _PosRegisterSessionHistoryPageState
     setState(() {
       _loading = true;
       _message = null;
+      _hasResult = false;
     });
     try {
       final start = DateTime(_startDate.year, _startDate.month, _startDate.day);
@@ -173,11 +176,46 @@ class _PosRegisterSessionHistoryPageState
         999,
       );
 
-      final snap = await AppSession.posRegisterSessions
+      Query<Map<String, dynamic>> query = AppSession.posRegisterSessions
           .where('openedAt', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
           .where('openedAt', isLessThanOrEqualTo: Timestamp.fromDate(end))
-          .orderBy('openedAt', descending: true)
-          .get();
+          .orderBy('openedAt', descending: true);
+      if (_selectedStore != null) {
+        query = query.where('storeId', isEqualTo: _selectedStore!.id);
+      } else if (_isRestricted) {
+        final storeIds = _viewableStoreIds.toList();
+        if (storeIds.isEmpty) {
+          setState(() {
+            _message = '閲覧できる店舗がありません。';
+            _hasResult = false;
+          });
+          return;
+        }
+        if (storeIds.length > 30) {
+          setState(() {
+            _message = '閲覧可能店舗が30件を超えるため、店舗を1つ選択して検索してください。';
+            _hasResult = false;
+          });
+          return;
+        }
+        query = query.where('storeId', whereIn: storeIds);
+      }
+      final snap = await query.limit(_queryLimit + 1).get();
+
+      if (snap.docs.length > _queryLimit) {
+        if (!mounted) return;
+        setState(() {
+          _sessions = [];
+          _totalInventoryBasedSales = 0;
+          _totalManualSalesTotal = 0;
+          _totalCashSales = 0;
+          _totalCardSales = 0;
+          _hasResult = false;
+          _message =
+              '対象データが上限（$_queryLimit件）を超えています。正確な合計を表示するため、期間を短くして再検索してください。';
+        });
+        return;
+      }
 
       final sessions = snap.docs
           .map(_PosRegisterSessionRecord.fromDoc)

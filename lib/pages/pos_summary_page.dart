@@ -37,6 +37,8 @@ class _PosSummaryPageState extends State<PosSummaryPage> {
   bool _hasResult = false;
   String? _message;
 
+  static const int _queryLimit = 1000;
+
   int _resultCount = 0;
   int _resultTotal = 0;
   int _resultProductTotal = 0;
@@ -101,6 +103,7 @@ class _PosSummaryPageState extends State<PosSummaryPage> {
     setState(() {
       _loading = true;
       _message = null;
+      _hasResult = false;
     });
     try {
       final startIso = DateTime(
@@ -118,11 +121,46 @@ class _PosSummaryPageState extends State<PosSummaryPage> {
         999,
       ).toIso8601String();
 
-      final snap = await AppSession.posSales
+      Query<Map<String, dynamic>> query = AppSession.posSales
           .where('soldAtLocal', isGreaterThanOrEqualTo: startIso)
           .where('soldAtLocal', isLessThanOrEqualTo: endIso)
-          .orderBy('soldAtLocal', descending: true)
-          .get();
+          .orderBy('soldAtLocal', descending: true);
+      if (_selectedStore != null) {
+        query = query.where('storeId', isEqualTo: _selectedStore!.id);
+      } else if (_isRestricted) {
+        final storeIds = _viewableStoreIds.toList();
+        if (storeIds.isEmpty) {
+          setState(() {
+            _message = '閲覧できる店舗がありません。';
+            _hasResult = false;
+          });
+          return;
+        }
+        if (storeIds.length > 30) {
+          setState(() {
+            _message = '閲覧可能店舗が30件を超えるため、店舗を1つ選択して集計してください。';
+            _hasResult = false;
+          });
+          return;
+        }
+        query = query.where('storeId', whereIn: storeIds);
+      }
+      final snap = await query.limit(_queryLimit + 1).get();
+
+      if (snap.docs.length > _queryLimit) {
+        if (!mounted) return;
+        setState(() {
+          _resultCount = 0;
+          _resultTotal = 0;
+          _resultProductTotal = 0;
+          _resultManualTotal = 0;
+          _breakdown = [];
+          _hasResult = false;
+          _message =
+              '対象データが上限（$_queryLimit件）を超えています。正確な合計を表示するため、期間を短くして再集計してください。';
+        });
+        return;
+      }
 
       var count = 0;
       var total = 0;

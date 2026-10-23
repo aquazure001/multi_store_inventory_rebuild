@@ -116,6 +116,7 @@ class SuperAdminPage extends StatefulWidget {
 class _SuperAdminPageState extends State<SuperAdminPage> {
   List<Map<String, dynamic>> _orgs = [];
   bool _loading = true;
+  bool _orgLimitReached = false;
   String _search = '';
 
   @override
@@ -129,9 +130,13 @@ class _SuperAdminPageState extends State<SuperAdminPage> {
       final snap = await FirebaseFirestore.instance
           .collection('orgs')
           .orderBy('name')
+          .limit(501)
           .get();
+      final limitReached = snap.docs.length > 500;
+      final docs = snap.docs.take(500);
       setState(() {
-        _orgs = snap.docs.map((d) => {'id': d.id, ...d.data()}).toList();
+        _orgs = docs.map((d) => {'id': d.id, ...d.data()}).toList();
+        _orgLimitReached = limitReached;
         _loading = false;
       });
     } catch (e) {
@@ -301,15 +306,28 @@ class _SuperAdminPageState extends State<SuperAdminPage> {
     setState(() => _loading = true);
     try {
       final fs = FirebaseFirestore.instance;
-      final snap = await fs.collection('orgs').get();
-      final batch = fs.batch();
-      for (final doc in snap.docs) {
-        final data = doc.data();
-        final hasAd = _orgHasAdContent(data);
-        // 広告あり → 配信ON、なし → 配信OFFに統一
-        batch.update(doc.reference, {'adDistribEnabled': hasAd});
+      const pageSize = 400;
+      QueryDocumentSnapshot<Map<String, dynamic>>? cursor;
+      var updatedCount = 0;
+      while (true) {
+        Query<Map<String, dynamic>> query = fs
+            .collection('orgs')
+            .orderBy(FieldPath.documentId)
+            .limit(pageSize);
+        if (cursor != null) query = query.startAfterDocument(cursor);
+        final snap = await query.get();
+        if (snap.docs.isEmpty) break;
+
+        final batch = fs.batch();
+        for (final doc in snap.docs) {
+          final hasAd = _orgHasAdContent(doc.data());
+          batch.update(doc.reference, {'adDistribEnabled': hasAd});
+        }
+        await batch.commit();
+        updatedCount += snap.docs.length;
+        cursor = snap.docs.last;
+        if (snap.docs.length < pageSize) break;
       }
-      await batch.commit();
       // 広告リストを再構築
       await _load();
       // AppSession の distributedAds も更新
@@ -318,9 +336,9 @@ class _SuperAdminPageState extends State<SuperAdminPage> {
         await _loadAllAdsImpl(fs, ownOrgData: orgDoc.data()!);
       }
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('全組織の広告配信状態を更新しました')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('全$updatedCount組織の広告配信状態を更新しました')),
+        );
       }
     } catch (e) {
       setState(() => _loading = false);
@@ -620,6 +638,20 @@ class _SuperAdminPageState extends State<SuperAdminPage> {
                     ),
                   ),
                 ),
+                if (_orgLimitReached)
+                  Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                    padding: const EdgeInsets.all(10),
+                    color: Colors.orange.shade50,
+                    child: Text(
+                      '組織が500件を超えているため、この一覧は先頭500件を表示しています。',
+                      style: TextStyle(
+                        color: Colors.orange.shade900,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
                 Expanded(
                   child: _orgs.isEmpty
                       ? const Center(child: Text('組織が見つかりません'))

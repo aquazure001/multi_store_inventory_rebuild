@@ -14,14 +14,48 @@ class DeletionRequestsPage extends StatefulWidget {
 }
 
 class _DeletionRequestsPageState extends State<DeletionRequestsPage> {
-  bool _showHandled = false;
+  static const int _pageSize = 200;
 
-  // 複合インデックス不要にするため日時順のみで取得し、status はアプリ側で絞り込む
-  final Stream<QuerySnapshot<Map<String, dynamic>>> _stream = FirebaseFirestore
-      .instance
+  bool _showHandled = false;
+  int _pendingLimit = _pageSize;
+  int _handledLimit = _pageSize;
+  late Stream<QuerySnapshot<Map<String, dynamic>>> _pendingStream;
+  late Stream<QuerySnapshot<Map<String, dynamic>>> _handledStream;
+
+  @override
+  void initState() {
+    super.initState();
+    _pendingStream = _requestStream(status: 'pending', limit: _pendingLimit);
+    _handledStream = _requestStream(status: 'handled', limit: _handledLimit);
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> _requestStream({
+    required String status,
+    required int limit,
+  }) => FirebaseFirestore.instance
       .collection('deletionRequests')
+      .where('status', isEqualTo: status)
       .orderBy('requestedAt', descending: true)
+      .limit(limit + 1)
       .snapshots();
+
+  void _loadMore() {
+    setState(() {
+      if (_showHandled) {
+        _handledLimit += _pageSize;
+        _handledStream = _requestStream(
+          status: 'handled',
+          limit: _handledLimit,
+        );
+      } else {
+        _pendingLimit += _pageSize;
+        _pendingStream = _requestStream(
+          status: 'pending',
+          limit: _pendingLimit,
+        );
+      }
+    });
+  }
 
   String _formatDate(dynamic v) {
     if (v is! Timestamp) return '-';
@@ -144,7 +178,7 @@ class _DeletionRequestsPageState extends State<DeletionRequestsPage> {
       backgroundColor: const Color(0xFFFFF7FF),
       appBar: AppBar(title: const Text('アカウント無効化依頼')),
       body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: _stream,
+        stream: _showHandled ? _handledStream : _pendingStream,
         builder: (context, snap) {
           if (snap.hasError) {
             return Center(child: Text('エラー: ${snap.error}'));
@@ -152,10 +186,11 @@ class _DeletionRequestsPageState extends State<DeletionRequestsPage> {
           if (!snap.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
+          final limit = _showHandled ? _handledLimit : _pendingLimit;
           final docs = snap.data!.docs;
-          final pending = docs.where((d) => d.data()['status'] != 'handled');
-          final handled = docs.where((d) => d.data()['status'] == 'handled');
-          final shown = (_showHandled ? handled : pending).toList();
+          final hasMore = docs.length > limit;
+          final shown = docs.take(limit).toList();
+          final countText = '${shown.length}${hasMore ? '+' : ''}';
           return Column(
             children: [
               Padding(
@@ -164,11 +199,11 @@ class _DeletionRequestsPageState extends State<DeletionRequestsPage> {
                   segments: [
                     ButtonSegment(
                       value: false,
-                      label: Text('未対応 (${pending.length})'),
+                      label: Text(_showHandled ? '未対応' : '未対応 ($countText)'),
                     ),
                     ButtonSegment(
                       value: true,
-                      label: Text('対応済み (${handled.length})'),
+                      label: Text(_showHandled ? '対応済み ($countText)' : '対応済み'),
                     ),
                   ],
                   selected: {_showHandled},
@@ -185,7 +220,18 @@ class _DeletionRequestsPageState extends State<DeletionRequestsPage> {
                       )
                     : ListView(
                         padding: const EdgeInsets.only(bottom: 16),
-                        children: shown.map(_buildTile).toList(),
+                        children: [
+                          ...shown.map(_buildTile),
+                          if (hasMore)
+                            Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: OutlinedButton.icon(
+                                onPressed: _loadMore,
+                                icon: const Icon(Icons.expand_more),
+                                label: const Text('さらに読み込む'),
+                              ),
+                            ),
+                        ],
                       ),
               ),
             ],
