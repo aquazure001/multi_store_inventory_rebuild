@@ -737,11 +737,11 @@ class _ItemMasterTabState extends State<_ItemMasterTab>
                         ),
                         onPressed: () => _toggleDiscontinued(item),
                       ),
+                      IconButton(
+                        icon: const Icon(Icons.edit),
+                        onPressed: () => _editItem(item),
+                      ),
                       if (AppSession.isAdmin) ...[
-                        IconButton(
-                          icon: const Icon(Icons.edit),
-                          onPressed: () => _editItem(item),
-                        ),
                         IconButton(
                           icon: const Icon(
                             Icons.delete_outline,
