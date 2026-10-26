@@ -139,6 +139,7 @@ class _ItemMasterTabState extends State<_ItemMasterTab>
     String? initialName,
     int initialTaxExcludedPrice = 0,
     bool initialReducedTax = false,
+    bool nameOnly = false,
   }) async {
     final codeCtrl = TextEditingController(text: initialCode ?? '');
     final nameCtrl = TextEditingController(text: initialName ?? '');
@@ -154,13 +155,20 @@ class _ItemMasterTabState extends State<_ItemMasterTab>
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
-          title: Text(isNew ? '${widget.label}を追加' : '${widget.label}を編集'),
+          title: Text(
+            isNew
+                ? '${widget.label}を追加'
+                : nameOnly
+                ? '${widget.label}名を編集'
+                : '${widget.label}を編集',
+          ),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 TextField(
                   controller: codeCtrl,
+                  enabled: !nameOnly,
                   decoration: const InputDecoration(
                     labelText: 'コード',
                     border: OutlineInputBorder(),
@@ -175,7 +183,7 @@ class _ItemMasterTabState extends State<_ItemMasterTab>
                     border: OutlineInputBorder(),
                   ),
                 ),
-                if (showPriceFields) ...[
+                if (showPriceFields && !nameOnly) ...[
                   const SizedBox(height: 12),
                   TextField(
                     controller: priceCtrl,
@@ -377,11 +385,13 @@ class _ItemMasterTabState extends State<_ItemMasterTab>
   }
 
   Future<void> _editItem(LegacyItem item) async {
+    final nameOnly = !AppSession.isAdmin && !AppSession.isSuperAdmin;
     final result = await _showItemDialog(
       initialCode: item.code,
       initialName: item.name,
       initialTaxExcludedPrice: item.taxExcludedPrice,
       initialReducedTax: item.reducedTax,
+      nameOnly: nameOnly,
     );
     if (result == null) return;
 
