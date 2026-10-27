@@ -134,11 +134,14 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       _error = null;
     });
     try {
-      final masterDataFuture = _loadMasterData();
+      final stopwatch = Stopwatch()..start();
+      final storesFuture = _loadMasterDocument('stores');
       final specialOrdersFuture = AppSession.doc('special_orders').get();
-      final masterData = await masterDataFuture;
+      final storesDocument = await storesFuture;
       final doc = await specialOrdersFuture;
-      final allStores = List<LegacyStore>.from(masterData.stores);
+      final allStores = _parseStores(
+        storesDocument.data() ?? <String, dynamic>{},
+      );
       final allStoreIds = allStores.map((s) => s.id).toList();
       final viewableIds = AppSession.operationalStoreIds(allStoreIds).toSet();
       final stores = allStores
@@ -263,6 +266,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         }
       }
 
+      if (!mounted) return;
       setState(() {
         _items = items;
         _stores = stores;
@@ -287,7 +291,13 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           ..addAll(newProductLotOrders);
         _loading = false;
       });
+      stopwatch.stop();
+      debugPrint(
+        'SpecialOrderPage load: ${stopwatch.elapsedMilliseconds}ms '
+        '(items=${items.length})',
+      );
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = '$e';
         _loading = false;

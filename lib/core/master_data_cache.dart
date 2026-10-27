@@ -62,10 +62,65 @@ class _OrgItemLimits {
   };
 }
 
+class _MasterDocumentCacheEntry {
+  const _MasterDocumentCacheEntry({
+    required this.orgId,
+    required this.loadedAt,
+    required this.document,
+  });
+
+  final String orgId;
+  final DateTime loadedAt;
+  final DocumentSnapshot<Map<String, dynamic>> document;
+
+  bool get isFresh =>
+      orgId == AppSession.orgId &&
+      DateTime.now().difference(loadedAt) < const Duration(minutes: 2);
+}
+
 _MasterDataSnapshot? _masterDataCache;
 Future<_MasterDataSnapshot>? _masterDataLoading;
 _OrgItemLimits? _orgItemLimitsCache;
 Future<_OrgItemLimits>? _orgItemLimitsLoading;
+final Map<String, _MasterDocumentCacheEntry> _masterDocumentCache = {};
+final Map<String, Future<DocumentSnapshot<Map<String, dynamic>>>>
+_masterDocumentLoading = {};
+
+String _masterDocumentKey(String suffix) => '${AppSession.orgId}::$suffix';
+
+Future<DocumentSnapshot<Map<String, dynamic>>> _loadMasterDocument(
+  String suffix, {
+  bool forceRefresh = false,
+}) async {
+  final key = _masterDocumentKey(suffix);
+  final cached = _masterDocumentCache[key];
+  if (!forceRefresh && cached != null && cached.isFresh) {
+    return cached.document;
+  }
+
+  final loading = _masterDocumentLoading[key];
+  if (!forceRefresh && loading != null) return loading;
+
+  final orgId = AppSession.orgId;
+  final future = AppSession.doc(suffix).get().then((document) {
+    if (AppSession.orgId == orgId) {
+      _masterDocumentCache[key] = _MasterDocumentCacheEntry(
+        orgId: orgId,
+        loadedAt: DateTime.now(),
+        document: document,
+      );
+    }
+    return document;
+  });
+  _masterDocumentLoading[key] = future;
+  try {
+    return await future;
+  } finally {
+    if (identical(_masterDocumentLoading[key], future)) {
+      _masterDocumentLoading.remove(key);
+    }
+  }
+}
 
 List<Map<String, dynamic>> _rawMasterItems(
   DocumentSnapshot<Map<String, dynamic>> doc,
@@ -96,10 +151,10 @@ Future<_MasterDataSnapshot> _loadMasterData({bool forceRefresh = false}) async {
 
   final future = Future<_MasterDataSnapshot>(() async {
     final results = await Future.wait([
-      AppSession.doc('stores').get(),
-      AppSession.doc('products').get(),
-      AppSession.doc('testers').get(),
-      AppSession.doc('equipments').get(),
+      _loadMasterDocument('stores', forceRefresh: forceRefresh),
+      _loadMasterDocument('products', forceRefresh: forceRefresh),
+      _loadMasterDocument('testers', forceRefresh: forceRefresh),
+      _loadMasterDocument('equipments', forceRefresh: forceRefresh),
     ]);
     final rawProducts = _rawMasterItems(results[1]);
     final rawTesters = _rawMasterItems(results[2]);
@@ -164,7 +219,15 @@ Future<_OrgItemLimits> _loadOrgItemLimits() async {
   }
 }
 
-void _clearMasterDataCache() {
+void _clearMasterDataCache({String? suffix}) {
   _masterDataCache = null;
   _masterDataLoading = null;
+  if (suffix == null) {
+    _masterDocumentCache.clear();
+    _masterDocumentLoading.clear();
+  } else {
+    final keySuffix = '::$suffix';
+    _masterDocumentCache.removeWhere((key, _) => key.endsWith(keySuffix));
+    _masterDocumentLoading.removeWhere((key, _) => key.endsWith(keySuffix));
+  }
 }

@@ -67,6 +67,13 @@ class _ItemMasterTabState extends State<_ItemMasterTab>
   String _query = '';
   int _maxItems = 10;
 
+  String get _masterSuffix => switch (widget.label) {
+    '商品' => 'products',
+    'テスター' => 'testers',
+    '備品' => 'equipments',
+    _ => '',
+  };
+
   @override
   void initState() {
     super.initState();
@@ -79,20 +86,19 @@ class _ItemMasterTabState extends State<_ItemMasterTab>
       _error = null;
     });
     try {
-      final masterFuture = _loadMasterData();
+      final stopwatch = Stopwatch()..start();
+      final masterFuture = _loadMasterDocument(_masterSuffix);
       final limitsFuture = _loadOrgItemLimits();
-      final masterData = await masterFuture;
+      final masterDocument = await masterFuture;
       final limits = await limitsFuture;
-      final sourceItems = switch (widget.label) {
-        '商品' => masterData.rawProducts,
-        'テスター' => masterData.rawTesters,
-        '備品' => masterData.rawEquipments,
-        _ => const <Map<String, dynamic>>[],
-      };
-      final rawItems = sourceItems
-          .map((item) => Map<String, dynamic>.from(item))
-          .toList();
+      final rawItems = _rawMasterItems(
+        masterDocument,
+      ).map((item) => Map<String, dynamic>.from(item)).toList();
       final maxItems = limits.forLabel(widget.label);
+      stopwatch.stop();
+      debugPrint(
+        'ItemMasterPage(${widget.label}) load: ${stopwatch.elapsedMilliseconds}ms',
+      );
       if (!mounted) return;
       setState(() {
         _rawItems = rawItems;
@@ -131,7 +137,7 @@ class _ItemMasterTabState extends State<_ItemMasterTab>
         .collection('inventory_shared_v1')
         .doc(widget.docId)
         .update({'items': _rawItems});
-    _clearMasterDataCache();
+    _clearMasterDataCache(suffix: _masterSuffix);
   }
 
   Future<Map<String, dynamic>?> _showItemDialog({
@@ -317,7 +323,7 @@ class _ItemMasterTabState extends State<_ItemMasterTab>
         ..['reducedTax'] = ownReducedTax
         ..['taxRate'] = ownReducedTax ? 8 : 10;
       await oppositeDocRef.update({'items': rawItems});
-      _clearMasterDataCache();
+      _clearMasterDataCache(suffix: oppositeDocKey);
     }
 
     return (price: ownPrice, reducedTax: ownReducedTax);
