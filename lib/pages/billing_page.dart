@@ -468,6 +468,7 @@ class _BillingPageState extends State<BillingPage> {
           );
         }
       }
+      lines.addAll(_umesatoShippingLines(lines, billedKeys));
       lines.sort((a, b) {
         final billedCompare = a.billed == b.billed ? 0 : (a.billed ? 1 : -1);
         if (billedCompare != 0) return billedCompare;
@@ -498,6 +499,53 @@ class _BillingPageState extends State<BillingPage> {
         _monthLoadError = '対象月の明細を読み込めませんでした: $e';
       });
     }
+  }
+
+  static const String _shippingItemCode = 'SHIPPING';
+  static const int _umesatoShippingFee = 770;
+  static const Set<String> _umesatoShippingTargetCodes = {'2910', '5320'};
+
+  /// 梅郷店が備品 2910(コットン)・5320(純水) を発注した場合、1個につき送料770円を
+  /// 発注バッチごとに自動で追加する。他店舗は対象外。
+  List<_BillingLine> _umesatoShippingLines(
+    List<_BillingLine> source,
+    Set<String> billedKeys,
+  ) {
+    final qtyByBatchStore = <String, int>{};
+    final sample = <String, _BillingLine>{};
+    for (final line in source) {
+      if (!line.storeName.contains('梅郷')) continue;
+      final type = inventoryTypeLabelFromKey(
+        normalizeInventoryTypeKey(itemType: line.itemType),
+      );
+      if (type != '備品') continue;
+      final code = _normalizeBillingKeyPart(line.itemCode);
+      if (!_umesatoShippingTargetCodes.contains(code)) continue;
+      final k = '${line.batchId}__${line.storeId}';
+      qtyByBatchStore[k] = (qtyByBatchStore[k] ?? 0) + line.qty;
+      sample.putIfAbsent(k, () => line);
+    }
+    final result = <_BillingLine>[];
+    qtyByBatchStore.forEach((k, qty) {
+      final base = sample[k]!;
+      final key = '${base.batchId}_shipping_${base.storeId}';
+      result.add(
+        _BillingLine(
+          key: key,
+          batchId: base.batchId,
+          batchTitle: base.batchTitle,
+          orderDate: base.orderDate,
+          storeId: base.storeId,
+          storeName: base.storeName,
+          itemType: '備品',
+          itemCode: _shippingItemCode,
+          itemName: '送料',
+          qty: qty,
+          billed: billedKeys.contains(key),
+        ),
+      );
+    });
+    return result;
   }
 
   void _applyLoadedMonthLines(DateTime month, List<_BillingLine> lines) {
@@ -939,6 +987,7 @@ class _BillingPageState extends State<BillingPage> {
             listPrice: _priceFor(line),
             purchaseRate: _purchaseRateFor(line),
             taxRate: _taxRateFor(line),
+            taxIncluded: line.itemCode == _shippingItemCode,
           ),
         )
         .toList();
@@ -1219,6 +1268,7 @@ class _BillingPageState extends State<BillingPage> {
   }
 
   int _priceFor(_BillingLine line) {
+    if (line.itemCode == _shippingItemCode) return _umesatoShippingFee;
     final key = _priceKeyFor(line);
     final raw = _priceControllers[key]?.text ?? '';
     final input = _billingInputInt(raw);
