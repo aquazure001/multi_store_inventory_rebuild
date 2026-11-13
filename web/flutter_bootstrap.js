@@ -5,7 +5,7 @@
 // 必ず回避して最新のアプリ本体を取得する。
 for (const build of _flutter.buildConfig.builds) {
   if (build.mainJsPath === 'main.dart.js') {
-    build.mainJsPath = 'main.dart.js?v=20261027_133814';
+    build.mainJsPath = 'main.dart.js?v=20261111_161806';
   }
 }
 
