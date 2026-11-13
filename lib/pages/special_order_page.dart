@@ -610,22 +610,6 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
     return result;
   }
 
-  TextEditingController _newProductCurrentStockCtrl(SpecialOrderItem item) {
-    final lot = _newProductLotFor(item);
-    return _newProductCurrentStockControllers.putIfAbsent(
-      lot.key,
-      () => TextEditingController(text: '${lot.currentStock}'),
-    );
-  }
-
-  TextEditingController _newProductDeliveredCtrl(SpecialOrderItem item) {
-    final lot = _newProductLotFor(item);
-    return _newProductDeliveredControllers.putIfAbsent(
-      lot.key,
-      () => TextEditingController(text: '0'),
-    );
-  }
-
   String _newProductKnownCustomerNameForCode(String customerCode) {
     final code = customerCode.trim();
     if (code.isEmpty) return '';
@@ -1408,7 +1392,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         title: Text(delivered ? '引渡し済みにしますか？' : '引渡し済みを解除しますか？'),
         content: Text(
           '${entry.customerCode} / ${entry.customerName.isEmpty ? '-' : entry.customerName}\n${entry.qty} 個\n\n'
-          '${delivered ? 'この仮発注を引渡し済みにします。未引き渡し在庫から外れ、在庫数が増えます。' : '引渡し済みを解除します。未引き渡し在庫に戻り、在庫数が減ります。'}',
+          '${delivered ? 'この仮発注を引渡し済みにします。未引き渡し在庫から外れ、引渡し済みに移ります（在庫数は変わりません）。' : '引渡し済みを解除します。引渡し済みから未引き渡し在庫に戻ります（在庫数は変わりません）。'}',
         ),
         actions: [
           TextButton(
@@ -1694,7 +1678,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('発注済みの在庫を変更しました'),
+            content: Text('入荷済み累計を変更しました'),
             backgroundColor: Colors.green,
           ),
         );
@@ -2057,7 +2041,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         content: Text(
           '${lot.name.isEmpty ? item.name : lot.name}\n'
           '$lotCount ロット × $lotSize 個 = $qty 個\n\n'
-          '発注履歴に記録します。入荷確認するまで「発注済みの在庫」には加算されません。',
+          '発注履歴に記録します。入荷確認するまで「入荷済み累計」には加算されません。',
         ),
         actions: [
           TextButton(
@@ -2145,7 +2129,7 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
         title: const Text('入荷を確認しますか？'),
         content: Text(
           '${entry.lotCount} ロット × ${entry.lotSize} 個 = ${entry.qty} 個\n\n'
-          'この発注を入荷済みにし、「発注済みの在庫」に ${entry.qty} 個を加算します。',
+          'この発注を入荷済みにし、「入荷済み累計」に ${entry.qty} 個を加算します。',
         ),
         actions: [
           TextButton(
@@ -2206,141 +2190,6 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('入荷確認失敗: $e'), backgroundColor: Colors.red),
-        );
-      }
-    }
-  }
-
-  Future<void> _saveNewProductCurrentStock(SpecialOrderItem item) async {
-    if (!_canManageSpecialStock) return;
-    final lot = _newProductLotFor(item);
-    final newValue = int.tryParse(
-      _newProductCurrentStockCtrl(item).text.trim(),
-    );
-    if (newValue == null || newValue < 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('正しい在庫数を入力してください'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-    try {
-      await AppSession.doc('special_orders').set({
-        'newProductLots': {
-          lot.key: {
-            'code': item.code,
-            'name': item.name,
-            'lotSize': lot.lotSize <= 0 ? 1 : lot.lotSize,
-            'currentStock': newValue,
-            'updatedAt': FieldValue.serverTimestamp(),
-          },
-        },
-      }, SetOptions(merge: true));
-      setState(() {
-        _newProductLots[lot.key] = lot.copyWith(
-          code: item.code,
-          name: item.name,
-          currentStock: newValue,
-        );
-        _newProductCurrentStockCtrl(item).text = '$newValue';
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('在庫数を変更しました'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('変更失敗: $e'), backgroundColor: Colors.red),
-        );
-      }
-    }
-  }
-
-  Future<void> _saveNewProductDeliveredCount(SpecialOrderItem item) async {
-    if (!_canManageSpecialStock) return;
-    final lot = _newProductLotFor(item);
-    final delivered = int.tryParse(_newProductDeliveredCtrl(item).text.trim());
-    if (delivered == null || delivered < 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('正しい納品済み数を入力してください'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-    if (delivered == 0) return;
-    if (delivered > lot.remaining) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('納品予定数を超えています（納品予定 ${lot.remaining} 個）'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('納品済み数を反映'),
-        content: Text('${lot.name}\n$delivered 個を納品済みにして、納品予定数から差し引きます。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('キャンセル'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('反映する'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    final nextRemaining = max(0, lot.remaining - delivered);
-    final nextCurrentStock = lot.currentStock + delivered;
-    try {
-      await AppSession.doc('special_orders').set({
-        'newProductLots': {
-          lot.key: {
-            'code': item.code,
-            'name': item.name,
-            'lotSize': lot.lotSize <= 0 ? 1 : lot.lotSize,
-            'remaining': FieldValue.increment(-delivered),
-            'currentStock': nextCurrentStock,
-            'updatedAt': FieldValue.serverTimestamp(),
-          },
-        },
-      }, SetOptions(merge: true));
-      setState(() {
-        _newProductLots[lot.key] = lot.copyWith(
-          code: item.code,
-          name: item.name,
-          remaining: nextRemaining,
-          currentStock: nextCurrentStock,
-        );
-        _newProductRemainingCtrl(item).text = '$nextRemaining';
-        _newProductDeliveredCtrl(item).text = '0';
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('納品済み数を反映しました'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('反映失敗: $e'), backgroundColor: Colors.red),
         );
       }
     }
@@ -4105,18 +3954,13 @@ class _SpecialOrderPageState extends State<SpecialOrderPage> {
           deliveredTotal: deliveredTotal,
           reservedTotal: _reservedTotalForNewProductLot(lot.key),
           remaining: lot.remaining,
-          showUnorderedShortage: true,
+          remainingIsCumulative: true,
           orderedTotal: _newProductOrderedLotQtyForLot(lot.key),
-          currentStock: lot.currentStock,
           reservedStoreBreakdown: _reservedStoreBreakdownForNewProductLot(
             lot.key,
           ),
           remainingCtrl: _newProductRemainingCtrl(item),
-          currentStockCtrl: _newProductCurrentStockCtrl(item),
-          deliveredCtrl: _newProductDeliveredCtrl(item),
           onSaveRemaining: () => _saveNewProductRemaining(item),
-          onSaveCurrentStock: () => _saveNewProductCurrentStock(item),
-          onSaveDelivered: () => _saveNewProductDeliveredCount(item),
         ),
         _buildLotOrderSection(
           lotName: lot.name.isEmpty ? item.name : lot.name,
